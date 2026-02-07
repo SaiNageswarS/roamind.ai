@@ -48,6 +48,18 @@ var createUserCmd = &cobra.Command{
 	},
 }
 
+var initializeMemoryCmd = &cobra.Command{
+	Use:   "initializeMemory",
+	Short: "Initialize memory storage system",
+	Long:  "Initialize database collections and create search indexes for user and profile card models",
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := cmdHandlers.HandleInitializeMemory(cmd.Context()); err != nil {
+			logger.Error("Error initializing memory", zap.Error(err))
+			os.Exit(1)
+		}
+	},
+}
+
 func init() {
 	dotenv.LoadEnv()
 	cmdHandlers.Mongo = odm.ProvideMongoClient()
@@ -65,6 +77,7 @@ func init() {
 	// Add commands to root command
 	rootCmd.AddCommand(getTokenCmd)
 	rootCmd.AddCommand(createUserCmd)
+	rootCmd.AddCommand(initializeMemoryCmd)
 }
 
 func main() {
