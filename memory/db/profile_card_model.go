@@ -10,7 +10,7 @@ type ProfileCardModel struct {
 	Title   string   `bson:"title"`
 	Aliases []string `bson:"aliases"`
 
-	ContentMd string `bson:"content_md"` // content in markdown format
+	ContentMd []string `bson:"content_md"` // content in markdown format
 }
 
 func (p ProfileCardModel) Id() string {

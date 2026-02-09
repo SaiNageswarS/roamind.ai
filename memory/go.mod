@@ -3,12 +3,13 @@ module github.com/SaiNageswarS/roamind.ai/memory
 go 1.24.4
 
 require (
-	github.com/SaiNageswarS/go-api-boot v1.0.39
+	github.com/SaiNageswarS/go-api-boot v1.0.41
 	go.mongodb.org/mongo-driver/v2 v2.2.2
 )
 
 require (
 	github.com/SaiNageswarS/go-collection-boot v1.0.5 // indirect
+	github.com/go-ini/ini v1.67.0 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/jinzhu/copier v0.3.2 // indirect
 	github.com/klauspost/compress v1.16.7 // indirect

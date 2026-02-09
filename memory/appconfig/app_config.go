@@ -1,0 +1,10 @@
+package appconfig
+
+import "github.com/SaiNageswarS/go-api-boot/config"
+
+type AppConfig struct {
+	config.BootConfig `ini:",extends"`
+
+	TemporalHostPort    string `ini:"temporal_host_port"`
+	TemporalGoTaskQueue string `ini:"temporal_go_task_queue"`
+}

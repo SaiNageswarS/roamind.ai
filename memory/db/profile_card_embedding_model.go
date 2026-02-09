@@ -37,4 +37,4 @@ func (p ProfileCardEmbeddingModel) VectorIndexSpecs() []odm.VectorIndexSpec {
 const VectorIndexName = "profileCardEmbeddingIndex"
 const VectorPath = "embedding"
 
-const EmbeddingDimensions = 768 // Embedding Gemma
+const EmbeddingDimensions = 2048 // Embedding Gemma
