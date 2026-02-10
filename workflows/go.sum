@@ -36,8 +36,8 @@ github.com/AzureAD/microsoft-authentication-extensions-for-go/cache v0.1.1/go.mo
 github.com/AzureAD/microsoft-authentication-library-for-go v1.4.2 h1:oygO0locgZJe7PpYPXT5A29ZkwJaPqcva7BVeemZOZs=
 github.com/AzureAD/microsoft-authentication-library-for-go v1.4.2/go.mod h1:wP83P5OoQ5p6ip3ScPr0BAq0BvuPAvacpEuSzyouqAI=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
-github.com/SaiNageswarS/go-api-boot v1.0.41 h1:wjhvoWRCsKvLbO0J0KR44lZ/qZNOHKXFvFVmzzNG+OY=
-github.com/SaiNageswarS/go-api-boot v1.0.41/go.mod h1:a92Qod0oqd0AyZtm4uHtV2X3d4L26/qapZTvb5WN3zY=
+github.com/SaiNageswarS/go-api-boot v1.0.42 h1:S9FGGMV3MeDkaoQxveSZL0SQ3LQ7m+iIEa6f3CrxLRE=
+github.com/SaiNageswarS/go-api-boot v1.0.42/go.mod h1:a92Qod0oqd0AyZtm4uHtV2X3d4L26/qapZTvb5WN3zY=
 github.com/SaiNageswarS/go-collection-boot v1.0.5 h1:O89P/mKQjezJfLjaMCM87XH5GkURod6NUk0BGfHPbFk=
 github.com/SaiNageswarS/go-collection-boot v1.0.5/go.mod h1:phb2o/A1AF6rKem15hEX5Y32ymiAmF2FGFatejbbjSw=
 github.com/benbjohnson/clock v1.1.0 h1:Q92kusRqC1XV2MjkWETPvjJVqKetz1OzxZB7mHJLju8=
@@ -200,7 +200,6 @@ github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78/go.mod h1:aL8wCCfTfS
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.3.5/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=
-github.com/yuin/goldmark v1.4.13 h1:fVcFKWvrslecOb/tg+Cc05dkeYx540o0FuFt3nUVDoE=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
 go.mongodb.org/mongo-driver/v2 v2.2.2 h1:9cYuS3fl1Xhqwpfazso10V7BHQD58kCgtzhfAmJYz9c=
 go.mongodb.org/mongo-driver/v2 v2.2.2/go.mod h1:qQkDMhCGWl3FN509DfdPd4GRBLU/41zqF/k8eTRceps=

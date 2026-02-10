@@ -3,7 +3,7 @@ module github.com/SaiNageswarS/roamind.ai/core
 go 1.24.4
 
 require (
-	github.com/SaiNageswarS/go-api-boot v1.0.41
+	github.com/SaiNageswarS/go-api-boot v1.0.42
 	go.uber.org/zap v1.27.1
 )
 

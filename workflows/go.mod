@@ -3,10 +3,9 @@ module github.com/SaiNageswarS/roamind.ai/workflows
 go 1.24.4
 
 require (
-	github.com/SaiNageswarS/go-api-boot v1.0.41
+	github.com/SaiNageswarS/go-api-boot v1.0.42
 	github.com/SaiNageswarS/go-collection-boot v1.0.5
 	github.com/SaiNageswarS/roamind.ai/memory v0.0.0
-	github.com/yuin/goldmark v1.4.13
 	go.mongodb.org/mongo-driver/v2 v2.2.2
 	go.temporal.io/sdk v1.34.0
 	go.uber.org/zap v1.18.1

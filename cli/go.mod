@@ -3,7 +3,7 @@ module github.com/SaiNageswarS/roamind.ai/cli
 go 1.24.4
 
 require (
-	github.com/SaiNageswarS/go-api-boot v1.0.41
+	github.com/SaiNageswarS/go-api-boot v1.0.42
 	github.com/SaiNageswarS/go-collection-boot v1.0.5
 	github.com/SaiNageswarS/roamind.ai/memory v0.0.0
 	github.com/spf13/cobra v1.10.2
