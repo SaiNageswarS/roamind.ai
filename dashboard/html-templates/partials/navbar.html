@@ -1,0 +1,37 @@
+{{define "navbar"}}
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark border-bottom shadow-sm">
+    <div class="container">
+        <a class="navbar-brand d-flex align-items-center" href="/web/">
+            <i class="bi bi-globe2 me-2"></i>
+            <span class="fw-bold">Roamind</span>
+        </a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarMain">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarMain">
+            <ul class="navbar-nav me-auto">
+                <li class="nav-item">
+                    <a class="nav-link {{if eq .ActivePage "home"}}active{{end}}" href="/web/">
+                        <i class="bi bi-house-door me-1"></i> Home
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {{if eq .ActivePage "profile-cards"}}active{{end}}" href="/web/profile-cards">
+                        <i class="bi bi-person-badge me-1"></i> Profile Cards
+                    </a>
+                </li>
+            </ul>
+            <form class="d-flex align-items-center gap-2"
+                  hx-post="/web/api/user/set"
+                  hx-swap="none"
+                  hx-boost="false">
+                <i class="bi bi-person-circle text-light"></i>
+                <input type="text" class="form-control form-control-sm bg-dark text-light border-secondary"
+                       name="user_id" value="{{.UserID}}"
+                       placeholder="User ID" style="width: 180px;">
+                <button type="submit" class="btn btn-sm btn-outline-light">Set</button>
+            </form>
+        </div>
+    </div>
+</nav>
+{{end}}

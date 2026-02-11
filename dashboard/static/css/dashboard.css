@@ -1,0 +1,98 @@
+/* Roamind Dashboard – Custom Styles */
+
+/* Card hover effect */
+.card-hover {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.card-hover:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.12) !important;
+}
+
+/* Icon box */
+.icon-box {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 56px;
+    min-height: 56px;
+}
+
+/* Table tweaks */
+.table > thead > tr > th {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6c757d;
+    border-bottom-width: 2px;
+}
+
+.table > tbody > tr {
+    transition: background-color 0.1s ease;
+}
+
+/* HTMX loading indicator */
+.htmx-indicator {
+    display: none;
+}
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+    display: inline-block;
+}
+
+/* Toast animation */
+.toast {
+    animation: slideInRight 0.3s ease;
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+/* Navbar user input */
+.navbar .form-control:focus {
+    box-shadow: 0 0 0 0.2rem rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.4);
+}
+
+/* Code badges in tables */
+td code {
+    font-size: 0.85em;
+}
+
+/* Textarea for markdown */
+textarea.font-monospace {
+    font-size: 0.875rem;
+    line-height: 1.6;
+    tab-size: 4;
+}
+
+/* Modal improvements */
+.modal-content {
+    border: none;
+    border-radius: 0.75rem;
+}
+.modal-header,
+.modal-footer {
+    padding: 1.25rem 1.5rem;
+}
+.modal-body {
+    padding: 0.5rem 1.5rem 1.25rem;
+}
+
+/* Empty state */
+.table td[colspan] {
+    border-bottom: none;
+}
+
+/* Form label */
+.form-label {
+    font-size: 0.875rem;
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/SaiNageswarS/go-api-boot/server"
 	"github.com/SaiNageswarS/roamind.ai/dashboard/controller"
 	"github.com/SaiNageswarS/roamind.ai/dashboard/handler"
+	"github.com/SaiNageswarS/roamind.ai/dashboard/web"
 	"github.com/SaiNageswarS/roamind.ai/memory/appconfig"
 	"go.uber.org/zap"
 )
@@ -39,8 +40,12 @@ func main() {
 		// handlers
 		ProvideFunc(handler.ProvideProfileCardHandler).
 
+		// embedded web assets
+		ProvideFunc(ProvideEmbeddedAssets).
+
 		// controllers
 		AddRestController(controller.ProvideProfileCardController).
+		AddRestController(web.ProvideWebController).
 		Build()
 
 	if err != nil {

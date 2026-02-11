@@ -20,10 +20,10 @@ func ProvideProfileCardController(saveProfileCardHandler *handler.ProfileCardHan
 }
 
 type SaveProfileCardRequest struct {
-	Key               string   `json:"key"`
-	Title             string   `json:"title"`
-	Aliases           []string `json:"aliases"`
-	ContentMdFilePath string   `json:"content_md_file_path"`
+	Key       string   `json:"key"`
+	Title     string   `json:"title"`
+	Aliases   []string `json:"aliases"`
+	ContentMd string   `json:"content_md"`
 }
 
 type SaveProfileCardResponse struct {
@@ -43,8 +43,8 @@ func (c *ProfileCardController) SaveProfileCard(w http.ResponseWriter, r *http.R
 	}
 
 	// Validate required fields
-	if request.Key == "" || request.Title == "" || request.ContentMdFilePath == "" {
-		http.Error(w, "Key, title, and content_md_file_path are required", http.StatusBadRequest)
+	if request.Key == "" || request.Title == "" || request.ContentMd == "" {
+		http.Error(w, "Key, title, and content_md are required", http.StatusBadRequest)
 		return
 	}
 
@@ -54,7 +54,7 @@ func (c *ProfileCardController) SaveProfileCard(w http.ResponseWriter, r *http.R
 		request.Key,
 		request.Title,
 		request.Aliases,
-		request.ContentMdFilePath,
+		request.ContentMd,
 	)
 	if err != nil {
 		logger.Error("Failed to save profile card", zap.Error(err))

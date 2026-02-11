@@ -5,7 +5,6 @@ import (
 	"crypto/md5"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/SaiNageswarS/go-api-boot/embed"
@@ -38,7 +37,7 @@ func (h *ProfileCardHandler) SaveProfileCard(
 	key string,
 	title string,
 	aliases []string,
-	contentMdFilePath string,
+	contentMd string,
 ) (string, error) {
 	logger.Info("Starting profile card save process",
 		zap.String("userId", userId),
@@ -46,7 +45,7 @@ func (h *ProfileCardHandler) SaveProfileCard(
 		zap.String("title", title))
 
 	// Step 1: Save the profile card
-	profileCard, err := h.saveProfileCard(ctx, userId, key, title, aliases, contentMdFilePath)
+	profileCard, err := h.saveProfileCard(ctx, userId, key, title, aliases, contentMd)
 	if err != nil {
 		logger.Error("Failed to save profile card", zap.Error(err))
 		return "", err
@@ -75,13 +74,22 @@ func (h *ProfileCardHandler) SaveProfileCard(
 	return profileCard.Id(), nil
 }
 
-func (h *ProfileCardHandler) saveProfileCard(ctx context.Context, userId, key, title string, aliases []string, contentMdFilePath string) (*db.ProfileCardModel, error) {
-	// read content from file
-	contentMd, err := readContentFromFile(contentMdFilePath)
+// ListProfileCards returns all profile cards for a given user, sorted by title.
+func (h *ProfileCardHandler) ListProfileCards(ctx context.Context, userId string) ([]db.ProfileCardModel, error) {
+	results, err := async.Await(
+		odm.CollectionOf[db.ProfileCardModel](h.mongo, Tenant).Find(
+			ctx,
+			bson.M{"user_id": userId},
+			bson.D{{Key: "title", Value: 1}},
+			0, 0,
+		))
 	if err != nil {
 		return nil, err
 	}
+	return results, nil
+}
 
+func (h *ProfileCardHandler) saveProfileCard(ctx context.Context, userId, key, title string, aliases []string, contentMd string) (*db.ProfileCardModel, error) {
 	profileCard := db.ProfileCardModel{
 		UserId:    userId,
 		Key:       key,
@@ -91,7 +99,7 @@ func (h *ProfileCardHandler) saveProfileCard(ctx context.Context, userId, key, t
 	}
 
 	// save to db
-	_, err = async.Await(
+	_, err := async.Await(
 		odm.CollectionOf[db.ProfileCardModel](h.mongo, Tenant).Save(ctx, profileCard))
 
 	if err != nil {
@@ -232,12 +240,4 @@ func (h *ProfileCardHandler) embedAndSaveText(ctx context.Context, text, userId,
 
 		return id, nil
 	})
-}
-
-func readContentFromFile(filePath string) (string, error) {
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return "", err
-	}
-	return string(content), nil
 }
