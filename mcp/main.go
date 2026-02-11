@@ -11,8 +11,8 @@ import (
 	"github.com/SaiNageswarS/go-api-boot/logger"
 	"github.com/SaiNageswarS/go-api-boot/odm"
 	"github.com/SaiNageswarS/go-api-boot/server"
-	"github.com/SaiNageswarS/roamind.ai/core/controller"
-	"github.com/SaiNageswarS/roamind.ai/core/handler"
+	"github.com/SaiNageswarS/roamind.ai/mcp/controller"
+	"github.com/SaiNageswarS/roamind.ai/mcp/handler"
 	"go.uber.org/zap"
 )
 

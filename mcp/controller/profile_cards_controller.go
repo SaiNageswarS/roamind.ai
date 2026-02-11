@@ -6,7 +6,7 @@ import (
 
 	"github.com/SaiNageswarS/go-api-boot/auth"
 	"github.com/SaiNageswarS/go-api-boot/server"
-	"github.com/SaiNageswarS/roamind.ai/core/handler"
+	"github.com/SaiNageswarS/roamind.ai/mcp/handler"
 )
 
 type ProfileCardsController struct {

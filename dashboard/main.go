@@ -12,11 +12,10 @@ import (
 	"github.com/SaiNageswarS/go-api-boot/logger"
 	"github.com/SaiNageswarS/go-api-boot/odm"
 	"github.com/SaiNageswarS/go-api-boot/server"
+	"github.com/SaiNageswarS/roamind.ai/dashboard/controller"
+	"github.com/SaiNageswarS/roamind.ai/dashboard/handler"
 	"github.com/SaiNageswarS/roamind.ai/memory/appconfig"
-	"github.com/SaiNageswarS/roamind.ai/workflows/activities"
 	"go.uber.org/zap"
-
-	temporalClient "go.temporal.io/sdk/client"
 )
 
 func main() {
@@ -37,12 +36,11 @@ func main() {
 		ProvideFunc(embed.ProvideJinaAIEmbeddingClient).
 		ProvideFunc(odm.ProvideMongoClient).
 
-		// temporal activities and workflows
-		WithTemporal(ccfgg.TemporalGoTaskQueue, &temporalClient.Options{
-			HostPort: ccfgg.TemporalHostPort,
-		}).
-		RegisterTemporalActivity(activities.ProvideActivities).
-		RegisterTemporalWorkflow(SaveProfileCardWorkflow).
+		// handlers
+		ProvideFunc(handler.ProvideProfileCardHandler).
+
+		// controllers
+		AddRestController(controller.ProvideProfileCardController).
 		Build()
 
 	if err != nil {

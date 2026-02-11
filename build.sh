@@ -9,14 +9,14 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -trimpath \
     -o ../build/roamind-cli .
 
-cd ../workflows
+cd ../dashboard
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-s -w -X main.Version=$(git describe --tags --always 2>/dev/null || echo 'dev')" \
     -trimpath \
-    -o ../build/roamind-workflows .
+    -o ../build/roamind-dashboard .
 
-cd ../core
+cd ../mcp
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-s -w -X main.Version=$(git describe --tags --always 2>/dev/null || echo 'dev')" \
     -trimpath \
-    -o ../build/roamind-core .
+    -o ../build/roamind-mcp .
