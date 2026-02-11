@@ -12,7 +12,6 @@ import (
 	"github.com/SaiNageswarS/go-api-boot/logger"
 	"github.com/SaiNageswarS/go-api-boot/odm"
 	"github.com/SaiNageswarS/go-api-boot/server"
-	"github.com/SaiNageswarS/roamind.ai/dashboard/controller"
 	"github.com/SaiNageswarS/roamind.ai/dashboard/handler"
 	"github.com/SaiNageswarS/roamind.ai/dashboard/web"
 	"github.com/SaiNageswarS/roamind.ai/memory/appconfig"
@@ -44,7 +43,6 @@ func main() {
 		ProvideFunc(ProvideEmbeddedAssets).
 
 		// controllers
-		AddRestController(controller.ProvideProfileCardController).
 		AddRestController(web.ProvideWebController).
 		Build()
 
