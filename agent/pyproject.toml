@@ -1,0 +1,31 @@
+[project]
+name = "roamind-agent"
+version = "0.1.0"
+description = "Roamind personal assistant agent (LangGraph)."
+requires-python = ">=3.11"
+dependencies = [
+    "redis>=5.0.0",
+    "pydantic>=2.6.0",
+    "python-dotenv>=1.0.0",
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
+    "structlog>=24.1.0",
+]
+
+[project.optional-dependencies]
+openai = ["langchain-openai>=0.2.0"]
+anthropic = ["langchain-anthropic>=0.2.0"]
+ollama = ["langchain-ollama>=0.2.0"]
+mongo = ["pymongo>=4.6.0"]
+mcp = ["langchain-mcp-adapters>=0.0.5"]
+dev = ["pytest>=8.0.0", "ruff>=0.5.0"]
+
+[project.scripts]
+roamind-agent = "app.main:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
