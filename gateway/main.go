@@ -7,12 +7,8 @@ import (
 	"syscall"
 
 	"github.com/SaiNageswarS/go-api-boot/dotenv"
-	"github.com/SaiNageswarS/go-api-boot/embed"
 	"github.com/SaiNageswarS/go-api-boot/logger"
-	"github.com/SaiNageswarS/go-api-boot/odm"
 	"github.com/SaiNageswarS/go-api-boot/server"
-	"github.com/SaiNageswarS/roamind.ai/mcp/controller"
-	"github.com/SaiNageswarS/roamind.ai/mcp/handler"
 	"go.uber.org/zap"
 )
 
@@ -22,16 +18,6 @@ func main() {
 	boot, err := server.New().
 		GRPCPort(":50051").
 		HTTPPort(":8081").
-
-		// mongo and embedding clients
-		ProvideFunc(odm.ProvideMongoClient).
-		ProvideFunc(embed.ProvideJinaAIEmbeddingClient).
-
-		// handlers
-		ProvideFunc(handler.ProvideProfileCardSearchHandler).
-
-		// controllers
-		AddRestController(controller.ProvideProfileCardsController).
 		Build()
 
 	if err != nil {

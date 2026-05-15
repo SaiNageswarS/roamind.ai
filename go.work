@@ -1,8 +1,7 @@
-go 1.24.4
+go 1.26.3
 
 use (
 	./cli
-	./mcp
-	./memory
-	./dashboard
+	./gateway
+	./proto
 )

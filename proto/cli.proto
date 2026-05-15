@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package cli;
+
+option go_package = "roamind.ai/proto/generated";
+
+import "google/protobuf/timestamp.proto";
+
+service AssistantCLI {
+  // Client sends query, server streams responses (unidirectional stream).
+  rpc Query(QueryRequest) returns (stream QueryResponse) {}
+}
+
+message QueryRequest {
+  string id = 1;                                      // UUID for correlation
+  string user_id = 2;                                 // canonical user (from allowlist)
+  string text = 3;                                    // user query
+  google.protobuf.Timestamp received_at = 4;
+}
+
+message QueryResponse {
+  string id = 1;                                      // correlation ID (matches request)
+  string reply = 2;                                   // response text from agent
+  string intent = 3;                                  // reply | ask_user | ...
+  google.protobuf.Timestamp created_at = 4;
+}

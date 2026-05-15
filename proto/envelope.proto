@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package envelope;
+
+option go_package = "roamind.ai/proto/generated";
+
+import "google/protobuf/timestamp.proto";
+
+message TaskIn {
+  string id = 1;                                      // UUID
+  string trace_id = 2;                                // correlation across system
+  string user_id = 3;                                 // canonical user ID
+  string channel = 4;                                 // telegram | email | cli | system
+  string channel_msg_id = 5;                          // channel-specific ID
+  string text = 6;                                    // message body
+  repeated Attachment attachments = 7;
+  google.protobuf.Timestamp received_at = 8;
+}
+
+message TaskOut {
+  string id = 1;                                      // UUID
+  string trace_id = 2;
+  string in_reply_to = 3;                             // TaskIn.id for correlation
+  string user_id = 4;
+  string channel = 5;                                 // telegram | email | cli | local.browser | local.notify | local.tts
+  string chat_ref = 6;                                // channel-specific addressing
+  string intent = 7;                                  // reply | ask_user | open_url | notify | speak
+  string payload = 8;                                 // JSON payload (intent-specific)
+  google.protobuf.Timestamp created_at = 9;
+}
+
+message Attachment {
+  string name = 1;
+  string mime_type = 2;
+  bytes data = 3;
+}

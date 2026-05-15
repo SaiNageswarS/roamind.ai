@@ -1,22 +1,28 @@
-#!/bin/bash
-
 rm -Rf build
-mkdir -p build
+
+cd proto
+
+rm -Rf ./generated
+mkdir -p ./generated
+
+protoc --go_out=./generated --go_opt=paths=source_relative \
+    --go-grpc_out=./generated --go-grpc_opt=paths=source_relative \
+    *.proto
+
+cd ..
+
+cd gateway
+
+go build \
+    -ldflags="-s -w -X main.Version=$(git describe --tags --always 2>/dev/null || echo 'dev')" \
+    -trimpath \
+    -o ../build/roamind-gateway .
+
+cd ..
 
 cd cli
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-s -w -X main.Version=$(git describe --tags --always 2>/dev/null || echo 'dev')" \
+
+go build \
+    -ldflags="-s -w" \
     -trimpath \
     -o ../build/roamind-cli .
-
-cd ../dashboard
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-s -w -X main.Version=$(git describe --tags --always 2>/dev/null || echo 'dev')" \
-    -trimpath \
-    -o ../build/roamind-dashboard .
-
-cd ../mcp
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-s -w -X main.Version=$(git describe --tags --always 2>/dev/null || echo 'dev')" \
-    -trimpath \
-    -o ../build/roamind-mcp .
