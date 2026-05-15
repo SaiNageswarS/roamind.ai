@@ -39,6 +39,42 @@ log = structlog.get_logger("roamind.agent")
 _should_stop = False
 
 
+def main() -> int:
+    load_dotenv()
+    _configure_logging()
+    _install_signal_handlers()
+
+    try:
+        client = new_redis_client()
+    except Exception as e:
+        log.error("redis init failed", err=str(e))
+        return 1
+
+    try:
+        ensure_group(client, STREAM_TASKS_IN, GROUP_AGENT)
+    except Exception as e:
+        log.error("ensure group failed", err=str(e))
+        return 1
+
+    try:
+        _run_loop(client)
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+    return 0
+
+
+def _console(event: str, **fields) -> None:
+    """Emit human-readable, unbuffered logs for process-compose consoles."""
+    if fields:
+        details = " ".join(f"{k}={v}" for k, v in fields.items())
+        print(f"[agent] {event} {details}", flush=True)
+        return
+    print(f"[agent] {event}", flush=True)
+
+
 def _install_signal_handlers() -> None:
     def _handler(signum, _frame):
         global _should_stop
@@ -64,6 +100,7 @@ def _configure_logging() -> None:
 def _process_message(client: redis.Redis, graph, msg_id: str, fields: dict) -> None:
     raw = fields.get("payload")
     if not raw:
+        _console("payload_missing", msg_id=msg_id)
         log.warning("payload missing", msg_id=msg_id)
         xack_tasks_in(client, [msg_id])
         return
@@ -71,10 +108,18 @@ def _process_message(client: redis.Redis, graph, msg_id: str, fields: dict) -> N
     try:
         task_in = parse_task_in(raw)
     except Exception as e:
+        _console("parse_taskin_failed", msg_id=msg_id, err=str(e))
         log.error("parse TaskIn failed", err=str(e), msg_id=msg_id)
         _ack_or_dlq(client, msg_id, raw)
         return
 
+    _console(
+        "received",
+        msg_id=msg_id,
+        task_id=task_in.id,
+        channel=task_in.channel,
+        user_id=task_in.user_id,
+    )
     log.info(
         "processing task",
         task_id=task_in.id,
@@ -98,11 +143,18 @@ def _process_message(client: redis.Redis, graph, msg_id: str, fields: dict) -> N
     try:
         xadd_tasks_out(client, task_out.to_wire_json())
     except Exception as e:
+        _console("emit_tasks_out_failed", task_id=task_in.id, err=str(e))
         log.error("emit tasks.out failed", err=str(e), task_id=task_in.id)
         _ack_or_dlq(client, msg_id, raw)
         return
 
     xack_tasks_in(client, [msg_id])
+    _console(
+        "replied",
+        task_id=task_in.id,
+        in_reply_to=task_out.in_reply_to,
+        intent=task_out.intent,
+    )
 
 
 def _extract_task_out(final):
@@ -130,6 +182,7 @@ def _ack_or_dlq(client: redis.Redis, msg_id: str, raw: Optional[str]) -> None:
 
 def _run_loop(client: redis.Redis) -> None:
     graph = build_graph()
+    _console("started", stream=STREAM_TASKS_IN, group=GROUP_AGENT)
     log.info("agent started", stream=STREAM_TASKS_IN, group=GROUP_AGENT)
 
     while not _should_stop:
@@ -146,33 +199,7 @@ def _run_loop(client: redis.Redis) -> None:
                 _process_message(client, graph, msg_id, fields)
 
     log.info("agent stopping")
-
-
-def main() -> int:
-    load_dotenv()
-    _configure_logging()
-    _install_signal_handlers()
-
-    try:
-        client = new_redis_client()
-    except Exception as e:
-        log.error("redis init failed", err=str(e))
-        return 1
-
-    try:
-        ensure_group(client, STREAM_TASKS_IN, GROUP_AGENT)
-    except Exception as e:
-        log.error("ensure group failed", err=str(e))
-        return 1
-
-    try:
-        _run_loop(client)
-    finally:
-        try:
-            client.close()
-        except Exception:
-            pass
-    return 0
+    _console("stopping")
 
 
 if __name__ == "__main__":
