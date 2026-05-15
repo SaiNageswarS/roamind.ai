@@ -365,3 +365,15 @@ code-execution sandbox.
    your real browser profile, clipboard, audio. Treat its inbound
    envelopes as authenticated only because they originate from the
    agent we own. Do not expose `tasks.out` to untrusted producers.
+
+## TODOs
+
+- **Agent and Gateway streaming support (v2):** Currently `CliService.Query()` is
+  request-response (one-shot). For agents that emit multiple messages
+  per query, implement streaming so the client receives partial results
+  as they arrive. Agent side: emit multiple `TaskOut` envelopes with
+  streaming metadata. Gateway side: loop in `Query` handler to receive
+  and stream each message to client. Requires: (1) keep pending entry
+  alive until end-of-stream, (2) add `Done` flag or marker in `TaskOut`
+  to signal completion, (3) ensure XREAD consumes all streaming chunks
+  for a single query ID.
