@@ -33,6 +33,7 @@ from langgraph.graph import END, StateGraph
 
 from .envelope import TaskIn, TaskOut
 from .llm import LLMClient
+from .memory import Memory
 
 
 SYSTEM_PROMPT = (
@@ -65,8 +66,9 @@ class RoamindGraph:
     LangGraph runnable.
     """
 
-    def __init__(self, llm: LLMClient):
+    def __init__(self, llm: LLMClient, memory: Memory):
         self.llm = llm
+        self.memory = memory
 
     # --- Nodes ----------------------------------------------------------
 
@@ -74,14 +76,24 @@ class RoamindGraph:
         """Seed the message history with system prompt, pre-fetched context,
         and the user's incoming text.
 
-        Phase 3: extend with core memory and recalled facts from Mongo.
+        Loads core memory + short-term turns from `Memory`; the long-term
+        tier (facts/summaries) will be threaded through `MemoryContext`
+        when it lands.
         """
         today = datetime.now().date().isoformat()
-        state.messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"[context] Today's date is {today}."),
-            HumanMessage(content=state.task_in.text),
-        ]
+        task_in = state.task_in
+        ctx = self.memory.load_context(task_in.user_id, task_in.text)
+
+        system_parts = [SYSTEM_PROMPT, f"Today's date is {today}."]
+        core_block = self.memory.render_core_for_prompt(ctx.core)
+        if core_block:
+            system_parts.append(core_block)
+
+        messages: list[BaseMessage] = [SystemMessage(content="\n\n".join(system_parts))]
+        messages.extend(self.memory.turns_to_messages(ctx.turns))
+        messages.append(HumanMessage(content=task_in.text))
+
+        state.messages = messages
         return state
 
     def plan(self, state: AgentState) -> AgentState:
@@ -112,6 +124,13 @@ class RoamindGraph:
         ai_msg = self.llm.invoke(state.messages)
         state.messages.append(ai_msg)
 
+        self.memory.record_turn(
+            user_id=incoming.user_id,
+            channel=incoming.channel,
+            user_text=incoming.text,
+            assistant_text=str(ai_msg.content),
+        )
+
         state.task_out = TaskOut(
             id=str(uuid.uuid4()),
             trace_id=incoming.trace_id,
@@ -127,9 +146,9 @@ class RoamindGraph:
     # --- Public API: graph factory --------------------------------------
 
     @staticmethod
-    def build(llm: LLMClient):
+    def build(llm: LLMClient, memory: Memory):
         """Construct the agent instance and compile the graph."""
-        agent = RoamindGraph(llm)
+        agent = RoamindGraph(llm, memory)
 
         g = StateGraph(AgentState)
         g.add_node("intake", agent.intake)

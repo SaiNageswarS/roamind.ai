@@ -18,9 +18,11 @@ import redis
 import structlog
 from dotenv import load_dotenv
 
+from .db import MongoDB
 from .envelope import parse_task_in
 from .graph import AgentState, RoamindGraph
 from .llm import LLMClient
+from .memory import Memory
 from .stream import (
     GROUP_AGENT,
     STREAM_TASKS_IN,
@@ -46,25 +48,33 @@ def main() -> int:
     _configure_logging()
     _install_signal_handlers()
 
+    mongo: MongoDB | None = None
     try:
         cfg = configparser.ConfigParser()
         cfg.read(CONFIG_PATH)
         client = new_redis_client()
         ensure_group(client, STREAM_TASKS_IN, GROUP_AGENT)
         llm = LLMClient.from_config(cfg, redis_client=client)
+        mongo = MongoDB.connect(
+            uri=cfg.get("mongo", "uri", fallback=""),
+            db_name=cfg.get("mongo", "db_name", fallback="roamind"),
+        )
+        memory = Memory.from_config(cfg, mongo=mongo, redis_client=client)
     except Exception as e:
         log.error("startup failed", err=str(e))
         return 1
 
     try:
-        _run_loop(client, llm)
+        _run_loop(client, llm, memory)
     finally:
         client.close()
+        if mongo is not None:
+            mongo.close()
     return 0
 
 
-def _run_loop(client: redis.Redis, llm: LLMClient) -> None:
-    graph = RoamindGraph.build(llm)
+def _run_loop(client: redis.Redis, llm: LLMClient, memory: Memory) -> None:
+    graph = RoamindGraph.build(llm, memory)
     log.info("agent started", stream=STREAM_TASKS_IN, group=GROUP_AGENT)
 
     while not _should_stop:

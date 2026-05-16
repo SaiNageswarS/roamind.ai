@@ -1,47 +1,62 @@
-# Plan: Personal Assistant v1 (Gateway + Agent + Actuator)
+# Plan: Personal Assistant v1 (Gateway + Agent)
 
-Single-user, laptop-deployed assistant. A **Gateway** fans remote
-channel messages (Telegram, Email, CLI) onto a Redis stream. An
-**Agent** (Python + LangGraph) consumes them, plans, calls tools, and
-emits user-facing intents back on a second Redis stream. An
-**Actuator** (local laptop daemon) consumes those intents and produces
-local effects (open URL in real Chrome, desktop notifications, TTS).
-MongoDB Atlas (with Atlas Vector Search) is the only memory store.
-Process supervision is handled by **Process Compose** with
-**host-native Redis**.
+Single-user in practice, **multi-tenant-ready by design**. A
+**Gateway** fans remote channel messages (Telegram, Email, CLI) onto
+a Redis stream. An **Agent** (Python + LangGraph) consumes them,
+plans, calls tools, and emits user-facing responses back on a second
+Redis stream, where the **Gateway** picks them up and routes them back
+to the originating channel (or other channels as appropriate). Local
+effects (open URL, send notification, TTS, clipboard) are returned as
+text or rich responses through the channel—the user's OS/browser
+handles the execution. **MongoDB Atlas** is the durable source of truth
+for messages and memory (with Atlas Vector Search + Atlas Search for
+hybrid retrieval); **Redis** is a hot, token-budgeted cache of the
+recent conversation per user. Process supervision is handled by
+**Process Compose** with **host-native Redis**.
 
 ## Boundary rule
 
-> If the **user is the counterparty** → it's a **channel** (Gateway or
-> Actuator). If the **agent is the consumer of the result** → it's a
-> **tool** (Agent side).
+> If the **user is the counterparty** → it's a **channel** (Gateway).
+> If the **agent is the consumer of the result** → it's a **tool**
+> (Agent side).
 
-Corollary: `tasks.out` carries **user-facing deliveries only**.
-Internal effects (browser scraping, DB reads, API calls) are
-synchronous tool calls inside the agent's graph and never touch Redis.
+Corollary: `tasks.out` carries **user-facing responses only** (text,
+links, instructions). Internal effects (browser scraping, DB reads, API
+calls) are synchronous tool calls inside the agent's graph and never
+touch Redis. Local OS effects (opening URLs, sending desktop
+notifications, TTS) are returned as rich responses that the user can
+act on immediately; the agent does not execute them.
 
 ## Architecture
 
 ```
  ┌────────────┐   ┌────────────┐   ┌────────────┐
  │ Telegram   │   │  Email     │   │  CLI       │
- │ (webhook)  │   │ (IMAP poll)│   │ (stdin)    │
+ │ (webhook)  │   │ (IMAP poll)│   │ (gRPC)     │
  └─────┬──────┘   └─────┬──────┘   └─────┬──────┘
+       │                │                │
        └────────┬───────┴────────┬───────┘
+                │ XADD tasks.in  │
                 ▼                ▼
-          ┌──────────────────────────┐
-          │   Gateway (Go)           │
-          │  - remote channel I/O    │
-          │  - identity resolution   │
-          │  - allowlist / authn     │
-          └──────────┬───────────────┘
+          ┌──────────────────────────────┐
+          │   Gateway (Go)               │
+          │  - channel I/O (in + out)    │
+          │  - identity resolution       │
+          │  - allowlist / authn         │
+          │  - XREADGROUP tasks.out      │
+          │  - respond back to channels  │
+          └──────────┬───────────────────┘
                      │ XADD tasks.in
                      ▼
-              ┌──────────────┐
-              │ Redis Streams│  tasks.in   (ingress → agent)
-              │              │  tasks.out  (agent  → deliveries)
-              │              │  tasks.dlq  (poison messages)
-              └──────┬───────┘
+ ┌──────────────────────────────┐
+ │ Redis Streams                    │
+ │   tasks.in        (ingress)      │
+ │   tasks.out       (agent output) │
+ │   tasks.memorize  (extraction)   │
+ │   tasks.dlq       (poison)       │
+ │ Hot cache                        │
+ │   chat:hot:{user_id}  LIST       │
+ └──────┬───────────────────────┘
                      │ XREADGROUP tasks.in
                      ▼
    ┌──────────────────────────────────────────────┐
@@ -58,41 +73,44 @@ synchronous tool calls inside the agent's graph and never touch Redis.
    │   └─ In-process Python tools                 │
    │       • reminders, notes, identity,          │
    │         memory recall (direct Mongo)         │
-   └──────────┬─────────────────────────┬─────────┘
-              │ XADD tasks.out          │
-              ▼                         ▼
-   ┌────────────────────┐      ┌──────────────────┐
-   │ Gateway (egress)   │      │ Actuator (Go)    │
-   │ (remote channels)  │      │ (local laptop)   │
-   │ • Telegram send    │      │ • open URL in    │
-   │ • SMTP send        │      │   real browser   │
-   │ • CLI echo         │      │ • desktop notif  │
-   └────────────────────┘      │ • TTS / sound    │
-                               │ • clipboard      │
-                               └──────────────────┘
+   └──────────┬──────────────────────────────────┘
+              │ XADD tasks.out
+              ▼
+   ┌────────────────────────────────────────────┐
+   │ Gateway (egress, all channels)             │
+   │ • Match in_reply_to with original request  │
+   │ • Telegram: send text/link                 │
+   │ • Email: send reply                        │
+   │ • CLI: stream response back                │
+   └────────────────────────────────────────────┘
 
-              ┌──────────────────────────┐
-              │ MongoDB Atlas             │
-              │  - users / identities     │
-              │  - core_memory (always    │
-              │    injected per user)     │
-              │  - conversations / msgs   │
-              │  - facts (vector index)   │
-              │  - reminders              │
-              │  - lg_checkpoints         │
-              └──────────────────────────┘
+              ┌──────────────────────────────┐
+              │ MongoDB Atlas                 │
+              │  - users / identities         │
+              │  - core_memory (always        │
+              │    injected per user)         │
+              │  - messages (full transcript) │
+              │  - conversation_state         │
+              │  - facts (vector + text idx)  │
+              │  - category_summaries         │
+              │  - reminders                  │
+              │  - lg_checkpoints             │
+              └──────────────────────────────┘
 ```
 
-`tasks.out` envelopes are partitioned by `envelope.channel`:
-- `telegram`, `email`, `cli` → Gateway consumer group.
-- `local.browser`, `local.notify`, `local.tts` → Actuator consumer group.
+`tasks.out` envelopes are consumed by the Gateway consumer group,
+which routes them back to the appropriate channel based on
+`envelope.channel` and `envelope.in_reply_to`. Local effects ("open
+this URL", "send notification", "speak") are returned as rich
+responses in the user-facing message.
 
 ## Decisions
 
-- **Three components:** Gateway (remote I/O), Agent (thinking), Actuator
-  (local effects). All share the same Redis streams and envelope schema.
+- **Two components:** Gateway (all channel I/O, ingress + egress),
+  Agent (thinking). Both share the same Redis streams and envelope
+  schema.
 - **Process orchestration:** `process-compose` is the primary local
-   runner for `redis`, `gateway`, `agent`, `actuator`, and `scheduler`
+   runner for `redis`, `gateway`, `agent`, `memorizer`, and `scheduler`
    (single command, unified logs, restart policy).
 - **Gateway framework:** `go-api-boot` with first-hand gRPC support;
   CLI channel uses gRPC server-side streaming for request-response.
@@ -105,15 +123,34 @@ synchronous tool calls inside the agent's graph and never touch Redis.
     plain Python `@tool` functions with direct Mongo access — no MCP
     indirection where it adds no value.
   - One `ToolNode` receives both transparently.
-- **Storage:** Mongo Atlas only. Collections: `users`, `identities`,
-  `core_memory`, `conversations`, `messages`, `facts` (vector index),
-  `reminders`, `lg_checkpoints`.
+- **Storage:** Mongo Atlas is the durable source of truth.
+  Collections: `users`, `identities`, `core_memory`, `messages`,
+  `conversation_state`, `facts` (vector + Atlas Search), `category_summaries`,
+  `reminders`, `lg_checkpoints`. Redis is a hot cache only —
+  losing it loses speed, not data.
 - **Memory tiers:**
   - **Core** — small per-user doc (preferences, timezone, identity)
     always injected into the system prompt.
-  - **Short-term** — last N turns of the current thread.
-  - **Long-term** — `facts` collection with embeddings, recalled via
-    Atlas `$vectorSearch`.
+  - **Short-term** — Redis `chat:hot:{user_id}` LIST,
+    **token-budgeted** (not fixed-K), evicted in turn-groups so AI
+    replies never become orphans; rehydrated from Mongo `messages`
+    on miss. All channels feed **one unified conversation per user**;
+    replay is rendered with `[via {channel}]` prefix so the LLM sees
+    channel switches.
+  - **Long-term** — `facts` collection with embeddings + a **fixed
+    taxonomy** of categories (`profile, preferences, food, hobbies,
+    relationships, work, health, schedule, locations, goals, misc`).
+    Facts carry `categories: list[str]` (soft-classification) and a
+    `salience` score. Recall is **hybrid**: Atlas `$vectorSearch` +
+    Atlas `$search` (BM25 on `statement`) merged via **Reciprocal
+    Rank Fusion**. A separate **memorizer worker** consumes a
+    `tasks.memorize` stream, extracts facts via an LLM prompt
+    constrained to the taxonomy, dedupes by cosine ≥ 0.92, and
+    refreshes per-category summaries.
+  - **Category summaries** — one compact doc per `(user_id,
+    category)`, regenerated from top-salience facts after each
+    relevant change. **Non-empty summaries are injected at intake**
+    so the assistant always opens with the right context.
 - **LLM:** provider-agnostic `LLMClient` (OpenAI / Anthropic / Ollama),
   env-selectable.
 - **LangGraph checkpointer:** custom Mongo checkpointer (~100 LOC) to
@@ -142,6 +179,17 @@ synchronous tool calls inside the agent's graph and never touch Redis.
   - Gateway: bot token, SMTP creds.
   - Actuator: nothing sensitive (local OS APIs only).
   - Agent: LLM keys, MCP server credentials.
+- **Multi-tenant readiness:** the agent is **user-agnostic compute**.
+  It trusts `TaskIn.user_id` (gateway authenticates) and never does
+  identity resolution itself. Every data path (Redis keys, Mongo
+  queries, vector recall, checkpointer `thread_id`, logs) is keyed
+  by `user_id`. **Tools receive `user_id` via LangGraph
+  `RunnableConfig.configurable`, never as an LLM-generated
+  argument** — this is the one rule that is expensive to retrofit
+  and is enforced from v1. Auth, allowlist, invite-code onboarding,
+  per-user rate limits, and per-user fairness on `tasks.in` are
+  gateway-side concerns that can land later without touching the
+  agent.
 
 ## Envelope (sketch)
 
@@ -150,11 +198,12 @@ TaskIn  { id, trace_id, user_id, channel, channel_msg_id,
           text, attachments[], received_at }
 
 TaskOut { id, trace_id, in_reply_to, user_id,
-          channel,            # telegram | email | cli |
-                              # local.browser | local.notify | local.tts
+          channel,            # telegram | email | cli
           chat_ref,           # channel-specific addressing
-          intent,             # reply | ask_user | open_url | notify | speak
-          payload,            # intent-specific (text, url, title, body…)
+          intent,             # reply | ask_user
+          payload,            # intent-specific (text with optional metadata)
+                              # e.g., {text, action: "open_url", url: ...}
+                              #    or {text, action: "notify", title: ...}
           created_at }
 ```
 
@@ -241,40 +290,63 @@ Gateway (egress) matches, streams `QueryResponse` to the client → client exits
    - `respond` — format reply, persist turn, emit `tasks.out`.
    - Supports `interrupt` for `ask_user` HITL.
 6. Mongo checkpointer (`lg_checkpoints` collection).
-7. Memory module:
-   - `CoreMemory` — get/set per-user, always injected into system prompt.
-   - `ConversationStore` — last N turns per thread.
-   - `FactStore` — embeddings → Atlas `$vectorSearch`.
-   - Background `summarize_and_extract` job after each turn.
+7. Memory module (`agent/app/memory/`):
+   - `core.py` — get/set per-user core memory, always injected.
+   - `messages.py` — append-only Mongo transcript (per-message
+     `token_count` via `tiktoken` with model-correct encoding).
+   - `hotcache.py` — Redis `chat:hot:{user_id}` LIST, token-budgeted,
+     **turn-group eviction**, Mongo rehydrate on miss.
+   - `embeddings.py` — provider-agnostic embedder interface.
+   - `facts.py` — `upsert`, `dedupe` (cosine ≥ 0.92), `recall` using
+     **hybrid search** (vector + BM25 + Reciprocal Rank Fusion),
+     `user_id` pre-filter inside the `$vectorSearch` stage.
+   - `summaries.py` — per-category compact summary, refreshed from
+     top-salience facts after changes.
+   - `extractor.py` — taxonomy-constrained LLM fact extractor with
+     few-shot examples; emits `categories[]`, `statement`,
+     `salience`, `confidence`.
+8. Memorizer worker (`agent/app/memorizer.py`): separate process,
+   `XREADGROUP tasks.memorize` (group `memorizer`); for each turn-pair
+   fetches messages, runs the extractor, upserts facts, refreshes
+   affected category summaries. Added as a `memorizer` service in
+   `process-compose.yaml`.
+9. Atlas index definitions checked in at `agent/atlas_indexes.json`
+   (vector index on `facts.embedding`; Atlas Search on
+   `facts.statement` + `facts.categories`).
 
-### Phase 4 — Actuator (Go, host-local)  *parallel with Phase 2 & 3*
-1. Skeleton: `cmd/actuator/main.go`, runs in user session (systemd
-   `--user` unit or launchd plist).
-2. Redis consumer (`XREADGROUP tasks.out`, group `actuator`, filter on
-   `channel = local.*`).
-3. Handlers:
-   - `open_url` → `xdg-open` / `open` / `cmd /c start`.
-   - `notify` → `libnotify` / `osascript` / Windows toast.
-   - `speak` → system TTS (`espeak-ng` / `say` / SAPI).
-   - `set_clipboard` → `xclip` / `pbcopy` / Win32.
-4. Health endpoint on a local-only port.
+### Phase 4 — Gateway egress (expand Phase 2)
+1. In `XREADGROUP tasks.out`, match `in_reply_to` with pending CLI
+   streams and pending email/Telegram request IDs.
+2. Format response:
+   - **CLI:** if intent is `reply`, stream text back. If action is
+     `open_url`, include `{action: "open_url", url: ...}` in payload;
+     user can decide to open or copy-paste. If action is `notify` or
+     `speak`, include as metadata in payload.
+   - **Telegram/Email:** plain text. Actions ("open this", "notify",
+     "speak") rendered as text instructions, e.g., "👉 [Open
+     dashboard](https://...)".
+3. Send via appropriate channel adapter (Telegram API, SMTP, CLI
+   stream).
 
 ### Phase 5 — Scheduler & proactive path
 1. Small Go service: reads `reminders` from Mongo, at fire-time
-   `XADD tasks.in` with `channel=system` envelope so the agent
-   composes the user-facing message and routes it via `tasks.out`.
+   `XADD tasks.in` with `channel=cli` (or preferred channel) envelope
+   so the agent composes the user-facing message and routes it via
+   `tasks.out` back to that channel.
 
 ### Phase 6 — Observability & hardening
-1. OpenTelemetry SDK in Gateway, Agent, Actuator; `trace_id`
-   propagates through every envelope. Console exporter for v1.
+1. OpenTelemetry SDK in Gateway and Agent; `trace_id` propagates
+   through every envelope. Console exporter for v1.
 2. `tasks.dlq` + a tiny CLI to inspect/redrive.
-3. Health endpoints (`/healthz`, `/readyz`) on Gateway and Actuator.
+3. Health endpoints (`/healthz`, `/readyz`) on Gateway.
 4. Browser MCP sandbox hardening: no host mounts, network egress
    limited, per-session ephemeral profile.
 5. Email anti-loop guards: `In-Reply-To` allowlist, per-thread reply
    cap, drop auto-submitted (`Auto-Submitted: auto-*`) messages.
 6. Treat all channel content as untrusted data (prompt-injection
    defense in system prompt).
+7. Gateway anti-loop: do not echo `tasks.out` back to `tasks.in`;
+   avoid turning the agent into a feedback loop.
 
 ### Phase 7 — Verification
 1. Unit: envelope round-trip Go↔Python, identity resolution, LLM
@@ -286,10 +358,10 @@ Gateway (egress) matches, streams `QueryResponse` to the client → client exits
 4. Email smoke test against a throwaway mailbox.
 5. Browser-tool smoke test: agent uses MCP browser to fetch a page
    and summarize.
-6. Actuator smoke test: agent asks to "open my dashboard" → real
-   Chrome opens.
-7. HITL test: agent invokes `ask_user`, user replies via gRPC, graph
-   resumes.
+6. CLI intent test: agent emits action="open_url" → user receives
+   link in CLI response.
+7. HITL test: agent invokes `ask_user`, user replies via CLI/Telegram,
+   graph resumes.
 8. Resilience: kill agent mid-task, restart, assert idempotent
    reprocessing (no duplicate side effects).
 
@@ -301,30 +373,40 @@ Gateway (egress) matches, streams `QueryResponse` to the client → client exits
 - `/gateway/internal/adapters/{telegram,email,cli}.go`.
 - `/gateway/internal/stream/redis.go`.
 - `/gateway/internal/identity/resolver.go`.
-- `/actuator/cmd/actuator/main.go`.
-- `/actuator/internal/handlers/{open_url,notify,speak,clipboard}.go`.
-- `/agent/app/main.py` — worker loop.
+- `/agent/app/main.py` — worker loop (`tasks.in` → graph → `tasks.out`).
+- `/agent/app/memorizer.py` — worker loop (`tasks.memorize` →
+  extractor → facts/summaries).
 - `/agent/app/graph.py` — LangGraph definition.
-- `/agent/app/checkpoint_mongo.py` — custom Mongo checkpointer.
-- `/agent/app/memory/{core.py,conversations.py,facts.py}`.
+- `/agent/app/checkpoint_mongo.py` — custom Mongo checkpointer
+  (`thread_id = user_id`).
+- `/agent/app/db.py` — Mongo client + index assertions.
+- `/agent/app/memory/{models,core,messages,hotcache,embeddings,facts,summaries,extractor}.py`.
+- `/agent/atlas_indexes.json` — vector + Atlas Search index defs.
 - `/agent/app/llm/{base,openai,anthropic,ollama}.py`.
 - `/agent/app/tools/{reminders,notes,identity,recall,ask_user}.py`.
 - `/agent/app/mcp_clients.py` — `MultiServerMCPClient` wiring.
-- `/scheduler/...` — reminder ticker.
+- `/scheduler/cmd/scheduler/main.go` — reminder ticker.
 - `/process-compose.yaml`, `/.env.example`, `/Makefile`.
 
 ## Scope boundaries
 
-**In v1:** Telegram + Email + CLI; Actuator with open-URL, notify,
-TTS, clipboard; reminders + notes + recall tools; MCP browser + web
-search + filesystem; vector memory + core memory; allowlisted single
-user; process-compose + host-native redis + host-side actuator.
+**In v1:** Telegram + Email + CLI (gRPC); reminders + notes + recall
+tools; MCP browser + web search + filesystem; vector memory + core
+memory + categorized facts + hot cache; memorizer worker; allowlisted
+single user; process-compose + host-native redis; local effects
+(open-URL, notify, TTS, clipboard) returned as rich responses to user.
 
-**Deferred:** WhatsApp/Slack/Voice; multi-tenant; real calendar
-integration; web UI; rich attachment handling; show-window actuator;
-evaluator-optimizer self-critique; multi-agent handoffs;
+**Deferred (multi-user phase, no agent change needed):** invite-code
+onboarding, per-user fairness on `tasks.in` (in-flight semaphore
+then hash-partitioned streams), `users`/`invites`/`usage` collections,
+memorizer batching, per-user token/cost quotas, email anti-spoof
+(reply-tokenized addresses).
+
+**Deferred (other):** WhatsApp/Slack/Voice; real calendar
+integration; web UI; rich attachment handling; evaluator-optimizer
+self-critique; multi-agent handoffs;
 fine-tuned/locally-served models beyond Ollama; Temporal/NATS
-migration.
+migration; explicit fact-invalidation flag; `forget` tool.
 
 ## Design validation
 
@@ -349,11 +431,16 @@ code-execution sandbox.
 
 ## Further considerations
 
+0. **Atlas tier prereq.** Atlas Vector Search requires **M10+**
+   (~$57/mo); free/shared tiers do not support it. Confirm cluster
+   tier before starting the memory work. Fallbacks if staying on
+   free: local Qdrant or pgvector — keep the embedder + recall
+   interfaces abstracted so swapping is mechanical.
 1. **LangGraph checkpointer in Mongo.** Stock checkpointers are
    Postgres/SQLite. Writing a small custom Mongo adapter keeps the
    storage promise; alternative is to drop the checkpointer and
-   manage thread state ourselves in `conversations`. *Recommend custom
-   adapter.*
+   manage thread state ourselves in `conversation_state`. *Recommend
+   custom adapter; `thread_id = user_id`.*
 2. **Email ping-pong risk.** Auto-replies to lists/bounces. Guard with
    `In-Reply-To` allowlist, per-thread reply cap, `Auto-Submitted`
    header filtering.
@@ -361,10 +448,22 @@ code-execution sandbox.
    as untrusted data. System prompt explicitly sandboxes channel text.
 4. **Browser-tool blast radius.** Sandboxed container; ephemeral
    profile; constrained network egress; no host mounts.
-5. **Actuator privilege.** Runs in the user session — has access to
-   your real browser profile, clipboard, audio. Treat its inbound
-   envelopes as authenticated only because they originate from the
-   agent we own. Do not expose `tasks.out` to untrusted producers.
+5. **Fact contradictions.** New fact ("I'm vegetarian now") may
+   contradict old ("loves sushi"). v1 stores both with timestamps;
+   the per-category summary prompt prefers newer. Explicit
+   invalidation flag deferred.
+6. **Embedding model.** Start with OpenAI `text-embedding-3-small`
+   for quality; keep the `embeddings.py` interface so swapping to a
+   local model (`bge-small`) is mechanical.
+7. **Memorizer cost at scale.** Per-turn extraction is fine
+   single-user. At multi-user scale, batch by user every N turns or
+   every 5 minutes — no schema change required.
+8. **Local actions without an Actuator.** The agent emits
+   `TaskOut.payload` with optional `action` metadata (e.g.,
+   `{text: "...", action: "open_url", url: ".."}`) but never
+   executes them. The Gateway delivers the response to the user, who
+   can act on it (copy link, follow instruction, etc.). This shifts
+   trust to the user's judgment rather than background daemons.
 
 ## TODOs
 
