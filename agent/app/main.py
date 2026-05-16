@@ -17,11 +17,10 @@ from pathlib import Path
 import redis
 import structlog
 from dotenv import load_dotenv
-from langchain_anthropic import ChatAnthropic
-from langchain_core.language_models import BaseChatModel
 
 from .envelope import parse_task_in
 from .graph import AgentState, RoamindGraph
+from .llm import LLMClient
 from .stream import (
     GROUP_AGENT,
     STREAM_TASKS_IN,
@@ -52,7 +51,7 @@ def main() -> int:
         cfg.read(CONFIG_PATH)
         client = new_redis_client()
         ensure_group(client, STREAM_TASKS_IN, GROUP_AGENT)
-        llm = _build_llm(cfg)
+        llm = LLMClient.from_config(cfg, redis_client=client)
     except Exception as e:
         log.error("startup failed", err=str(e))
         return 1
@@ -64,7 +63,7 @@ def main() -> int:
     return 0
 
 
-def _run_loop(client: redis.Redis, llm: BaseChatModel) -> None:
+def _run_loop(client: redis.Redis, llm: LLMClient) -> None:
     graph = RoamindGraph.build(llm)
     log.info("agent started", stream=STREAM_TASKS_IN, group=GROUP_AGENT)
 
@@ -171,14 +170,9 @@ def _configure_logging() -> None:
     )
 
 
-def _build_llm(cfg: configparser.ConfigParser) -> BaseChatModel:
-    """Construct the chat model from config.ini."""
-    provider = cfg.get("llm", "provider", fallback="anthropic").lower()
-    model = cfg.get("llm", "model", fallback="claude-sonnet-4-6")
-
-    if provider == "anthropic":
-        return ChatAnthropic(model=model)
-    raise ValueError(f"Unsupported llm.provider: {provider}")
+def _build_llm(cfg: configparser.ConfigParser, client: redis.Redis) -> LLMClient:
+    """Construct the cached chat model from config.ini."""
+    return LLMClient.from_config(cfg, redis_client=client)
 
 
 if __name__ == "__main__":

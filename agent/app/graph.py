@@ -24,7 +24,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
@@ -33,6 +32,7 @@ from langchain_core.messages import (
 from langgraph.graph import END, StateGraph
 
 from .envelope import TaskIn, TaskOut
+from .llm import LLMClient
 
 
 SYSTEM_PROMPT = (
@@ -65,7 +65,7 @@ class RoamindGraph:
     LangGraph runnable.
     """
 
-    def __init__(self, llm: BaseChatModel):
+    def __init__(self, llm: LLMClient):
         self.llm = llm
 
     # --- Nodes ----------------------------------------------------------
@@ -127,7 +127,7 @@ class RoamindGraph:
     # --- Public API: graph factory --------------------------------------
 
     @staticmethod
-    def build(llm: BaseChatModel):
+    def build(llm: LLMClient):
         """Construct the agent instance and compile the graph."""
         agent = RoamindGraph(llm)
 
