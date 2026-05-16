@@ -1,82 +1,87 @@
-"""Pydantic models for memory documents.
+"""Pydantic models for the memory subsystem.
 
-Mirrors the Mongo schema. Field names use snake_case (Mongo) — wire
-serialization to the LLM/graph uses LangChain `BaseMessage` directly,
-not these models.
+Two clearly separated tiers:
+  • short-term  → `ChatMessage` (Redis-only)
+  • long-term   → `UserProfile`, `KnowledgeDoc`, `Event` (Mongo)
+
+Each long-term type lives in its own collection and is accessed by
+tools at the `act` node — not eagerly loaded at intake.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-
-
-Role = Literal["user", "assistant", "tool", "system"]
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class CoreMemory(BaseModel):
-    """Per-user always-injected context (preferences, timezone, identity)."""
+# --- Short-term ---------------------------------------------------------
+
+
+class ChatMessage(BaseModel):
+    """One message in the short-term conversation history."""
+
+    model_config = ConfigDict(extra="allow")
+
+    role: str  # "user" | "assistant" | "tool"
+    content: str
+    channel: str = ""
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+# --- Long-term ----------------------------------------------------------
+
+
+class UserProfile(BaseModel):
+    """Free-form per-user profile. Updated by tools as the conversation
+    surfaces new facts (name, timezone, profession, preferences, etc.).
+    """
 
     model_config = ConfigDict(extra="allow")
 
     user_id: str
-    # Free-form key/value bag. Kept small (rendered into the system prompt).
     data: dict[str, Any] = Field(default_factory=dict)
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
-class MessageDoc(BaseModel):
-    """One message in the transcript.
+class KnowledgeDoc(BaseModel):
+    """A document in the per-user knowledge base.
 
-    A `turn_id` groups messages that belong to the same user→assistant
-    exchange (user msg, any tool messages, assistant reply). Hot-cache
-    eviction operates on whole turns so AI replies never become orphans.
+    `category` partitions the KB (e.g. "health", "project.roamind",
+    "travel"). `content` is plain text / markdown. Searched via Mongo
+    `$text` over (title, content) and filtered by `user_id` + optional
+    `category`.
     """
 
     model_config = ConfigDict(extra="allow")
 
     id: str
     user_id: str
-    turn_id: str
-    channel: str = ""
-    role: Role
-    content: str
-    # Approximate token count (tiktoken). Used for hot-cache budgeting.
-    token_count: int = 0
-    # Optional structured payload (tool name/args for tool messages, etc).
-    meta: dict[str, Any] = Field(default_factory=dict)
+    category: str
+    title: str = ""
+    content: str = ""
+    tags: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
 
 
-class Turn(BaseModel):
-    """A grouped exchange. In-memory representation only (not persisted
-    as a single document — `messages` collection stores per-message rows).
+class Event(BaseModel):
+    """A structured time-stamped event.
+
+    `kind` is a free-form label (e.g. "workout", "task_completed").
+    `payload` is kind-specific so adding new tracking dimensions never
+    requires a schema migration.
     """
 
-    turn_id: str
-    messages: list[MessageDoc] = Field(default_factory=list)
+    model_config = ConfigDict(extra="allow")
 
-    @property
-    def total_tokens(self) -> int:
-        return sum(m.token_count for m in self.messages)
-
-
-class MemoryContext(BaseModel):
-    """Result of `Memory.load_context(user_id, query)`.
-
-    Consumed by the graph's `intake` node to seed the LLM message list.
-    """
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    core: Optional[CoreMemory] = None
-    turns: list[Turn] = Field(default_factory=list)
-    # Reserved for the long-term tier (filled when facts.py lands).
-    facts: list[Any] = Field(default_factory=list)
-    summaries: list[Any] = Field(default_factory=list)
+    id: str
+    user_id: str
+    kind: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    occurred_at: datetime = Field(default_factory=_utcnow)

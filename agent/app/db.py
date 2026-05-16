@@ -1,21 +1,15 @@
 """MongoDB client and index bootstrap.
 
-Atlas is the durable source of truth (per plan.md). This module exposes
-a single `MongoDB` facade that holds the client + collections and
-asserts the indexes the rest of the codebase depends on.
+Mongo holds the **long-term** memory only (per design — Redis is
+exclusive for short-term conversation history). Collections owned here:
 
-Collections owned here (v1 subset):
-    - core_memory          per-user always-injected facts
-    - messages             append-only transcript
-    - reminders            (future) scheduled prompts
-    - conversation_state   (future) LangGraph checkpoints
-    - facts                (deferred — needs Atlas Vector Search)
-    - category_summaries   (deferred)
+    user_profiles      one doc per user (free-form key/value)
+    knowledge          per-user knowledge base, `$text`-indexed
+    events             per-user time-series of structured events
 
-If `uri` is empty / unset, `MongoDB.connect()` returns `None`. The rest
-of the agent treats that as "no persistent memory" — hot cache still
-works, but core / transcript / recall become no-ops. This keeps local
-dev viable without an Atlas cluster.
+If `uri` is empty / unset, `MongoDB.connect()` returns `None`. The
+agent runs in Redis-only mode in that case — long-term tools become
+no-ops; short-term still works.
 """
 
 from __future__ import annotations
@@ -37,19 +31,15 @@ class MongoDB:
     def __init__(self, client: MongoClient, db_name: str):
         self.client = client
         self.db: Database = client[db_name]
-        self.core_memory: Collection = self.db["core_memory"]
-        self.messages: Collection = self.db["messages"]
-        self.reminders: Collection = self.db["reminders"]
-        self.conversation_state: Collection = self.db["conversation_state"]
+        self.user_profiles: Collection = self.db["user_profiles"]
+        self.knowledge: Collection = self.db["knowledge"]
+        self.events: Collection = self.db["events"]
 
     # --- Public API -----------------------------------------------------
 
     @classmethod
     def connect(cls, *, uri: str | None, db_name: str) -> Optional["MongoDB"]:
-        """Connect to Mongo if a URI is provided; otherwise return None.
-
-        URI resolution: explicit arg → `MONGO_URI` env → None.
-        """
+        """Connect to Mongo if a URI is provided; otherwise return None."""
         uri = uri or os.getenv("MONGO_URI") or ""
         if not uri.strip():
             log.warning("mongo disabled: no uri configured")
@@ -63,20 +53,26 @@ class MongoDB:
         return inst
 
     def ensure_indexes(self) -> None:
-        """Idempotent index assertions for the collections we own.
+        """Idempotent index assertions."""
+        self.user_profiles.create_index([("user_id", ASCENDING)], unique=True)
 
-        Atlas Search / Vector indexes are managed separately (see
-        `agent/atlas_indexes.json` per plan); only btree indexes here.
-        """
-        self.core_memory.create_index([("user_id", ASCENDING)], unique=True)
-
-        self.messages.create_index(
-            [("user_id", ASCENDING), ("created_at", DESCENDING)],
+        self.knowledge.create_index(
+            [("user_id", ASCENDING), ("id", ASCENDING)],
+            unique=True,
         )
-        self.messages.create_index([("turn_id", ASCENDING)])
+        self.knowledge.create_index([("user_id", ASCENDING), ("category", ASCENDING)])
+        # Full-text search index used by `LongTermMemory.knowledge.search()`.
+        # Mongo allows only one $text index per collection.
+        self.knowledge.create_index(
+            [("title", "text"), ("content", "text")],
+            name="knowledge_text",
+        )
 
-        self.reminders.create_index(
-            [("user_id", ASCENDING), ("fire_at", ASCENDING)],
+        self.events.create_index(
+            [("user_id", ASCENDING), ("occurred_at", DESCENDING)],
+        )
+        self.events.create_index(
+            [("user_id", ASCENDING), ("kind", ASCENDING), ("occurred_at", DESCENDING)],
         )
 
     def close(self) -> None:

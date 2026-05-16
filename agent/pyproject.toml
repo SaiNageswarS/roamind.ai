@@ -12,7 +12,6 @@ dependencies = [
     "langchain-anthropic>=0.2.0",
     "structlog>=24.1.0",
     "pymongo>=4.6.0",
-    "tiktoken>=0.7.0",
 ]
 
 [project.optional-dependencies]

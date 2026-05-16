@@ -22,7 +22,7 @@ from .db import MongoDB
 from .envelope import parse_task_in
 from .graph import AgentState, RoamindGraph
 from .llm import LLMClient
-from .memory import Memory
+from .memory import LongTermMemory, ShortTermMemory
 from .stream import (
     GROUP_AGENT,
     STREAM_TASKS_IN,
@@ -59,13 +59,17 @@ def main() -> int:
             uri=cfg.get("mongo", "uri", fallback=""),
             db_name=cfg.get("mongo", "db_name", fallback="roamind"),
         )
-        memory = Memory.from_config(cfg, mongo=mongo, redis_client=client)
+        short_term = ShortTermMemory(
+            client,
+            max_messages=cfg.getint("memory", "short_term_max_messages", fallback=8),
+        )
+        long_term = LongTermMemory(mongo)
     except Exception as e:
         log.error("startup failed", err=str(e))
         return 1
 
     try:
-        _run_loop(client, llm, memory)
+        _run_loop(client, llm, short_term, long_term)
     finally:
         client.close()
         if mongo is not None:
@@ -73,8 +77,13 @@ def main() -> int:
     return 0
 
 
-def _run_loop(client: redis.Redis, llm: LLMClient, memory: Memory) -> None:
-    graph = RoamindGraph.build(llm, memory)
+def _run_loop(
+    client: redis.Redis,
+    llm: LLMClient,
+    short_term: ShortTermMemory,
+    long_term: LongTermMemory,
+) -> None:
+    graph = RoamindGraph.build(llm, short_term, long_term)
     log.info("agent started", stream=STREAM_TASKS_IN, group=GROUP_AGENT)
 
     while not _should_stop:
