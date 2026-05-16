@@ -79,17 +79,27 @@ class RoamindGraph:
     # --- Nodes ----------------------------------------------------------
 
     def intake(self, state: AgentState) -> AgentState:
-        """Build the LLM context: system prompt + short-term history + user msg."""
+        """Build the LLM context: system prompt + user profile + short-term history + user msg.
+
+        The user profile is rendered into the **system message** only —
+        never duplicated into the message history. The system message
+        is rebuilt fresh every turn, so updates from prior tool calls
+        (e.g. `update_user_profile`) are picked up automatically.
+        """
         today = datetime.now().date().isoformat()
         task_in = state.task_in
 
-        system_msg = SystemMessage(
-            content=f"{SYSTEM_PROMPT}\n\nToday's date is {today}."
-        )
+        system_parts = [SYSTEM_PROMPT, f"Today's date is {today}."]
+        profile = self.long_term.profile.get(task_in.user_id)
+        if profile is not None:
+            block = profile.render_for_prompt()
+            if block:
+                system_parts.append(block)
+
         history = _to_lc_messages(self.short_term.load(task_in.user_id))
 
         state.messages = [
-            system_msg,
+            SystemMessage(content="\n\n".join(system_parts)),
             *history,
             HumanMessage(content=task_in.text),
         ]
@@ -119,7 +129,7 @@ class RoamindGraph:
     def respond(self, state: AgentState) -> AgentState:
         """Invoke the LLM, emit a TaskOut, and persist the turn to short-term."""
         incoming = state.task_in
-        ai_msg = self.llm.invoke(state.messages)
+        ai_msg = self.llm.invoke(state.messages, cache_scope=incoming.user_id)
         state.messages.append(ai_msg)
 
         self._persist_turn(

@@ -21,7 +21,7 @@ import (
 
 func main() {
 	gateway := flag.String("gateway", envOr("GATEWAY_ADDR", "localhost:50051"), "Gateway gRPC address")
-	userID := flag.String("user", envOr("CLI_USER_ID", "default"), "User ID")
+	userID := flag.String("user", envOr("CLI_USER_ID", "05b5c769"), "User ID")
 	timeout := flag.Duration("timeout", 90*time.Second, "Overall request timeout")
 	flag.Parse()
 

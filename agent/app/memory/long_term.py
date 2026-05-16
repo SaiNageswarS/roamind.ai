@@ -2,14 +2,11 @@
 
 Three sub-stores exposed on `LongTermMemory`:
 
-  .profile      one doc per user (free-form key/value)
+  .profile      typed per-user identity (always injected at intake)
   .knowledge    per-user knowledge base, Mongo `$text` search
   .events       per-user time-series of structured events
 
-Tools in the `act` node use these stores; the graph itself does not
-read or render long-term memory. New domains (e.g. "health.records",
-"tasks") are added by partitioning `knowledge.category` rather than
-introducing new collections.
+The `intake` graph node reads `.profile`; tools read/write all three.
 """
 
 from __future__ import annotations
@@ -36,7 +33,16 @@ class LongTermMemory:
 
 
 class _ProfileStore:
-    """Free-form per-user profile."""
+    """Typed per-user profile with a free-form `extras` extension bag."""
+
+    # Field names below `_USER_FIELDS` are top-level typed fields; any
+    # other key passed to `upsert()` is routed into `extras`. Computed
+    # once at import; safe because `UserProfile.model_fields` is static.
+    _USER_FIELDS = frozenset(UserProfile.model_fields.keys()) - {
+        "user_id",
+        "updated_at",
+        "extras",
+    }
 
     def __init__(self, mongo: Optional[MongoDB]):
         self._mongo = mongo
@@ -52,19 +58,65 @@ class _ProfileStore:
         raw.pop("_id", None)
         return UserProfile.model_validate(raw)
 
-    def upsert(self, user_id: str, fields: dict[str, Any]) -> Optional[UserProfile]:
-        """Shallow-merge `fields` into the user's profile."""
+    def get_or_empty(self, user_id: str) -> UserProfile:
+        """Return the stored profile or an empty one. Never None."""
+        return self.get(user_id) or UserProfile(user_id=user_id)
+
+    def upsert(self, user_id: str, updates: dict[str, Any]) -> Optional[UserProfile]:
+        """Merge `updates` into the user's profile.
+
+        Known typed fields are set at the top level. Unknown keys are
+        routed into `extras` (shallow-merged). The merged profile is
+        validated against `UserProfile` before persisting.
+        """
         if self._mongo is None or not user_id:
             return None
-        existing = self.get(user_id)
-        merged = {**(existing.data if existing else {}), **fields}
-        now = datetime.now(timezone.utc)
+
+        existing = self.get(user_id) or UserProfile(user_id=user_id)
+        merged: dict[str, Any] = existing.model_dump(mode="json")
+
+        extras_update: dict[str, Any] = {}
+        for k, v in updates.items():
+            if k in self._USER_FIELDS:
+                merged[k] = v
+            else:
+                extras_update[k] = v
+
+        if extras_update:
+            merged["extras"] = {**merged.get("extras", {}), **extras_update}
+
+        merged["user_id"] = user_id
+        merged["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        new_profile = UserProfile.model_validate(merged)
         self._mongo.user_profiles.update_one(
             {"user_id": user_id},
-            {"$set": {"user_id": user_id, "data": merged, "updated_at": now}},
+            {"$set": new_profile.model_dump(mode="json")},
             upsert=True,
         )
-        return UserProfile(user_id=user_id, data=merged, updated_at=now)
+        return new_profile
+
+    def delete_field(self, user_id: str, field: str) -> Optional[UserProfile]:
+        """Unset a top-level field or remove a key from `extras`."""
+        if self._mongo is None or not user_id:
+            return None
+        if field in self._USER_FIELDS:
+            self._mongo.user_profiles.update_one(
+                {"user_id": user_id},
+                {
+                    "$unset": {field: ""},
+                    "$set": {"updated_at": datetime.now(timezone.utc).isoformat()},
+                },
+            )
+        else:
+            self._mongo.user_profiles.update_one(
+                {"user_id": user_id},
+                {
+                    "$unset": {f"extras.{field}": ""},
+                    "$set": {"updated_at": datetime.now(timezone.utc).isoformat()},
+                },
+            )
+        return self.get(user_id)
 
 
 class _KnowledgeStore:

@@ -11,7 +11,14 @@
 from __future__ import annotations
 
 from .long_term import LongTermMemory
-from .models import ChatMessage, Event, KnowledgeDoc, UserProfile
+from .models import (
+    ChatMessage,
+    Education,
+    Event,
+    KnowledgeDoc,
+    UserProfile,
+    WorkExperience,
+)
 from .short_term import ShortTermMemory
 
 __all__ = [
@@ -19,6 +26,8 @@ __all__ = [
     "LongTermMemory",
     "ChatMessage",
     "UserProfile",
+    "Education",
+    "WorkExperience",
     "KnowledgeDoc",
     "Event",
 ]

@@ -98,12 +98,28 @@ class LLMClient:
             cache_enabled=cache_enabled,
         )
 
-    def invoke(self, messages: Sequence[BaseMessage], **kwargs: Any) -> AIMessage:
-        """Invoke the chat model, returning the cached response if present."""
+    def invoke(
+        self,
+        messages: Sequence[BaseMessage],
+        *,
+        cache_scope: str | None = None,
+        **kwargs: Any,
+    ) -> AIMessage:
+        """Invoke the chat model, returning the cached response if present.
+
+        `cache_scope` (typically the `user_id`) is folded into the cache
+        key and key prefix so cache entries are isolated per user and
+        can be invalidated per user via a `SCAN` on the prefix. If
+        `None`, entries land under a shared `__shared__` namespace.
+        """
         messages_list = list(messages)
         model_name = _model_identity(self.chat_model)
 
-        cache_key = self._cache_key(messages_list, kwargs) if self._cache_enabled else None
+        cache_key = (
+            self._cache_key(messages_list, kwargs, cache_scope)
+            if self._cache_enabled
+            else None
+        )
         if cache_key is not None:
             cached = self._cache_get(cache_key)
             if cached is not None:
@@ -148,17 +164,35 @@ class LLMClient:
 
     # --- Private helpers ------------------------------------------------
 
-    def _cache_key(self, messages: list[BaseMessage], call_kwargs: dict[str, Any]) -> str:
+    def _cache_key(
+        self,
+        messages: list[BaseMessage],
+        call_kwargs: dict[str, Any],
+        scope: str | None,
+    ) -> str:
+        """Key the cache on the current turn only.
+
+        The cache key intentionally ignores the system prompt and prior
+        conversation history. Only the **last user message and every
+        message after it** (tool calls, tool results, intermediate AI
+        messages within this turn) participate in the hash. This makes
+        repeat-question hits possible across turns at the cost of
+        treating the prior context as irrelevant — acceptable for an
+        idempotency-flavoured cache scoped per user.
+        """
+        scope_id = scope or "__shared__"
+        turn = _current_turn(messages)
         payload = {
+            "scope": scope_id,
             "model": _model_identity(self.chat_model),
             "params": _model_params(self.chat_model),
             "bound": self._bound_kwargs,
             "kwargs": {k: _jsonable(v) for k, v in call_kwargs.items()},
-            "messages": [_message_fingerprint(m) for m in messages],
+            "turn": [_message_fingerprint(m) for m in turn],
         }
         blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         digest = hashlib.sha256(blob).hexdigest()
-        return f"{CACHE_KEY_PREFIX}{digest}"
+        return f"{CACHE_KEY_PREFIX}{scope_id}:{digest}"
 
     def _cache_get(self, key: str) -> AIMessage | None:
         if self._redis is None:
@@ -232,6 +266,19 @@ def _model_params(chat_model: BaseChatModel) -> dict[str, Any]:
         "timeout": getattr(chat_model, "default_request_timeout", None),
         "max_retries": getattr(chat_model, "max_retries", None),
     }
+
+
+def _current_turn(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """Return the slice from the last `HumanMessage` to the end.
+
+    Used by the cache key so that prior conversation history and the
+    (dynamic) system prompt do not perturb the hash. If no
+    `HumanMessage` is present, falls back to the last message.
+    """
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].type == "human":
+            return messages[i:]
+    return messages[-1:] if messages else []
 
 
 def _message_fingerprint(message: BaseMessage) -> dict[str, Any]:
