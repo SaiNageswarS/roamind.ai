@@ -16,24 +16,18 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// defaultQueryTimeout is how long a CLI Query stream will wait for an agent reply
-// before returning DeadlineExceeded.
+// defaultQueryTimeout is how long a CLI Query stream will wait for an agent
+// reply before returning DeadlineExceeded.
 const defaultQueryTimeout = 60 * time.Second
-
-// pendingReply correlates a CLI gRPC stream with an inbound tasks.out envelope.
-type pendingReply struct {
-	ch        chan *pb.TaskOut
-	createdAt time.Time
-}
 
 // CliService implements the AssistantCLI gRPC service.
 //
 // Flow:
 //  1. Client calls Query(req) — opens a server-side stream.
-//  2. Service generates an internal ID, registers a pending channel, then XADDs
-//     a TaskIn envelope on tasks.in with channel="cli".
-//  3. The background egress consumer reads tasks.out and dispatches replies
-//     to pending channels by InReplyTo.
+//  2. Service generates an internal ID, registers a pending channel, then
+//     XADDs a TaskIn envelope on tasks.in with channel="cli".
+//  3. The shared EgressDispatcher invokes handleEgress for every "cli"
+//     taskOut and routes the reply by in_reply_to.
 //  4. Query reads from its channel and Send()s a QueryResponse, then closes.
 type CliService struct {
 	pb.UnimplementedAssistantCLIServer
@@ -44,15 +38,13 @@ type CliService struct {
 }
 
 // NewCliService is the DI factory consumed by go-api-boot's RegisterService.
-func NewCliService(rdb *redis.Client) *CliService {
+// It registers itself as the "cli" egress handler on the shared dispatcher.
+func NewCliService(rdb *redis.Client, dispatcher *EgressDispatcher) *CliService {
 	svc := &CliService{
 		rdb:     rdb,
 		timeout: defaultQueryTimeout,
 	}
-
-	// Background egress consumer runs for the life of the process.
-	go svc.runEgressConsumer(context.Background())
-
+	dispatcher.Register("cli", svc.handleEgress)
 	return svc
 }
 
@@ -115,58 +107,32 @@ func (s *CliService) Query(req *pb.QueryRequest, stream pb.AssistantCLI_QuerySer
 	}
 }
 
-// runEgressConsumer reads tasks.out continuously and routes CLI-channel
-// envelopes back to waiting Query streams.
-func (s *CliService) runEgressConsumer(ctx context.Context) {
-	if err := EnsureGroup(ctx, s.rdb, StreamTasksOut, GroupGatewayEgress); err != nil {
-		logger.Error("ensure egress group failed", zap.Error(err))
+// --- internals ----------------------------------------------------------
+
+// pendingReply correlates a CLI gRPC stream with an inbound tasks.out
+// envelope.
+type pendingReply struct {
+	ch        chan *pb.TaskOut
+	createdAt time.Time
+}
+
+// handleEgress is registered with the EgressDispatcher for the "cli"
+// channel. It routes a TaskOut to the waiting Query goroutine via its
+// pending channel.
+func (s *CliService) handleEgress(_ context.Context, taskOut *pb.TaskOut) {
+	inReplyTo := taskOut.GetInReplyTo()
+	v, ok := s.pending.Load(inReplyTo)
+	if !ok {
+		logger.Info("CLI reply has no pending request",
+			zap.String("in_reply_to", inReplyTo))
 		return
 	}
-	logger.Info("Gateway egress consumer started",
-		zap.String("stream", StreamTasksOut),
-		zap.String("group", GroupGatewayEgress))
-
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-		msgs, err := XReadTasksOut(ctx, s.rdb, 16, 2*time.Second)
-		if err != nil {
-			logger.Error("xread tasks.out failed", zap.Error(err))
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-
-		for _, msg := range msgs {
-			taskOut, err := ParseTaskOut(msg)
-			if err != nil {
-				logger.Error("parse tasks.out failed", zap.Error(err), zap.String("msg_id", msg.ID))
-				XAckTasksOut(ctx, s.rdb, msg.ID)
-				continue
-			}
-
-			// Only handle CLI channel; other channels are owned by other adapters.
-			if taskOut.GetChannel() != "cli" {
-				XAckTasksOut(ctx, s.rdb, msg.ID)
-				continue
-			}
-
-			inReplyTo := taskOut.GetInReplyTo()
-			if v, ok := s.pending.Load(inReplyTo); ok {
-				p := v.(*pendingReply)
-				select {
-				case p.ch <- taskOut:
-					logger.Info("CLI reply delivered", zap.String("in_reply_to", inReplyTo))
-				default:
-					logger.Info("CLI reply channel full; dropping",
-						zap.String("in_reply_to", inReplyTo))
-				}
-			} else {
-				logger.Info("CLI reply has no pending request",
-					zap.String("in_reply_to", inReplyTo))
-			}
-
-			XAckTasksOut(ctx, s.rdb, msg.ID)
-		}
+	p := v.(*pendingReply)
+	select {
+	case p.ch <- taskOut:
+		logger.Info("CLI reply delivered", zap.String("in_reply_to", inReplyTo))
+	default:
+		logger.Info("CLI reply channel full; dropping",
+			zap.String("in_reply_to", inReplyTo))
 	}
 }
