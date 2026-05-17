@@ -1,6 +1,5 @@
 .env
 build/
-generated
 
 # Python
 __pycache__/

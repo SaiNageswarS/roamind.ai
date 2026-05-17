@@ -1,8 +1,6 @@
-module github.com/SaiNageswarS/roamind.ai/cli
+module github.com/SaiNageswarS/roamind.ai/roamind-cli
 
 go 1.26.3
-
-replace github.com/SaiNageswarS/roamind.ai/proto => ../proto
 
 require (
 	github.com/SaiNageswarS/roamind.ai/proto v0.0.0-00010101000000-000000000000

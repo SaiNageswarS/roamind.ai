@@ -20,7 +20,7 @@ go build \
 
 cd ..
 
-cd cli
+cd roamind-cli
 
 go build \
     -ldflags="-s -w" \
