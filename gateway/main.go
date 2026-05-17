@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/SaiNageswarS/go-api-boot/dotenv"
 	"github.com/SaiNageswarS/go-api-boot/logger"
@@ -68,11 +69,36 @@ func newRedisClient() (*redis.Client, error) {
 		return nil, err
 	}
 	rdb := redis.NewClient(opts)
-	if err := rdb.Ping(context.Background()).Err(); err != nil {
-		return nil, err
+
+	const maxAttempts = 10
+	const retryDelay = 2 * time.Second
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err = rdb.Ping(context.Background()).Err()
+		if err == nil {
+			logger.Info("Connected to Redis",
+				zap.String("url", url),
+				zap.Int("attempt", attempt),
+			)
+			return rdb, nil
+		}
+
+		if attempt == maxAttempts {
+			break
+		}
+
+		logger.Info("Redis not ready yet, retrying",
+			zap.String("url", url),
+			zap.Int("attempt", attempt),
+			zap.Int("max_attempts", maxAttempts),
+			zap.Duration("retry_delay", retryDelay),
+			zap.Error(err),
+		)
+
+		time.Sleep(retryDelay)
 	}
-	logger.Info("Connected to Redis", zap.String("url", url))
-	return rdb, nil
+
+	return nil, err
 }
 
 func getCancellableContext() context.Context {

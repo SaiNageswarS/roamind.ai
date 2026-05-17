@@ -1,0 +1,50 @@
+# VCS
+.git
+.gitignore
+.github
+
+# Build artifacts
+build/
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Local data / dumps
+dump.rdb
+*.rdb
+*.aof
+
+# Secrets / local env
+.env
+.env.*
+!.env.example
+
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/*.egg-info
+**/.venv
+**/venv
+
+# IDE / OS
+.vscode
+.idea
+.DS_Store
+
+# Local docs / scratch
+plan.md
+api-test.http
+process-compose.yaml
+
+# Don't ship Dockerfiles into the image
+**/Dockerfile
+.dockerignore
+deploy/

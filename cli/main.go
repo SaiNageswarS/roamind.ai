@@ -3,11 +3,13 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/term"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -24,15 +27,24 @@ func main() {
 	gateway := flag.String("gateway", envOr("GATEWAY_ADDR", "localhost:50051"), "Gateway gRPC address")
 	token := flag.String("token", os.Getenv("CLI_JWT_TOKEN"), "JWT bearer token (or env CLI_JWT_TOKEN)")
 	timeout := flag.Duration("timeout", 90*time.Second, "Overall request timeout")
+	insecureConn := flag.Bool("insecure", envBool("GATEWAY_INSECURE", false), "Skip TLS (use only for local plaintext gRPC, e.g. localhost:50051)")
 	flag.Parse()
 
 	if *token == "" {
 		log.Fatalf("jwt token is required: pass -token or set CLI_JWT_TOKEN")
 	}
 
+	var creds credentials.TransportCredentials
+	if *insecureConn {
+		creds = insecure.NewCredentials()
+	} else {
+		// System root CAs; ServerName is taken from the dial target.
+		creds = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+	}
+
 	conn, err := grpc.NewClient(
 		*gateway,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(creds),
 	)
 	if err != nil {
 		log.Fatalf("dial %s: %v", *gateway, err)
@@ -89,7 +101,16 @@ func (r *inputReader) readLine(prompt string) (string, error) {
 
 	line, err := readLineWithHistory(prompt, r.history)
 	if err != nil {
-		return "", err
+		// Some environments report a TTY but do not support raw mode reads
+		// reliably (e.g. bad file descriptor on /dev/stdin). Fall back once
+		// to plain buffered input and keep using that path for subsequent reads.
+		r.useTTY = false
+		fmt.Print(prompt)
+		line, fallbackErr := r.fallback.ReadString('\n')
+		if fallbackErr != nil {
+			return "", fallbackErr
+		}
+		return strings.TrimRight(line, "\r\n"), nil
 	}
 
 	if strings.TrimSpace(line) != "" {
@@ -112,10 +133,7 @@ func readLineWithHistory(prompt string, history []string) (string, error) {
 	}
 	defer term.Restore(fd, originalState)
 
-	f := os.NewFile(uintptr(fd), "/dev/stdin")
-	if f == nil {
-		return "", fmt.Errorf("stdin unavailable")
-	}
+	f := os.Stdin
 
 	fmt.Print(prompt)
 	buf := make([]byte, 0, 256)
@@ -231,4 +249,16 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func envBool(key string, fallback bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+	return b
 }
