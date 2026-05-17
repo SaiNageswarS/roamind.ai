@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,12 +15,14 @@ import (
 	"time"
 
 	"github.com/SaiNageswarS/go-api-boot/logger"
+	"github.com/SaiNageswarS/go-api-boot/odm"
+	"github.com/SaiNageswarS/go-collection-boot/async"
+	"github.com/SaiNageswarS/roamind.ai/gateway/db"
 	pb "github.com/SaiNageswarS/roamind.ai/proto/generated"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -29,45 +32,41 @@ const (
 	telegramAPIBase     = "https://api.telegram.org"
 	telegramPollSeconds = 30
 	telegramChannelName = "telegram"
-
-	collTelegramUsers = "telegram_users"
-	collUserProfiles  = "user_profiles"
 )
 
 // TelegramService bridges Telegram (via long-poll Bot API) and the Redis
-// task streams. Each inbound message is converted into a TaskIn envelope
-// with channel="telegram"; outbound TaskOut messages from the agent are
-// delivered through sendMessage using a chat_id resolved from MongoDB.
-//
-// User mapping:
-//   - collection telegram_users keyed by _id = telegram user id
-//   - field user_id = roamind UUID; chat_id = latest chat id
-//   - on first contact a minimal user_profiles document is also upserted
+// task streams. Each inbound message becomes a TaskIn with
+// channel="telegram"; outbound TaskOut messages are delivered through
+// sendMessage using a chat_id resolved from the login collection.
 type TelegramService struct {
 	rdb    *redis.Client
-	db     *mongo.Database
+	mongo  odm.MongoClient
+	dbName string
+	logins odm.OdmCollectionInterface[db.LoginModel]
 	token  string
 	http   *http.Client
 	offset atomic.Int64
 }
 
-// NewTelegramService constructs the service. Returns nil if disabled:
-// missing TELEGRAM_BOT_TOKEN or no MongoDB database provided.
-func NewTelegramService(rdb *redis.Client, db *mongo.Database, dispatcher *EgressDispatcher) *TelegramService {
+// NewTelegramService returns nil when Telegram is disabled: missing
+// TELEGRAM_BOT_TOKEN or no MongoDB client provided.
+func NewTelegramService(rdb *redis.Client, mongoClient odm.MongoClient, dbName string, dispatcher *EgressDispatcher) *TelegramService {
 	token := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
 	if token == "" {
 		logger.Info("Telegram disabled: TELEGRAM_BOT_TOKEN not set")
 		return nil
 	}
-	if db == nil {
-		logger.Info("Telegram disabled: no MongoDB database")
+	if mongoClient == nil {
+		logger.Info("Telegram disabled: no MongoDB client")
 		return nil
 	}
 
 	svc := &TelegramService{
-		rdb:   rdb,
-		db:    db,
-		token: token,
+		rdb:    rdb,
+		mongo:  mongoClient,
+		dbName: dbName,
+		logins: odm.CollectionOf[db.LoginModel](mongoClient, dbName),
+		token:  token,
 		http: &http.Client{
 			Timeout: time.Duration(telegramPollSeconds+10) * time.Second,
 		},
@@ -112,17 +111,6 @@ type tgGetUpdatesResp struct {
 	OK          bool       `json:"ok"`
 	Result      []tgUpdate `json:"result"`
 	Description string     `json:"description,omitempty"`
-}
-
-// telegramUserDoc is the storage shape in the telegram_users collection.
-type telegramUserDoc struct {
-	TelegramID int64     `bson:"_id"`
-	UserID     string    `bson:"user_id"`
-	ChatID     int64     `bson:"chat_id"`
-	FirstName  string    `bson:"first_name,omitempty"`
-	LastName   string    `bson:"last_name,omitempty"`
-	Username   string    `bson:"username,omitempty"`
-	UpdatedAt  time.Time `bson:"updated_at"`
 }
 
 func (s *TelegramService) runLongPoll(ctx context.Context) {
@@ -215,71 +203,45 @@ func (s *TelegramService) handleUpdate(ctx context.Context, u tgUpdate) {
 		zap.Int64("tg_id", from.ID))
 }
 
-// resolveUserID returns the roamind UUID for a Telegram user, creating
-// new mapping + user_profiles entries on first contact and refreshing
-// chat_id / names on each call.
+// resolveUserID looks up the login row by telegram.id; refreshes channel
+// info on existing rows, creates the row + user_profiles seed on first
+// contact.
 func (s *TelegramService) resolveUserID(ctx context.Context, from *tgUser, chatID int64) (string, error) {
-	coll := s.db.Collection(collTelegramUsers)
-	now := time.Now().UTC()
-
-	var existing telegramUserDoc
-	err := coll.FindOne(ctx, bson.M{"_id": from.ID}).Decode(&existing)
-	if err == nil {
-		// Update changing fields (chat id can change, names can be edited).
-		_, _ = coll.UpdateOne(ctx, bson.M{"_id": from.ID}, bson.M{
-			"$set": bson.M{
-				"chat_id":    chatID,
-				"first_name": from.FirstName,
-				"last_name":  from.LastName,
-				"username":   from.Username,
-				"updated_at": now,
-			},
-		})
+	existing, err := async.Await(s.logins.FindOne(ctx, bson.M{"telegram.id": from.ID}))
+	if err == nil && existing != nil {
+		// Refresh changing fields and persist.
+		existing.Telegram = &db.TelegramChannel{
+			ID:        from.ID,
+			ChatID:    chatID,
+			Username:  from.Username,
+			FirstName: from.FirstName,
+			LastName:  from.LastName,
+		}
+		if _, saveErr := async.Await(s.logins.Save(ctx, *existing)); saveErr != nil {
+			logger.Error("login save failed", zap.Error(saveErr), zap.String("user_id", existing.UserID))
+		}
 		return existing.UserID, nil
 	}
-	if err != mongo.ErrNoDocuments {
-		return "", fmt.Errorf("find telegram_users: %w", err)
+	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
+		return "", fmt.Errorf("find login: %w", err)
 	}
 
-	// First contact: create both telegram_users and user_profiles.
+	// First contact: insert login + seed user_profiles.
 	newUserID := uuid.NewString()
-	doc := telegramUserDoc{
-		TelegramID: from.ID,
-		UserID:     newUserID,
-		ChatID:     chatID,
-		FirstName:  from.FirstName,
-		LastName:   from.LastName,
-		Username:   from.Username,
-		UpdatedAt:  now,
+	login := db.LoginModel{
+		UserID: newUserID,
+		Telegram: &db.TelegramChannel{
+			ID:        from.ID,
+			ChatID:    chatID,
+			Username:  from.Username,
+			FirstName: from.FirstName,
+			LastName:  from.LastName,
+		},
 	}
-	if _, err := coll.InsertOne(ctx, doc); err != nil {
-		return "", fmt.Errorf("insert telegram_users: %w", err)
+	if _, err := async.Await(s.logins.Save(ctx, login)); err != nil {
+		return "", fmt.Errorf("insert login: %w", err)
 	}
 
-	name := strings.TrimSpace(from.FirstName + " " + from.LastName)
-	if name == "" {
-		name = from.Username
-	}
-	profiles := s.db.Collection(collUserProfiles)
-	_, err = profiles.UpdateOne(ctx,
-		bson.M{"user_id": newUserID},
-		bson.M{
-			"$setOnInsert": bson.M{
-				"user_id":    newUserID,
-				"name":       name,
-				"updated_at": now,
-				"extras": bson.M{
-					"telegram_id":       from.ID,
-					"telegram_username": from.Username,
-				},
-			},
-		},
-		options.UpdateOne().SetUpsert(true),
-	)
-	if err != nil {
-		logger.Error("upsert user_profiles failed",
-			zap.Error(err), zap.String("user_id", newUserID))
-	}
 	return newUserID, nil
 }
 
@@ -295,26 +257,20 @@ func (s *TelegramService) handleEgress(ctx context.Context, taskOut *pb.TaskOut)
 		return
 	}
 
-	chatID, err := s.lookupChatID(ctx, userID)
+	login, err := async.Await(s.logins.FindOneByID(ctx, userID))
 	if err != nil {
-		logger.Error("lookup telegram chat_id failed",
+		logger.Error("lookup login failed",
 			zap.Error(err), zap.String("user_id", userID))
 		return
 	}
-	if err := s.sendMessage(ctx, chatID, text); err != nil {
+	if login == nil || login.Telegram == nil {
+		logger.Info("no telegram channel for user", zap.String("user_id", userID))
+		return
+	}
+	if err := s.sendMessage(ctx, login.Telegram.ChatID, text); err != nil {
 		logger.Error("telegram sendMessage failed",
 			zap.Error(err), zap.String("user_id", userID))
 	}
-}
-
-func (s *TelegramService) lookupChatID(ctx context.Context, userID string) (int64, error) {
-	var doc telegramUserDoc
-	err := s.db.Collection(collTelegramUsers).
-		FindOne(ctx, bson.M{"user_id": userID}).Decode(&doc)
-	if err != nil {
-		return 0, err
-	}
-	return doc.ChatID, nil
 }
 
 func (s *TelegramService) sendMessage(ctx context.Context, chatID int64, text string) error {

@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	github.com/SaiNageswarS/go-api-boot v1.0.44
+	github.com/SaiNageswarS/go-collection-boot v1.0.5
 	github.com/SaiNageswarS/roamind.ai/proto v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/redis/go-redis/v9 v9.7.3
@@ -50,6 +51,7 @@ require (
 	github.com/googleapis/gax-go/v2 v2.13.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
+	github.com/jinzhu/copier v0.3.2 // indirect
 	github.com/klauspost/compress v1.16.7 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0 // indirect
