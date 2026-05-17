@@ -3,7 +3,7 @@ module github.com/SaiNageswarS/roamind.ai/roamind-cli
 go 1.26.3
 
 require (
-	github.com/SaiNageswarS/roamind.ai/proto v0.0.0-00010101000000-000000000000
+	github.com/SaiNageswarS/roamind.ai/proto v0.0.0-20260517185017-e33575ba9ec0
 	github.com/google/uuid v1.6.0
 	golang.org/x/term v0.42.0
 	google.golang.org/grpc v1.81.1

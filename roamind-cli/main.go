@@ -25,13 +25,13 @@ import (
 
 func main() {
 	gateway := flag.String("gateway", envOr("GATEWAY_ADDR", "localhost:50051"), "Gateway gRPC address")
-	token := flag.String("token", os.Getenv("CLI_JWT_TOKEN"), "JWT bearer token (or env CLI_JWT_TOKEN)")
+	token := flag.String("token", os.Getenv("ROAMIND_CLI_JWT_TOKEN"), "JWT bearer token (or env ROAMIND_CLI_JWT_TOKEN)")
 	timeout := flag.Duration("timeout", 90*time.Second, "Overall request timeout")
 	insecureConn := flag.Bool("insecure", envBool("GATEWAY_INSECURE", false), "Skip TLS (use only for local plaintext gRPC, e.g. localhost:50051)")
 	flag.Parse()
 
 	if *token == "" {
-		log.Fatalf("jwt token is required: pass -token or set CLI_JWT_TOKEN")
+		log.Fatalf("jwt token is required: pass -token or set ROAMIND_CLI_JWT_TOKEN")
 	}
 
 	var creds credentials.TransportCredentials
