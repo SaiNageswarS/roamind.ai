@@ -16,14 +16,19 @@ import (
 	"golang.org/x/term"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func main() {
 	gateway := flag.String("gateway", envOr("GATEWAY_ADDR", "localhost:50051"), "Gateway gRPC address")
-	userID := flag.String("user", envOr("CLI_USER_ID", "05b5c769"), "User ID")
+	token := flag.String("token", os.Getenv("CLI_JWT_TOKEN"), "JWT bearer token (or env CLI_JWT_TOKEN)")
 	timeout := flag.Duration("timeout", 90*time.Second, "Overall request timeout")
 	flag.Parse()
+
+	if *token == "" {
+		log.Fatalf("jwt token is required: pass -token or set CLI_JWT_TOKEN")
+	}
 
 	conn, err := grpc.NewClient(
 		*gateway,
@@ -53,7 +58,7 @@ func main() {
 			continue
 		}
 
-		if err := queryOnce(client, *userID, *timeout, message); err != nil {
+		if err := queryOnce(client, *token, *timeout, message); err != nil {
 			log.Printf("query failed: %v", err)
 		}
 	}
@@ -184,13 +189,14 @@ func readLineWithHistory(prompt string, history []string) (string, error) {
 	}
 }
 
-func queryOnce(client pb.AssistantCLIClient, userID string, timeout time.Duration, message string) error {
+func queryOnce(client pb.AssistantCLIClient, token string, timeout time.Duration, message string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "bearer "+token)
+
 	req := &pb.QueryRequest{
 		Id:         uuid.NewString(),
-		UserId:     userID,
 		Text:       message,
 		ReceivedAt: timestamppb.Now(),
 	}

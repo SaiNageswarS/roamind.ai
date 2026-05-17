@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SaiNageswarS/go-api-boot/auth"
 	"github.com/SaiNageswarS/go-api-boot/logger"
 	pb "github.com/SaiNageswarS/roamind.ai/proto/generated"
 	"github.com/google/uuid"
@@ -55,17 +56,14 @@ func NewCliService(rdb *redis.Client) *CliService {
 	return svc
 }
 
-// AuthFuncOverride disables the default JWT auth interceptor for the CLI
-// service (local trust boundary; the gRPC port should not be exposed off-host).
-func (s *CliService) AuthFuncOverride(ctx context.Context, _ string) (context.Context, error) {
-	return ctx, nil
-}
-
 // Query implements AssistantCLI.Query (server-side streaming).
 func (s *CliService) Query(req *pb.QueryRequest, stream pb.AssistantCLI_QueryServer) error {
 	if req == nil || req.GetText() == "" {
 		return status.Error(codes.InvalidArgument, "text is required")
 	}
+
+	ctx := stream.Context()
+	userID, _ := auth.GetUserIdAndTenant(ctx)
 
 	internalID := uuid.NewString()
 	traceID := req.GetId()
@@ -76,7 +74,7 @@ func (s *CliService) Query(req *pb.QueryRequest, stream pb.AssistantCLI_QuerySer
 	taskIn := &pb.TaskIn{
 		Id:           internalID,
 		TraceId:      traceID,
-		UserId:       req.GetUserId(),
+		UserId:       userID,
 		Channel:      "cli",
 		ChannelMsgId: req.GetId(),
 		Text:         req.GetText(),
@@ -87,7 +85,6 @@ func (s *CliService) Query(req *pb.QueryRequest, stream pb.AssistantCLI_QuerySer
 	s.pending.Store(internalID, &pendingReply{ch: replyCh, createdAt: time.Now()})
 	defer s.pending.Delete(internalID)
 
-	ctx := stream.Context()
 	if _, err := XAddTaskIn(ctx, s.rdb, taskIn); err != nil {
 		logger.Error("xadd tasks.in failed", zap.Error(err), zap.String("id", internalID))
 		return status.Errorf(codes.Internal, "enqueue failed: %v", err)
@@ -95,7 +92,7 @@ func (s *CliService) Query(req *pb.QueryRequest, stream pb.AssistantCLI_QuerySer
 
 	logger.Info("CLI Query enqueued",
 		zap.String("id", internalID),
-		zap.String("user_id", req.GetUserId()))
+		zap.String("user_id", userID))
 
 	select {
 	case taskOut := <-replyCh:

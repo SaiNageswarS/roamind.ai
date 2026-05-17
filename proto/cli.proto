@@ -13,9 +13,8 @@ service AssistantCLI {
 
 message QueryRequest {
   string id = 1;                                      // UUID for correlation
-  string user_id = 2;                                 // canonical user (from allowlist)
-  string text = 3;                                    // user query
-  google.protobuf.Timestamp received_at = 4;
+  string text = 2;                                    // user query
+  google.protobuf.Timestamp received_at = 3;
 }
 
 message QueryResponse {
