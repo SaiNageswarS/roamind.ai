@@ -36,6 +36,7 @@ from langgraph.graph import END, StateGraph
 from .envelope import TaskIn, TaskOut
 from .llm import LLMClient
 from .memory import ChatMessage, LongTermMemory, ShortTermMemory
+from .tools import ALL_TOOLS
 
 
 SYSTEM_PROMPT = (
@@ -72,9 +73,11 @@ class RoamindGraph:
         short_term: ShortTermMemory,
         long_term: LongTermMemory,
     ):
-        self.llm = llm
-        self.short_term = short_term
         self.long_term = long_term
+        self.short_term = short_term
+        self.tools = list(ALL_TOOLS)
+        self._tools_by_name = {t.name: t for t in self.tools}
+        self.llm = llm.bind_tools(self.tools) if self.tools else llm
 
     # --- Nodes ----------------------------------------------------------
 
@@ -106,20 +109,55 @@ class RoamindGraph:
         return state
 
     def plan(self, state: AgentState) -> AgentState:
-        """LLM-driven planning step (stub).
+        """Invoke the (tool-bound) LLM and route based on tool calls.
 
-        When tools are bound, this will call `self.llm.invoke(...)` with
-        tool-bound model and route to `act` if the response carries
-        tool calls, else `respond`.
+        If the response carries `tool_calls`, route to `act`; otherwise
+        route to `respond`. The AIMessage is appended to `state.messages`
+        either way so `act` can pair tool calls with the originating
+        message and `respond` can read the final text.
         """
-        state.plan = "respond"
+        incoming = state.task_in
+        ai_msg = self.llm.invoke(state.messages, cache_scope=incoming.user_id)
+        state.messages.append(ai_msg)
+        state.plan = "act" if getattr(ai_msg, "tool_calls", None) else "respond"
         return state
 
     def act(self, state: AgentState) -> AgentState:
-        """Tool execution node (stub).
+        """Execute every tool call on the last AIMessage.
 
-        Tools here are the only entry point to `self.long_term`.
+        Tool exceptions are caught and turned into a `state.last_error`
+        marker so the graph routes through `compact_err` before
+        re-planning. Successful tool results are appended as
+        `ToolMessage`s.
         """
+        if not state.messages:
+            return state
+        last = state.messages[-1]
+        tool_calls = getattr(last, "tool_calls", None) or []
+        if not tool_calls:
+            return state
+
+        for call in tool_calls:
+            name = call.get("name")
+            args = call.get("args") or {}
+            call_id = call.get("id") or ""
+            tool_fn = self._tools_by_name.get(name)
+            if tool_fn is None:
+                state.messages.append(
+                    ToolMessage(content=f"unknown tool: {name}", tool_call_id=call_id, name=name or "")
+                )
+                continue
+            try:
+                result = tool_fn.invoke(args)
+            except Exception as e:  # noqa: BLE001 — surfaced via compact_err
+                state.last_error = f"{name}: {e}"
+                state.messages.append(
+                    ToolMessage(content=f"error: {e}", tool_call_id=call_id, name=name)
+                )
+                continue
+            state.messages.append(
+                ToolMessage(content=str(result), tool_call_id=call_id, name=name)
+            )
         return state
 
     def compact_err(self, state: AgentState) -> AgentState:
@@ -127,16 +165,16 @@ class RoamindGraph:
         return state
 
     def respond(self, state: AgentState) -> AgentState:
-        """Invoke the LLM, emit a TaskOut, and persist the turn to short-term."""
+        """Emit a `TaskOut` from the last AIMessage and persist the turn."""
         incoming = state.task_in
-        ai_msg = self.llm.invoke(state.messages, cache_scope=incoming.user_id)
-        state.messages.append(ai_msg)
+        ai_msg = _last_ai_message(state.messages) or AIMessage(content="")
+        text = _message_text(ai_msg)
 
         self._persist_turn(
             user_id=incoming.user_id,
             channel=incoming.channel,
             user_text=incoming.text,
-            assistant_text=str(ai_msg.content),
+            assistant_text=text,
         )
 
         state.task_out = TaskOut(
@@ -147,7 +185,7 @@ class RoamindGraph:
             channel=incoming.channel,
             chat_ref=incoming.channel_msg_id,
             intent="reply",
-            payload=ai_msg.content,
+            payload=text,
         )
         return state
 
@@ -177,8 +215,8 @@ class RoamindGraph:
         )
         g.add_conditional_edges(
             "act",
-            lambda state: "compact_err" if state.last_error else "respond",
-            {"compact_err": "compact_err", "respond": "respond"},
+            lambda state: "compact_err" if state.last_error else "plan",
+            {"compact_err": "compact_err", "plan": "plan"},
         )
         g.add_edge("compact_err", "plan")
         g.add_edge("respond", END)
@@ -206,6 +244,31 @@ class RoamindGraph:
 
 
 # --- Module-level helpers -----------------------------------------------
+
+
+def _last_ai_message(messages: list[BaseMessage]) -> Optional[AIMessage]:
+    for m in reversed(messages):
+        if isinstance(m, AIMessage):
+            return m
+    return None
+
+
+def _message_text(message: BaseMessage) -> str:
+    """Best-effort flatten of a message's content to plain text."""
+    content = message.content
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    return str(content)
 
 
 def _to_lc_messages(history: list[ChatMessage]) -> list[BaseMessage]:

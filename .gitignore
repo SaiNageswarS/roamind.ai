@@ -17,3 +17,5 @@ dist/
 
 # redis
 dump.rdb
+
+api-test.http
