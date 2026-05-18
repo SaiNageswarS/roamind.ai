@@ -79,6 +79,7 @@ class UserProfile(BaseModel):
 
     # Location
     location: Optional[str] = None
+    timezone: Optional[str] = None  # IANA, e.g. "Asia/Kolkata"
 
     # Career
     profession: Optional[str] = None
@@ -116,6 +117,8 @@ class UserProfile(BaseModel):
         # Location block
         if self.location:
             lines.append(f"Location: {self.location}")
+        if self.timezone:
+            lines.append(f"Timezone: {self.timezone}")
 
         # Career block
         if self.profession or self.employer:
@@ -186,6 +189,61 @@ class Event(BaseModel):
     kind: str
     payload: dict[str, Any] = Field(default_factory=dict)
     occurred_at: datetime = Field(default_factory=_utcnow)
+
+
+# --- Long-term: habit tracking (gateway-owned, read-only on this side) -
+
+
+class Habit(BaseModel):
+    """A user-defined habit tracker. Slug is the lookup key."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    user_id: str
+    name: str
+    slug: str
+    polarity: str = "both"  # "positive" | "negative" | "both"
+    description: str = ""
+
+
+class HabitEntry(BaseModel):
+    """Per-day counters for a habit in the user's timezone."""
+
+    model_config = ConfigDict(extra="allow")
+
+    user_id: str
+    habit_id: str
+    date: str  # YYYY-MM-DD in user-local TZ
+    positive: int = 0
+    negative: int = 0
+
+
+class HabitWeekly(BaseModel):
+    """Rolled-up totals for a completed ISO week."""
+
+    model_config = ConfigDict(extra="allow")
+
+    user_id: str
+    habit_id: str
+    iso_year: int
+    iso_week: int
+    week_start_date: str
+    positive: int = 0
+    negative: int = 0
+
+
+class HabitMonthly(BaseModel):
+    """Rolled-up totals for a completed calendar month."""
+
+    model_config = ConfigDict(extra="allow")
+
+    user_id: str
+    habit_id: str
+    year: int
+    month: int
+    positive: int = 0
+    negative: int = 0
 
 
 # --- Module-level helpers -----------------------------------------------

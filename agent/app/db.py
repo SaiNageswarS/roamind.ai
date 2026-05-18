@@ -34,6 +34,11 @@ class MongoDB:
         self.user_profiles: Collection = self.db["user_profiles"]
         self.knowledge: Collection = self.db["knowledge"]
         self.events: Collection = self.db["events"]
+        # Habit tracking (gateway is the writer; agent reads only).
+        self.habits: Collection = self.db["habits"]
+        self.habit_entries: Collection = self.db["habit_entries"]
+        self.habit_weekly: Collection = self.db["habit_weekly"]
+        self.habit_monthly: Collection = self.db["habit_monthly"]
 
     # --- Public API -----------------------------------------------------
 
@@ -73,6 +78,29 @@ class MongoDB:
         )
         self.events.create_index(
             [("user_id", ASCENDING), ("kind", ASCENDING), ("occurred_at", DESCENDING)],
+        )
+
+        # Habit indexes mirror the gateway's `EnsureHabitIndexes`; safe to
+        # assert from both sides because they are pure CreateIndex calls.
+        self.habits.create_index(
+            [("user_id", ASCENDING), ("slug", ASCENDING)], unique=True
+        )
+        self.habit_entries.create_index(
+            [("user_id", ASCENDING), ("habit_id", ASCENDING), ("date", ASCENDING)],
+            unique=True,
+        )
+        self.habit_entries.create_index(
+            [("user_id", ASCENDING), ("date", ASCENDING)],
+        )
+        self.habit_weekly.create_index(
+            [("user_id", ASCENDING), ("habit_id", ASCENDING),
+             ("iso_year", ASCENDING), ("iso_week", ASCENDING)],
+            unique=True,
+        )
+        self.habit_monthly.create_index(
+            [("user_id", ASCENDING), ("habit_id", ASCENDING),
+             ("year", ASCENDING), ("month", ASCENDING)],
+            unique=True,
         )
 
     def close(self) -> None:

@@ -11,6 +11,7 @@ import (
 	"github.com/SaiNageswarS/go-api-boot/logger"
 	"github.com/SaiNageswarS/go-api-boot/odm"
 	"github.com/SaiNageswarS/go-api-boot/server"
+	"github.com/SaiNageswarS/roamind.ai/gateway/db"
 	"github.com/SaiNageswarS/roamind.ai/gateway/services"
 	pb "github.com/SaiNageswarS/roamind.ai/proto/generated"
 	"github.com/redis/go-redis/v9"
@@ -32,6 +33,16 @@ func main() {
 	// Mongo is optional: Telegram requires it; CLI does not.
 	mongoClient := odm.ProvideMongoClient()
 
+	if mongoClient != nil {
+		if err := db.EnsureHabitIndexes(ctx, mongoClient, defaultMongoDB); err != nil {
+			logger.Fatal("ensure habit indexes failed", zap.Error(err))
+		}
+	}
+
+	profileRepo := db.NewProfileRepo(mongoClient, defaultMongoDB)
+	habitService := services.NewHabitService(mongoClient, defaultMongoDB, profileRepo)
+	rollupEngine := services.NewRollupEngine(habitService)
+
 	dispatcher := services.NewEgressDispatcher(rdb)
 
 	boot, err := server.New().
@@ -39,6 +50,7 @@ func main() {
 		HTTPPort(":8081").
 		Provide(rdb).
 		Provide(dispatcher).
+		Provide(habitService).
 		RegisterService(
 			server.Adapt(pb.RegisterAssistantCLIServer),
 			services.NewCliService,
@@ -48,9 +60,11 @@ func main() {
 		logger.Fatal("Dependency Injection Failed", zap.Error(err))
 	}
 
-	if tg := services.NewTelegramService(rdb, mongoClient, defaultMongoDB, dispatcher); tg != nil {
+	if tg := services.NewTelegramService(rdb, mongoClient, defaultMongoDB, dispatcher, habitService); tg != nil {
 		tg.Start(ctx)
 	}
+
+	rollupEngine.Start(ctx)
 
 	dispatcher.Start(ctx)
 

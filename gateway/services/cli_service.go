@@ -33,15 +33,17 @@ type CliService struct {
 	pb.UnimplementedAssistantCLIServer
 
 	rdb     *redis.Client
+	habit   *HabitService
 	pending sync.Map // map[string]*pendingReply
 	timeout time.Duration
 }
 
 // NewCliService is the DI factory consumed by go-api-boot's RegisterService.
 // It registers itself as the "cli" egress handler on the shared dispatcher.
-func NewCliService(rdb *redis.Client, dispatcher *EgressDispatcher) *CliService {
+func NewCliService(rdb *redis.Client, dispatcher *EgressDispatcher, habit *HabitService) *CliService {
 	svc := &CliService{
 		rdb:     rdb,
+		habit:   habit,
 		timeout: defaultQueryTimeout,
 	}
 	dispatcher.Register("cli", svc.handleEgress)
@@ -56,6 +58,23 @@ func (s *CliService) Query(req *pb.QueryRequest, stream pb.AssistantCLI_QuerySer
 
 	ctx := stream.Context()
 	userID, _ := auth.GetUserIdAndTenant(ctx)
+
+	// Short-circuit gateway-owned /habit_* commands before paying for LLM.
+	if reply, handled, herr := s.habit.ParseAndExecute(ctx, userID, req.GetText()); handled {
+		if herr != nil {
+			logger.Error("habit command failed", zap.Error(herr), zap.String("user_id", userID))
+		}
+		resp := &pb.QueryResponse{
+			Id:        req.GetId(),
+			Reply:     reply,
+			Intent:    "reply",
+			CreatedAt: timestamppb.Now(),
+		}
+		if err := stream.Send(resp); err != nil {
+			return status.Errorf(codes.Internal, "send: %v", err)
+		}
+		return nil
+	}
 
 	internalID := uuid.NewString()
 	traceID := req.GetId()

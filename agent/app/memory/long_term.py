@@ -18,18 +18,26 @@ from typing import Any, Optional
 import structlog
 
 from ..db import MongoDB
-from .models import Event, KnowledgeDoc, UserProfile
+from .models import (
+    Event,
+    Habit,
+    HabitMonthly,
+    HabitWeekly,
+    KnowledgeDoc,
+    UserProfile,
+)
 
 log = structlog.get_logger("roamind.agent.memory.long_term")
 
 
 class LongTermMemory:
-    """Composite of `.profile`, `.knowledge`, `.events`."""
+    """Composite of `.profile`, `.knowledge`, `.events`, `.habits`."""
 
     def __init__(self, mongo: Optional[MongoDB]):
         self.profile = _ProfileStore(mongo)
         self.knowledge = _KnowledgeStore(mongo)
         self.events = _EventStore(mongo)
+        self.habits = _HabitStore(mongo)
 
 
 class _ProfileStore:
@@ -272,6 +280,99 @@ class _EventStore:
         return {row["_id"]: int(row["n"]) for row in self._mongo.events.aggregate(pipeline)}
 
 
+class _HabitStore:
+    """Read-only view of habit tracking. The gateway is the sole writer.
+
+    Aggregation strategy:
+      - For closed weeks/months, prefer rollups (`habit_weekly`,
+        `habit_monthly`).
+      - For the current (open) week/month, fall back to live entry
+        aggregation so today's edits are visible immediately.
+    """
+
+    def __init__(self, mongo: Optional[MongoDB]):
+        self._mongo = mongo
+
+    # --- Public API -----------------------------------------------------
+
+    def list_habits(self, user_id: str) -> list[Habit]:
+        if self._mongo is None or not user_id:
+            return []
+        cursor = self._mongo.habits.find(
+            {"user_id": user_id, "archived_at": {"$exists": False}}
+        ).sort("name", 1)
+        return [_to_habit(raw) for raw in cursor]
+
+    def current_day_totals(self, user_id: str, date_str: str) -> dict[str, dict[str, int]]:
+        """Returns {habit_slug: {"positive": n, "negative": n}} for `date_str`."""
+        return self._sum_entries(user_id, date_str, date_str)
+
+    def current_week_totals(
+        self, user_id: str, *, from_date: str, to_date: str
+    ) -> dict[str, dict[str, int]]:
+        return self._sum_entries(user_id, from_date, to_date)
+
+    def closed_week_totals(
+        self, user_id: str, *, iso_year: int, iso_week: int
+    ) -> list[HabitWeekly]:
+        if self._mongo is None or not user_id:
+            return []
+        cursor = self._mongo.habit_weekly.find({
+            "user_id": user_id,
+            "iso_year": iso_year,
+            "iso_week": iso_week,
+        })
+        return [_to_weekly(raw) for raw in cursor]
+
+    def closed_month_totals(
+        self, user_id: str, *, year: int, month: int
+    ) -> list[HabitMonthly]:
+        if self._mongo is None or not user_id:
+            return []
+        cursor = self._mongo.habit_monthly.find({
+            "user_id": user_id,
+            "year": year,
+            "month": month,
+        })
+        return [_to_monthly(raw) for raw in cursor]
+
+    # --- Internals ------------------------------------------------------
+
+    def _sum_entries(
+        self, user_id: str, from_date: str, to_date: str
+    ) -> dict[str, dict[str, int]]:
+        if self._mongo is None or not user_id:
+            return {}
+        habits = self.list_habits(user_id)
+        id_to_slug = {h.id: h.slug for h in habits}
+        if not id_to_slug:
+            return {}
+        pipeline = [
+            {"$match": {
+                "user_id": user_id,
+                "date": {"$gte": from_date, "$lte": to_date},
+            }},
+            {"$group": {
+                "_id": "$habit_id",
+                "positive": {"$sum": "$positive"},
+                "negative": {"$sum": "$negative"},
+            }},
+        ]
+        out: dict[str, dict[str, int]] = {}
+        for row in self._mongo.habit_entries.aggregate(pipeline):
+            slug = id_to_slug.get(row["_id"])
+            if slug is None:
+                continue
+            out[slug] = {
+                "positive": int(row.get("positive", 0)),
+                "negative": int(row.get("negative", 0)),
+            }
+        # Ensure every habit appears even with zero counts.
+        for h in habits:
+            out.setdefault(h.slug, {"positive": 0, "negative": 0})
+        return out
+
+
 # --- Module-level helpers -----------------------------------------------
 
 
@@ -284,3 +385,18 @@ def _to_doc(raw: dict) -> KnowledgeDoc:
 def _to_event(raw: dict) -> Event:
     raw.pop("_id", None)
     return Event.model_validate(raw)
+
+
+def _to_habit(raw: dict) -> Habit:
+    raw.pop("_id", None)
+    return Habit.model_validate(raw)
+
+
+def _to_weekly(raw: dict) -> HabitWeekly:
+    raw.pop("_id", None)
+    return HabitWeekly.model_validate(raw)
+
+
+def _to_monthly(raw: dict) -> HabitMonthly:
+    raw.pop("_id", None)
+    return HabitMonthly.model_validate(raw)
