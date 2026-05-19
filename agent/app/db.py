@@ -21,8 +21,15 @@ import structlog
 from pymongo import ASCENDING, DESCENDING, MongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
+from pymongo.errors import OperationFailure
 
 log = structlog.get_logger("roamind.agent.db")
+
+# Mongo server error code for `IndexOptionsConflict`: an index with the
+# same key spec already exists under a different name (or with different
+# options). Safe to ignore — the existing index already covers the query.
+_INDEX_OPTIONS_CONFLICT = 85
+_INDEX_KEY_SPECS_CONFLICT = 86  # same name, different keys — also tolerate.
 
 
 class MongoDB:
@@ -58,50 +65,93 @@ class MongoDB:
         return inst
 
     def ensure_indexes(self) -> None:
-        """Idempotent index assertions."""
-        self.user_profiles.create_index([("user_id", ASCENDING)], unique=True)
+        """Idempotent index assertions.
 
-        self.knowledge.create_index(
+        Tolerates `IndexOptionsConflict` (code 85): when another writer
+        (e.g. the Go gateway) has already created an equivalent index
+        under a different name, we keep that index as-is rather than
+        failing startup.
+        """
+        self._create_index(
+            self.user_profiles, [("user_id", ASCENDING)], unique=True
+        )
+
+        self._create_index(
+            self.knowledge,
             [("user_id", ASCENDING), ("id", ASCENDING)],
             unique=True,
         )
-        self.knowledge.create_index([("user_id", ASCENDING), ("category", ASCENDING)])
+        self._create_index(
+            self.knowledge, [("user_id", ASCENDING), ("category", ASCENDING)]
+        )
         # Full-text search index used by `LongTermMemory.knowledge.search()`.
         # Mongo allows only one $text index per collection.
-        self.knowledge.create_index(
+        self._create_index(
+            self.knowledge,
             [("title", "text"), ("content", "text")],
             name="knowledge_text",
         )
 
-        self.events.create_index(
+        self._create_index(
+            self.events,
             [("user_id", ASCENDING), ("occurred_at", DESCENDING)],
         )
-        self.events.create_index(
+        self._create_index(
+            self.events,
             [("user_id", ASCENDING), ("kind", ASCENDING), ("occurred_at", DESCENDING)],
         )
 
-        # Habit indexes mirror the gateway's `EnsureHabitIndexes`; safe to
-        # assert from both sides because they are pure CreateIndex calls.
-        self.habits.create_index(
-            [("user_id", ASCENDING), ("slug", ASCENDING)], unique=True
+        # Habit indexes mirror the gateway's `EnsureHabitIndexes`. We use
+        # the exact same names so repeated startups don't conflict.
+        self._create_index(
+            self.habits,
+            [("user_id", ASCENDING), ("slug", ASCENDING)],
+            unique=True,
+            name="uniq_user_slug",
         )
-        self.habit_entries.create_index(
+        self._create_index(
+            self.habit_entries,
             [("user_id", ASCENDING), ("habit_id", ASCENDING), ("date", ASCENDING)],
             unique=True,
+            name="uniq_user_habit_date",
         )
-        self.habit_entries.create_index(
+        self._create_index(
+            self.habit_entries,
             [("user_id", ASCENDING), ("date", ASCENDING)],
+            name="user_date",
         )
-        self.habit_weekly.create_index(
+        self._create_index(
+            self.habit_weekly,
             [("user_id", ASCENDING), ("habit_id", ASCENDING),
              ("iso_year", ASCENDING), ("iso_week", ASCENDING)],
             unique=True,
+            name="uniq_user_habit_week",
         )
-        self.habit_monthly.create_index(
+        self._create_index(
+            self.habit_monthly,
             [("user_id", ASCENDING), ("habit_id", ASCENDING),
              ("year", ASCENDING), ("month", ASCENDING)],
             unique=True,
+            name="uniq_user_habit_month",
         )
 
     def close(self) -> None:
         self.client.close()
+
+    # --- Private helpers -----------------------------------------------
+
+    @staticmethod
+    def _create_index(collection: Collection, keys, **kwargs) -> None:
+        try:
+            collection.create_index(keys, **kwargs)
+        except OperationFailure as exc:
+            if exc.code in (_INDEX_OPTIONS_CONFLICT, _INDEX_KEY_SPECS_CONFLICT):
+                log.warning(
+                    "index already exists with conflicting options; keeping existing",
+                    collection=collection.name,
+                    keys=keys,
+                    code=exc.code,
+                    err=str(exc),
+                )
+                return
+            raise

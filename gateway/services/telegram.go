@@ -32,6 +32,13 @@ const (
 	telegramAPIBase     = "https://api.telegram.org"
 	telegramPollSeconds = 30
 	telegramChannelName = "telegram"
+	// Telegram returns 409 Conflict when more than one process polls
+	// `getUpdates` for the same bot. During Azure Container Apps
+	// revision rollover both the old and new revision overlap briefly;
+	// back off long enough for the previous poller to exit before we
+	// take over.
+	telegramConflictBackoff = 20 * time.Second
+	telegramErrorBackoff    = 5 * time.Second
 )
 
 // TelegramService bridges Telegram (via long-poll Bot API) and the Redis
@@ -111,9 +118,15 @@ type tgChat struct {
 
 type tgGetUpdatesResp struct {
 	OK          bool       `json:"ok"`
+	ErrorCode   int        `json:"error_code,omitempty"`
 	Result      []tgUpdate `json:"result"`
 	Description string     `json:"description,omitempty"`
 }
+
+// errTelegramConflict signals that another worker is currently
+// long-polling the same bot token. Treated as a transient,
+// expected-during-rollover condition rather than a hard error.
+var errTelegramConflict = errors.New("telegram getUpdates conflict: another poller is active")
 
 func (s *TelegramService) runLongPoll(ctx context.Context) {
 	for {
@@ -122,11 +135,18 @@ func (s *TelegramService) runLongPoll(ctx context.Context) {
 		}
 		updates, err := s.getUpdates(ctx)
 		if err != nil {
-			logger.Error("telegram getUpdates failed", zap.Error(err))
+			backoff := telegramErrorBackoff
+			if errors.Is(err, errTelegramConflict) {
+				logger.Info("telegram getUpdates conflict; another poller active, backing off",
+					zap.Duration("backoff", telegramConflictBackoff))
+				backoff = telegramConflictBackoff
+			} else {
+				logger.Error("telegram getUpdates failed", zap.Error(err))
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(5 * time.Second):
+			case <-time.After(backoff):
 			}
 			continue
 		}
@@ -163,6 +183,9 @@ func (s *TelegramService) getUpdates(ctx context.Context) ([]tgUpdate, error) {
 		return nil, fmt.Errorf("decode getUpdates: %w (body=%s)", err, string(body))
 	}
 	if !parsed.OK {
+		if parsed.ErrorCode == http.StatusConflict || resp.StatusCode == http.StatusConflict {
+			return nil, errTelegramConflict
+		}
 		return nil, fmt.Errorf("getUpdates not ok: %s", parsed.Description)
 	}
 	return parsed.Result, nil

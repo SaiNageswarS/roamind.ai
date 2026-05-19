@@ -1,63 +1,48 @@
-"""External search tools available to the agent.
-
-LangChain `@tool` callables exposed to the agent:
+"""External search @tool callables.
 
   - `web_search`      — general web search via Exa.
   - `github_search`   — GitHub repos + README/doc excerpts via Exa.
   - `news_search`     — recent news articles via Exa.
   - `research_search` — academic / research papers via Exa.
   - `finance_search`  — live equity / FX / crypto quotes via Yahoo Finance.
-  - `maps_search`     — places / business search via Google Places API (New).
-
-All tools are pure HTTP calls with short timeouts and bounded output so
-they slot directly into a LangGraph `ToolNode`. Network failures and
-non-2xx responses are converted to short, LLM-readable strings rather
-than raised — `compact_err` already handles unexpected exceptions, but
-predictable upstream failures should not abort the turn.
+  - `maps_search`     — places / business search via Google Places API.
 
 Configuration:
   - `EXA_API_KEY` env var — required for web / github / news / research.
   - `GOOGLE_MAPS_API_KEY` env var — required for `maps_search`.
+
+The module is runnable standalone for ad-hoc smoke testing — `.env`
+is loaded automatically (searched upwards from the current directory):
+
+    # from agent/
+    python -m app.tools.search web "langgraph tutorial"
+    python -m app.tools.search github "gin web framework"
+    python -m app.tools.search news "openai" --days 7
+    python -m app.tools.search research "transformer attention"
+    python -m app.tools.search finance AAPL,MSFT,BTC-USD
+    python -m app.tools.search maps "coffee near Times Square" --limit 3
 """
 
 from __future__ import annotations
 
-import json
+import argparse
 import os
-from contextvars import ContextVar
+import sys
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any
 
-import httpx
 import structlog
+from dotenv import load_dotenv
 from langchain_core.tools import tool
 
-if TYPE_CHECKING:  # pragma: no cover
-    from .memory.long_term import LongTermMemory
+from ._http import http_get_json, http_post_json
 
-log = structlog.get_logger("roamind.agent.tools")
+# Load .env eagerly so the module-level API-key constants below see
+# values whether this file is imported by the agent or run as a script.
+load_dotenv()
 
-# --- Per-turn context for stateful tools --------------------------------
+log = structlog.get_logger("roamind.agent.tools.search")
 
-_current_user_id: ContextVar[str] = ContextVar("roamind_current_user_id", default="")
-_long_term_ref: Optional["LongTermMemory"] = None
-
-
-def bind_long_term_memory(long_term: "LongTermMemory") -> None:
-    """Wire the LongTermMemory instance that habit tools read from.
-
-    Called once during graph construction.
-    """
-    global _long_term_ref
-    _long_term_ref = long_term
-
-
-def set_current_user(user_id: str) -> None:
-    """Set the user_id for the current turn. Call from `intake`."""
-    _current_user_id.set(user_id or "")
-
-_HTTP_TIMEOUT = 10.0
-_USER_AGENT = "roamind-agent/0.1 (+https://github.com/roamind)"
 _MAX_RESULTS = 5
 
 _EXA_API_KEY = os.getenv("EXA_API_KEY", "").strip() or None
@@ -175,7 +160,7 @@ def finance_search(symbols: str) -> str:
 
     **Use for:** current prices, market changes, 24h performance.
     **Accepts:** stock tickers (AAPL), indices (^GSPC), FX (EURUSD=X), crypto (BTC-USD).
-    
+
     Returns price, change %, and currency via Yahoo Finance.
 
     Args:
@@ -191,7 +176,7 @@ def finance_search(symbols: str) -> str:
         return "finance_search: no symbols provided"
 
     params = {"symbols": ",".join(tickers)}
-    data = _http_get_json(
+    data = http_get_json(
         "https://query1.finance.yahoo.com/v7/finance/quote",
         params=params,
         headers={"Accept": "application/json"},
@@ -228,124 +213,13 @@ def finance_search(symbols: str) -> str:
     return "\n".join(lines)
 
 
-# --- Habit tools (read-only; the gateway owns writes) -------------------
-
-
-@tool
-def get_habit_summary(period: str = "today", habit_name: str = "") -> str:
-    """Rendered view of the user's tracked habits with counters for a period.
-
-    This is the canonical, single-call view of habit metadata
-    (slug, name, polarity, description) **plus** the user's actual
-    behaviour (positive / negative counts) for `period`. It should
-    ground most personalized advice.
-
-    **Call this proactively — do not wait for the user to ask.**
-
-    **Use for:**
-      - **Health / wellness advice:** before suggesting diet, exercise,
-        sleep, or lifestyle changes, check what the user is already
-        doing (or skipping). If the user shares a health report, lab
-        result, or symptom, pair it with their habit performance —
-        e.g. low workouts + high cholesterol → reinforce exercise;
-        high junk-food count + GI issue → flag the correlation.
-      - **Day / week planning:** at the start of a planning request
-        ("plan my day", "what should I focus on?"), look up today /
-        this-week counters first so the plan reinforces lagging
-        positive habits and counters frequent negative ones.
-      - **Reflective queries:** "how often did I X this week?", streak
-        check-ins, weekly review prompts.
-      - **Progress reports:** when the user asks how they're doing.
-      - **Disambiguation:** resolving a habit the user mentions by an
-        approximate name to its canonical slug.
-
-    The polarity tag tells you the user's intent for that habit:
-    `positive` means more is better, `negative` means fewer is better,
-    `both` is neutral.
-
-    Habits cannot be created or mutated from this tool — that happens
-    via gateway slash commands (`/habit_add`, `/habit_inc`,
-    `/habit_dec`, `/habit_desc`).
-
-    Args:
-        period: "today" | "week" | "month". Defaults to "today".
-        habit_name: Optional habit slug or substring to filter to one
-            habit. Empty returns all tracked habits.
-    """
-    user_id = _current_user_id.get()
-    if not user_id or _long_term_ref is None:
-        return "get_habit_summary: unavailable"
-
-    habits = _long_term_ref.habits.list_habits(user_id)
-    if not habits:
-        return (
-            "No habits tracked yet. The user can run `/habit_add <name> "
-            "[positive|negative|both] [-- description]` to start tracking."
-        )
-
-    period = (period or "today").strip().lower()
-    tz_name = "Asia/Kolkata"
-    profile = _long_term_ref.profile.get(user_id)
-    if profile and getattr(profile, "timezone", None):
-        tz_name = profile.timezone or tz_name
-
-    try:
-        import zoneinfo
-        tz = zoneinfo.ZoneInfo(tz_name)
-    except Exception:
-        tz = timezone.utc
-
-    now_local = datetime.now(tz)
-
-    if period == "today":
-        date_str = now_local.strftime("%Y-%m-%d")
-        totals = _long_term_ref.habits.current_day_totals(user_id, date_str)
-        label = f"today ({date_str}, {tz_name})"
-    elif period == "week":
-        wd = now_local.isoweekday()  # Mon=1..Sun=7
-        start = (now_local - timedelta(days=wd - 1)).strftime("%Y-%m-%d")
-        end = now_local.strftime("%Y-%m-%d")
-        totals = _long_term_ref.habits.current_week_totals(
-            user_id, from_date=start, to_date=end
-        )
-        label = f"this week ({start}..{end}, {tz_name})"
-    elif period == "month":
-        start = now_local.replace(day=1).strftime("%Y-%m-%d")
-        end = now_local.strftime("%Y-%m-%d")
-        totals = _long_term_ref.habits.current_week_totals(
-            user_id, from_date=start, to_date=end
-        )
-        label = f"this month ({start}..{end}, {tz_name})"
-    else:
-        return (
-            f"get_habit_summary: unsupported period {period!r} "
-            "(use today|week|month)"
-        )
-
-    needle = (habit_name or "").strip().lower()
-    if needle:
-        habits = [h for h in habits if needle in h.slug.lower() or needle in h.name.lower()]
-        if not habits:
-            return f"{label}: no habit matching {habit_name!r}"
-
-    lines = [f"Habit summary for {label}:"]
-    for h in sorted(habits, key=lambda x: x.slug):
-        v = totals.get(h.slug, {"positive": 0, "negative": 0})
-        head = f"- {h.slug} ({h.name}) polarity={h.polarity} | +{v['positive']} / -{v['negative']}"
-        if h.description:
-            head += f"\n    {h.description}"
-        lines.append(head)
-    return "\n".join(lines)
-
-
-ALL_TOOLS = [
+SEARCH_TOOLS = [
     web_search,
     github_search,
     news_search,
     research_search,
     finance_search,
     maps_search,
-    get_habit_summary,
 ]
 
 
@@ -359,12 +233,7 @@ def _exa_search(
     num_results: int = _MAX_RESULTS,
     start_published_date: str | None = None,
 ) -> str:
-    """Call Exa /search with highlights enabled and a small text fallback.
-
-    Highlights are query-relevant excerpts and ship in the base search
-    response (no extra cost vs. summary). Text is capped to 1500 chars
-    and used only when highlights are empty.
-    """
+    """Call Exa /search with highlights enabled and a small text fallback."""
     query = (query or "").strip()
     if not query:
         return "search: empty query"
@@ -390,7 +259,7 @@ def _exa_search(
         body["startPublishedDate"] = start_published_date
 
     headers = {"x-api-key": _EXA_API_KEY}
-    data = _http_post_json(_EXA_SEARCH_URL, json_body=body, headers=headers)
+    data = http_post_json(_EXA_SEARCH_URL, json_body=body, headers=headers)
     if isinstance(data, str):
         log.warning("exa error", err=data, category=category)
         return f"search: {data}"
@@ -427,18 +296,14 @@ def _exa_search(
 
 
 def _google_places_text_search(query: str, limit: int) -> str | None:
-    """Call Google Places (New) Text Search.
-
-    Returns a formatted result string on success, `None` on transport-level
-    failure (so the caller can produce a clean error message).
-    """
+    """Call Google Places (New) Text Search."""
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": _GOOGLE_MAPS_API_KEY or "",
         "X-Goog-FieldMask": _GOOGLE_PLACES_FIELD_MASK,
     }
     body = {"textQuery": query, "maxResultCount": limit}
-    data = _http_post_json(_GOOGLE_PLACES_TEXT_SEARCH_URL, json_body=body, headers=headers)
+    data = http_post_json(_GOOGLE_PLACES_TEXT_SEARCH_URL, json_body=body, headers=headers)
     if isinstance(data, str):
         log.warning("google places error", err=data)
         return None
@@ -487,54 +352,6 @@ def _google_places_text_search(query: str, limit: int) -> str | None:
     return _format_results(results)
 
 
-def _http_get_json(
-    url: str,
-    *,
-    params: dict[str, str] | None = None,
-    headers: dict[str, str] | None = None,
-) -> Any:
-    """GET `url` and parse JSON. Return parsed value, or an error string."""
-    hdrs = {"User-Agent": _USER_AGENT}
-    if headers:
-        hdrs.update(headers)
-    try:
-        with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
-            resp = client.get(url, params=params, headers=hdrs)
-    except httpx.HTTPError as e:
-        log.warning("tool http error", url=url, err=str(e))
-        return f"network error: {e}"
-    if resp.status_code >= 400:
-        return f"upstream {resp.status_code}: {resp.text[:160]}"
-    try:
-        return resp.json()
-    except json.JSONDecodeError as e:
-        return f"bad json: {e}"
-
-
-def _http_post_json(
-    url: str,
-    *,
-    json_body: dict[str, Any],
-    headers: dict[str, str] | None = None,
-) -> Any:
-    """POST JSON to `url` and parse the JSON response, or return an error string."""
-    hdrs = {"User-Agent": _USER_AGENT, "Content-Type": "application/json"}
-    if headers:
-        hdrs.update(headers)
-    try:
-        with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
-            resp = client.post(url, json=json_body, headers=hdrs)
-    except httpx.HTTPError as e:
-        log.warning("tool http error", url=url, err=str(e))
-        return f"network error: {e}"
-    if resp.status_code >= 400:
-        return f"upstream {resp.status_code}: {resp.text[:160]}"
-    try:
-        return resp.json()
-    except json.JSONDecodeError as e:
-        return f"bad json: {e}"
-
-
 def _format_results(results: list[dict[str, str]]) -> str:
     out = []
     for i, r in enumerate(results, 1):
@@ -548,3 +365,70 @@ def _format_results(results: list[dict[str, str]]) -> str:
             line += f"\n   {url}"
         out.append(line)
     return "\n".join(out)
+
+
+# --- Script entrypoint --------------------------------------------------
+
+
+_TOOL_BY_NAME = {
+    "web": web_search,
+    "github": github_search,
+    "news": news_search,
+    "research": research_search,
+    "finance": finance_search,
+    "maps": maps_search,
+}
+
+
+def _main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python -m app.tools.search",
+        description="Invoke one of the search @tool callables for local testing.",
+    )
+    parser.add_argument(
+        "tool",
+        choices=sorted(_TOOL_BY_NAME),
+        help="Which search tool to invoke.",
+    )
+    parser.add_argument(
+        "query",
+        help=(
+            "Free-text query (or comma-separated tickers for `finance`)."
+        ),
+    )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        help="Lookback window for `news` (default 30).",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=3,
+        help="Max places to return for `maps` (default 3).",
+    )
+    args = parser.parse_args(argv)
+
+    fn = _TOOL_BY_NAME[args.tool]
+    if args.tool == "news":
+        payload = {"query": args.query, "days": args.days}
+    elif args.tool == "maps":
+        payload = {"query": args.query, "limit": args.limit}
+    elif args.tool == "finance":
+        payload = {"symbols": args.query}
+    else:
+        payload = {"query": args.query}
+
+    # `@tool` decorators expose `.invoke(dict)` to call the underlying function.
+    result = fn.invoke(payload)
+    print(result)
+
+    err_prefixes = ("search:", "maps_search:", "finance_search:")
+    if isinstance(result, str) and result.startswith(err_prefixes):
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

@@ -37,17 +37,16 @@ Redis at `redis://localhost:6379`.
 Run from the **repository root** (the gateway build needs `proto/`):
 
 ```bash
-export DH_USER=<your-dockerhub-username>
 export TAG=v1
 
 # Gateway (build context = repo root)
-docker build -f gateway/Dockerfile -t $DH_USER/roamind-gateway:$TAG .
+docker build -f gateway/Dockerfile -t sainageswar/roamind-gateway:$TAG .
 
 # Agent (build context = ./agent)
-docker build -f agent/Dockerfile -t $DH_USER/roamind-agent:$TAG ./agent
+docker build -f agent/Dockerfile -t sainageswar/roamind-agent:$TAG ./agent
 
-docker push $DH_USER/roamind-gateway:$TAG
-docker push $DH_USER/roamind-agent:$TAG
+docker push sainageswar/roamind-gateway:$TAG
+docker push sainageswar/roamind-agent:$TAG
 ```
 
 ### Optional local smoke test
@@ -59,12 +58,12 @@ docker run --rm --network rm-net \
   -e REDIS_URL=redis://redis:6379 \
   -e ACCESS-SECRET=test \
   -p 50051:50051 \
-  $DH_USER/roamind-gateway:$TAG
+  sainageswar/roamind-gateway:$TAG
 # In another shell:
 docker run --rm --network rm-net \
   -e REDIS_URL=redis://redis:6379 \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  $DH_USER/roamind-agent:$TAG
+  sainageswar/roamind-agent:$TAG
 ```
 
 ---
@@ -97,7 +96,7 @@ az containerapp create \
   --name $APP \
   --resource-group $RG \
   --environment $ENV \
-  --image docker.io/$DH_USER/roamind-gateway:$TAG \
+  --image docker.io/sainageswar/roamind-gateway:$TAG \
   --target-port 50051 \
   --transport http2 \
   --ingress external \
