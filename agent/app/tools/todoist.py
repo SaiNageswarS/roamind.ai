@@ -346,9 +346,7 @@ def _format_task(t: dict[str, Any], depth: int) -> list[str]:
     done_prefix = ""
     done_suffix = ""
     if t.get("_completed"):
-        completed_at = (t.get("completed_at") or "")[:10]
         done_prefix = "✓ "
-        done_suffix = f" (completed {completed_at})".rstrip()
 
     desc = ""
     if description:
