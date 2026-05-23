@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
+import structlog
+
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -37,6 +39,9 @@ from .envelope import TaskIn, TaskOut
 from .llm import LLMClient
 from .memory import ChatMessage, LongTermMemory, ShortTermMemory
 from .tools import ALL_TOOLS, bind_long_term_memory, set_current_user
+
+
+log = structlog.get_logger("roamind.agent.graph")
 
 
 SYSTEM_PROMPT = (
@@ -167,6 +172,13 @@ class RoamindGraph:
                 result = tool_fn.invoke(args)
             except Exception as e:  # noqa: BLE001 — surfaced via compact_err
                 state.last_error = f"{name}: {e}"
+                log.exception(
+                    "tool invocation failed",
+                    tool=name,
+                    tool_call_id=call_id,
+                    args=args,
+                    err=str(e),
+                )
                 state.messages.append(
                     ToolMessage(content=f"error: {e}", tool_call_id=call_id, name=name)
                 )

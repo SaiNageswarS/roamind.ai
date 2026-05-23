@@ -388,7 +388,10 @@ def _to_event(raw: dict) -> Event:
 
 
 def _to_habit(raw: dict) -> Habit:
-    raw.pop("_id", None)
+    # Gateway stores Habit.ID as Mongo `_id` (bson:"_id") and emits no
+    # separate `id` field; map it back so Pydantic validation passes.
+    mongo_id = raw.pop("_id", None)
+    raw.setdefault("id", mongo_id if mongo_id is not None else "")
     return Habit.model_validate(raw)
 
 
