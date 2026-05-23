@@ -3,6 +3,10 @@
 Consumes `tasks.in` via XREADGROUP, runs each envelope through the
 LangGraph, and emits the resulting `TaskOut` to `tasks.out`. Failed
 messages are retried up to `MAX_DELIVERIES` then routed to `tasks.dlq`.
+This worker is designed to process one message at a time per process instance.
+For concurrency, run multiple instances behind a process manager. 
+
+In a single run for a message from redis, the entire flow shares the same graph and user context.
 """
 
 from __future__ import annotations

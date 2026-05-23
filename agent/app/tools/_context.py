@@ -9,13 +9,17 @@ composite once at graph construction.
 
 from __future__ import annotations
 
-from contextvars import ContextVar
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
     from ..memory.long_term import LongTermMemory
 
-_current_user_id: ContextVar[str] = ContextVar("roamind_current_user_id", default="")
+# Plain module-level globals: the agent loop processes one task at a
+# time, so per-turn state is safe to stash here. A ContextVar would be
+# wrong — LangGraph runs each node in its own asyncio Task with a
+# copied context, so a value set inside `intake` would not be visible
+# to the `act` node where tools execute.
+_current_user_id: str = ""
 _long_term_ref: Optional["LongTermMemory"] = None
 
 
@@ -27,11 +31,12 @@ def bind_long_term_memory(long_term: "LongTermMemory") -> None:
 
 def set_current_user(user_id: str) -> None:
     """Set the user_id for the current turn. Call from `intake`."""
-    _current_user_id.set(user_id or "")
+    global _current_user_id
+    _current_user_id = user_id or ""
 
 
 def get_current_user() -> str:
-    return _current_user_id.get()
+    return _current_user_id
 
 
 def get_long_term() -> Optional["LongTermMemory"]:
