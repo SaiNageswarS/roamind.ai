@@ -87,6 +87,10 @@ class UserProfile(BaseModel):
     work_experience: list[WorkExperience] = Field(default_factory=list)
     education: list[Education] = Field(default_factory=list)
 
+    # Mode: affects prioritization and scheduling behavior.
+    # Valid modes: "maintenance" (default), "focus", "vacation", "recovery", "deep_work"
+    mode: str = "maintenance"
+
     # Free-form extension bag for anything that doesn't fit above.
     extras: dict[str, Any] = Field(default_factory=dict)
 
@@ -151,6 +155,17 @@ class UserProfile(BaseModel):
         if not lines:
             return ""
         return "Known about the user:\n" + "\n".join(lines)
+
+    def mode_instructions(self) -> str:
+        """Return mode-specific instructions for prioritizing habits and suggestions."""
+        instructions = {
+            "maintenance": "Normal mode: balance all habits and suggestions equally.",
+            "focus": "Focus mode: prioritize work and productivity habits. Minimize distractions. Suggest efficient scheduling.",
+            "vacation": "Vacation mode: prioritize relaxation and mental recovery. Focus on enjoyable, low-stress habits. Encourage rest.",
+            "recovery": "Recovery mode: prioritize health and healing. Suggest gentle, restorative habits. Avoid strenuous activities.",
+            "deep_work": "Deep work mode: minimize interruptions and consolidated feedback. Batch all updates into one daily summary.",
+        }
+        return instructions.get(self.mode, instructions["maintenance"])
 
 
 class KnowledgeDoc(BaseModel):
