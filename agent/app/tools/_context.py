@@ -41,3 +41,13 @@ def get_current_user() -> str:
 
 def get_long_term() -> Optional["LongTermMemory"]:
     return _long_term_ref
+
+
+def get_long_term_memory() -> "LongTermMemory":
+    """Get the LongTermMemory instance with the current user context set."""
+    ltm = get_long_term()
+    if ltm is None:
+        raise RuntimeError("LongTermMemory not initialized")
+    # Attach user_id as an attribute for convenience
+    ltm.user_id = get_current_user()
+    return ltm

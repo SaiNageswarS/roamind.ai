@@ -257,6 +257,26 @@ func (s *HabitService) UserTimezone(ctx context.Context, userID string) string {
 	return s.profile.GetTimezone(ctx, userID)
 }
 
+// UserLocation returns the user's loadable timezone location.
+func (s *HabitService) UserLocation(ctx context.Context, userID string) (*time.Location, error) {
+	return s.loadLocation(ctx, userID)
+}
+
+// EntriesColl returns the habit entries collection.
+func (s *HabitService) EntriesColl() *mongo.Collection {
+	return s.entriesColl()
+}
+
+// Mongo returns the configured Mongo client.
+func (s *HabitService) Mongo() odm.MongoClient {
+	return s.mongo
+}
+
+// DBName returns the configured database name.
+func (s *HabitService) DBName() string {
+	return s.dbName
+}
+
 // --- Command handlers ---------------------------------------------------
 
 func (s *HabitService) cmdAdd(ctx context.Context, userID, rest string) (string, bool, error) {

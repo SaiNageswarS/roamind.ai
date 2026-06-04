@@ -12,6 +12,7 @@ import (
 	"github.com/SaiNageswarS/go-api-boot/odm"
 	"github.com/SaiNageswarS/go-api-boot/server"
 	"github.com/SaiNageswarS/roamind.ai/gateway/db"
+	"github.com/SaiNageswarS/roamind.ai/gateway/jobs"
 	"github.com/SaiNageswarS/roamind.ai/gateway/services"
 	pb "github.com/SaiNageswarS/roamind.ai/proto/generated"
 	"github.com/redis/go-redis/v9"
@@ -41,7 +42,9 @@ func main() {
 
 	profileRepo := db.NewProfileRepo(mongoClient, defaultMongoDB)
 	habitService := services.NewHabitService(mongoClient, defaultMongoDB, profileRepo)
-	rollupEngine := services.NewRollupEngine(habitService)
+	rollupEngine := jobs.NewRollupEngine(habitService)
+	logins := odm.CollectionOf[db.LoginModel](mongoClient, defaultMongoDB)
+	morningJob := jobs.NewMorningJob(rdb, logins, habitService, profileRepo)
 
 	dispatcher := services.NewEgressDispatcher(rdb)
 
@@ -64,6 +67,9 @@ func main() {
 		tg.Start(ctx)
 	}
 
+	if morningJob != nil {
+		morningJob.Start(ctx)
+	}
 	rollupEngine.Start(ctx)
 
 	dispatcher.Start(ctx)

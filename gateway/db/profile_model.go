@@ -50,3 +50,26 @@ func (r *ProfileRepo) GetTimezone(ctx context.Context, userID string) string {
 	}
 	return doc.Timezone
 }
+
+// GetMode returns the user's mode ("maintenance", "focus", "vacation", etc)
+// or "maintenance" as default.
+func (r *ProfileRepo) GetMode(ctx context.Context, userID string) string {
+	if r == nil || userID == "" {
+		return "maintenance"
+	}
+	coll := r.mongo.Database(r.dbName).Collection("user_profiles")
+	var doc struct {
+		Mode string `bson:"mode"`
+	}
+	err := coll.FindOne(ctx, bson.M{"user_id": userID}).Decode(&doc)
+	if err != nil {
+		if !errors.Is(err, mongo.ErrNoDocuments) {
+			// Best-effort; fall through to default.
+		}
+		return "maintenance"
+	}
+	if doc.Mode == "" {
+		return "maintenance"
+	}
+	return doc.Mode
+}

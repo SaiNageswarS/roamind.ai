@@ -1,4 +1,4 @@
-package services
+package jobs
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 
 	"github.com/SaiNageswarS/go-api-boot/logger"
 	"github.com/SaiNageswarS/roamind.ai/gateway/db"
+	"github.com/SaiNageswarS/roamind.ai/gateway/services"
 	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -15,21 +16,18 @@ import (
 	"go.uber.org/zap"
 )
 
-// rollupTickInterval is how often the rollup engine scans for newly
-// completed weeks/months. Once a day is plenty — rollups are write-once
-// and an initial pass also runs at startup.
 const rollupTickInterval = 24 * time.Hour
 
 // RollupEngine materializes per-week and per-month aggregates for closed
 // periods into habit_weekly / habit_monthly. Idempotent: only writes a
 // rollup doc if one does not exist for that (user, habit, period).
 type RollupEngine struct {
-	svc  *HabitService
+	svc  *services.HabitService
 	once sync.Once
 }
 
 // NewRollupEngine returns nil when HabitService is unavailable.
-func NewRollupEngine(svc *HabitService) *RollupEngine {
+func NewRollupEngine(svc *services.HabitService) *RollupEngine {
 	if svc == nil {
 		return nil
 	}
@@ -87,7 +85,7 @@ func (e *RollupEngine) loop(ctx context.Context) {
 }
 
 func (e *RollupEngine) distinctUsers(ctx context.Context) ([]string, error) {
-	res := e.svc.entriesColl().Distinct(ctx, "user_id", bson.D{})
+	res := e.svc.EntriesColl().Distinct(ctx, "user_id", bson.D{})
 	if err := res.Err(); err != nil {
 		return nil, err
 	}
@@ -99,7 +97,7 @@ func (e *RollupEngine) distinctUsers(ctx context.Context) ([]string, error) {
 }
 
 func (e *RollupEngine) rollupForUser(ctx context.Context, userID string) error {
-	loc, err := e.svc.loadLocation(ctx, userID)
+	loc, err := e.svc.UserLocation(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -120,7 +118,6 @@ func (e *RollupEngine) rollupWeeks(ctx context.Context, userID string, loc *time
 	curStart := startOfISOWeek(now)
 	curStartStr := curStart.Format("2006-01-02")
 
-	// Pipeline groups completed weeks by (habit_id, year-week).
 	pipeline := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{
 			"user_id": userID,
@@ -149,7 +146,7 @@ func (e *RollupEngine) rollupWeeks(ctx context.Context, userID string, loc *time
 		}}},
 	}
 
-	cur, err := e.svc.entriesColl().Aggregate(ctx, pipeline)
+	cur, err := e.svc.EntriesColl().Aggregate(ctx, pipeline)
 	if err != nil {
 		return err
 	}
@@ -167,7 +164,7 @@ func (e *RollupEngine) rollupWeeks(ctx context.Context, userID string, loc *time
 		return err
 	}
 
-	weeklyColl := e.svc.mongo.Database(e.svc.dbName).Collection(db.CollectionHabitWeekly)
+	weeklyColl := e.svc.Mongo().Database(e.svc.DBName()).Collection(db.CollectionHabitWeekly)
 	for _, r := range rows {
 		weekStart := isoWeekStartDate(r.ID.ISOYear, r.ID.ISOWeek, loc)
 		filter := bson.M{
@@ -225,7 +222,7 @@ func (e *RollupEngine) rollupMonths(ctx context.Context, userID string, loc *tim
 		}}},
 	}
 
-	cur, err := e.svc.entriesColl().Aggregate(ctx, pipeline)
+	cur, err := e.svc.EntriesColl().Aggregate(ctx, pipeline)
 	if err != nil {
 		return err
 	}
@@ -242,7 +239,7 @@ func (e *RollupEngine) rollupMonths(ctx context.Context, userID string, loc *tim
 		return err
 	}
 
-	monthlyColl := e.svc.mongo.Database(e.svc.dbName).Collection(db.CollectionHabitMonthly)
+	monthlyColl := e.svc.Mongo().Database(e.svc.DBName()).Collection(db.CollectionHabitMonthly)
 	for _, r := range rows {
 		filter := bson.M{
 			"user_id":  userID,
@@ -265,15 +262,21 @@ func (e *RollupEngine) rollupMonths(ctx context.Context, userID string, loc *tim
 	return nil
 }
 
-// isoWeekStartDate returns the Monday of the given ISO week, in loc.
-func isoWeekStartDate(isoYear, isoWeek int, loc *time.Location) time.Time {
-	// Jan 4th is always in ISO week 1; from there walk to that week's Monday,
-	// then add (isoWeek-1) weeks.
-	jan4 := time.Date(isoYear, time.January, 4, 0, 0, 0, 0, loc)
-	wd := int(jan4.Weekday())
-	if wd == 0 {
-		wd = 7
+func startOfISOWeek(t time.Time) time.Time {
+	weekday := int(t.Weekday())
+	if weekday == 0 {
+		weekday = 7
 	}
-	week1Mon := jan4.AddDate(0, 0, -(wd - 1))
-	return week1Mon.AddDate(0, 0, (isoWeek-1)*7)
+	return time.Date(t.Year(), t.Month(), t.Day()-weekday+1, 0, 0, 0, 0, t.Location())
+}
+
+func isoWeekStartDate(year, week int, loc *time.Location) time.Time {
+	t := time.Date(year, 1, 4, 0, 0, 0, 0, loc)
+	weekday := int(t.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	delta := -time.Duration(weekday-1) * 24 * time.Hour
+	week1 := t.Add(delta)
+	return week1.AddDate(0, 0, (week-1)*7)
 }
