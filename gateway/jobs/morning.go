@@ -110,9 +110,9 @@ func (j *MorningJob) sendIfDue(ctx context.Context, login db.LoginModel) error {
 		return nil
 	}
 
-	mode := j.profile.GetMode(ctx, login.UserID)
-	modeInstruction := j.modeInstruction(mode)
-	prompt := fmt.Sprintf("%s\n\n%s", morningPromptTemplate, modeInstruction)
+	// Mode guidance is provided by the agent's system prompt; avoid
+	// duplicating it here to prevent conflicting instructions.
+	prompt := morningPromptTemplate
 
 	internalID := uuid.NewString()
 	taskIn := &pb.TaskIn{
@@ -130,7 +130,6 @@ func (j *MorningJob) sendIfDue(ctx context.Context, login db.LoginModel) error {
 	j.markSent(login.UserID, now)
 	logger.Info("morning prompt enqueued",
 		zap.String("user_id", login.UserID),
-		zap.String("mode", mode),
 		zap.String("scheduled_for", now.Format("2006-01-02 15:04")))
 	return nil
 }
@@ -163,18 +162,4 @@ func (j *MorningJob) userLocation(ctx context.Context, userID string) *time.Loca
 		return time.UTC
 	}
 	return fallback
-}
-
-func (j *MorningJob) modeInstruction(mode string) string {
-	instructions := map[string]string{
-		"maintenance": "Normal mode: balance all habits and suggestions equally.",
-		"focus":       "Focus mode: prioritize work and productivity habits. Minimize distractions. Suggest efficient scheduling.",
-		"vacation":    "Vacation mode: prioritize relaxation and mental recovery. Focus on enjoyable, low-stress habits. Encourage rest.",
-		"recovery":    "Recovery mode: prioritize health and healing. Suggest gentle, restorative habits. Avoid strenuous activities.",
-		"deep_work":   "Deep work mode: minimize interruptions. Batch all updates into one consolidated daily summary.",
-	}
-	if instr, ok := instructions[mode]; ok {
-		return instr
-	}
-	return instructions["maintenance"]
 }
