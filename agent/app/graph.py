@@ -122,7 +122,7 @@ class RoamindGraph:
             # Append mode-specific guidance for habit prioritization
             mode_guidance = profile.mode_instructions()
             if mode_guidance:
-                system_parts.append(f"Scheduling Mode: {mode_guidance}")
+                system_parts.append(f"{mode_guidance}")
 
         history = _to_lc_messages(self.short_term.load(task_in.user_id))
 
