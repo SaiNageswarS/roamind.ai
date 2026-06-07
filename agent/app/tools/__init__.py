@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from ._context import bind_long_term_memory, set_current_user
 from .habit import get_habit_summary
-from .profile import get_user_mode, set_user_mode
+from .profile import get_user_mode
 from .search import (
     SEARCH_TOOLS,
     finance_search,
@@ -33,7 +33,6 @@ ALL_TOOLS = [
     *SEARCH_TOOLS,
     get_habit_summary,
     get_todoist_tasks,
-    set_user_mode,
     get_user_mode,
 ]
 

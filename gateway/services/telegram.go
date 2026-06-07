@@ -46,19 +46,20 @@ const (
 // channel="telegram"; outbound TaskOut messages are delivered through
 // sendMessage using a chat_id resolved from the login collection.
 type TelegramService struct {
-	rdb    *redis.Client
-	mongo  odm.MongoClient
-	dbName string
-	logins odm.OdmCollectionInterface[db.LoginModel]
-	habit  *HabitService
-	token  string
-	http   *http.Client
-	offset atomic.Int64
+	rdb     *redis.Client
+	mongo   odm.MongoClient
+	dbName  string
+	logins  odm.OdmCollectionInterface[db.LoginModel]
+	habit   *HabitService
+	profile *ProfileService
+	token   string
+	http    *http.Client
+	offset  atomic.Int64
 }
 
 // NewTelegramService returns nil when Telegram is disabled: missing
 // TELEGRAM_BOT_TOKEN or no MongoDB client provided.
-func NewTelegramService(rdb *redis.Client, mongoClient odm.MongoClient, dbName string, dispatcher *EgressDispatcher, habit *HabitService) *TelegramService {
+func NewTelegramService(rdb *redis.Client, mongoClient odm.MongoClient, dbName string, dispatcher *EgressDispatcher, habit *HabitService, profile *ProfileService) *TelegramService {
 	token := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
 	if token == "" {
 		logger.Info("Telegram disabled: TELEGRAM_BOT_TOKEN not set")
@@ -70,12 +71,13 @@ func NewTelegramService(rdb *redis.Client, mongoClient odm.MongoClient, dbName s
 	}
 
 	svc := &TelegramService{
-		rdb:    rdb,
-		mongo:  mongoClient,
-		dbName: dbName,
-		logins: odm.CollectionOf[db.LoginModel](mongoClient, dbName),
-		habit:  habit,
-		token:  token,
+		rdb:     rdb,
+		mongo:   mongoClient,
+		dbName:  dbName,
+		logins:  odm.CollectionOf[db.LoginModel](mongoClient, dbName),
+		habit:   habit,
+		profile: profile,
+		token:   token,
 		http: &http.Client{
 			Timeout: time.Duration(telegramPollSeconds+10) * time.Second,
 		},
@@ -211,6 +213,20 @@ func (s *TelegramService) handleUpdate(ctx context.Context, u tgUpdate) {
 	if reply, handled, herr := s.habit.ParseAndExecute(ctx, userID, u.Message.Text); handled {
 		if herr != nil {
 			logger.Error("habit command failed", zap.Error(herr), zap.String("user_id", userID))
+		}
+		if reply != "" {
+			if err := s.sendMessage(ctx, u.Message.Chat.ID, reply); err != nil {
+				logger.Error("telegram sendMessage failed",
+					zap.Error(err), zap.String("user_id", userID))
+			}
+		}
+		return
+	}
+
+	// Short-circuit gateway-owned /mode_* commands before paying for LLM.
+	if reply, handled, herr := s.profile.ParseAndExecute(ctx, userID, u.Message.Text); handled {
+		if herr != nil {
+			logger.Error("mode command failed", zap.Error(herr), zap.String("user_id", userID))
 		}
 		if reply != "" {
 			if err := s.sendMessage(ctx, u.Message.Chat.ID, reply); err != nil {

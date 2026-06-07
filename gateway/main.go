@@ -42,6 +42,7 @@ func main() {
 
 	profileRepo := db.NewProfileRepo(mongoClient, defaultMongoDB)
 	habitService := services.NewHabitService(mongoClient, defaultMongoDB, profileRepo)
+	profileService := services.NewProfileService(profileRepo)
 	rollupEngine := jobs.NewRollupEngine(habitService)
 	logins := odm.CollectionOf[db.LoginModel](mongoClient, defaultMongoDB)
 	morningJob := jobs.NewMorningJob(rdb, logins, habitService, profileRepo)
@@ -54,6 +55,7 @@ func main() {
 		Provide(rdb).
 		Provide(dispatcher).
 		Provide(habitService).
+		Provide(profileService).
 		RegisterService(
 			server.Adapt(pb.RegisterAssistantCLIServer),
 			services.NewCliService,
@@ -63,7 +65,7 @@ func main() {
 		logger.Fatal("Dependency Injection Failed", zap.Error(err))
 	}
 
-	if tg := services.NewTelegramService(rdb, mongoClient, defaultMongoDB, dispatcher, habitService); tg != nil {
+	if tg := services.NewTelegramService(rdb, mongoClient, defaultMongoDB, dispatcher, habitService, profileService); tg != nil {
 		tg.Start(ctx)
 	}
 

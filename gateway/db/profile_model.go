@@ -3,18 +3,28 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/SaiNageswarS/go-api-boot/odm"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // DefaultTimezone is the fallback IANA TZ when the user has no profile or
 // has not set one.
 const DefaultTimezone = "Asia/Kolkata"
 
-// ProfileRepo reads the agent-owned `user_profiles` collection. Writes
-// are the agent's responsibility — the gateway only reads from here.
+// ValidModes is the set of accepted scheduling modes.
+var ValidModes = map[string]bool{
+	"maintenance": true,
+	"focus":       true,
+	"vacation":    true,
+	"recovery":    true,
+	"deep_work":   true,
+}
+
+// ProfileRepo reads and writes the `user_profiles` collection.
 type ProfileRepo struct {
 	mongo  odm.MongoClient
 	dbName string
@@ -72,4 +82,21 @@ func (r *ProfileRepo) GetMode(ctx context.Context, userID string) string {
 		return "maintenance"
 	}
 	return doc.Mode
+}
+
+// SetMode writes the mode field to user_profiles, upserting the document if
+// it does not yet exist. Returns an error if the mode is not a ValidMode.
+func (r *ProfileRepo) SetMode(ctx context.Context, userID, mode string) error {
+	if r == nil {
+		return errors.New("profile repo unavailable")
+	}
+	if !ValidModes[mode] {
+		return fmt.Errorf("invalid mode %q", mode)
+	}
+	coll := r.mongo.Database(r.dbName).Collection("user_profiles")
+	filter := bson.M{"user_id": userID}
+	update := bson.M{"$set": bson.M{"mode": mode, "user_id": userID}}
+	opts := options.UpdateOne().SetUpsert(true)
+	_, err := coll.UpdateOne(ctx, filter, update, opts)
+	return err
 }
