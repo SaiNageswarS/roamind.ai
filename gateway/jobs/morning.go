@@ -20,11 +20,20 @@ import (
 )
 
 const (
-	morningCheckInterval  = 15 * time.Minute
-	morningStartHour      = 8
-	morningEndHour        = 11
-	morningPromptTemplate = `Review all tasks and habits for today and suggest a practical schedule for the day. Include habit reminders, priorities, and a concise order of work.`
+	morningCheckInterval = 15 * time.Minute
+	morningStartHour     = 8
+	morningEndHour       = 11
+	morningLookbackDays  = 14
 )
+
+// morningPrompt builds a day-start prompt that references habit history over
+// the past two weeks rather than today (which has no entries yet).
+func morningPrompt(today, twoWeeksAgo string) string {
+	return fmt.Sprintf(
+		`Good morning! It's a new day (%s). To help plan today, review my tasks and habit history. Pick habit history from %s to %s (the past two weeks) and use it to suggest a practical schedule. Highlight patterns, prioritize tasks and note which habits have been consistent or slipping, and recommend a concise order of work for today.`,
+		today, twoWeeksAgo, today,
+	)
+}
 
 // MorningJob sends a daily planning prompt to users over Telegram.
 type MorningJob struct {
@@ -112,7 +121,9 @@ func (j *MorningJob) sendIfDue(ctx context.Context, login db.LoginModel) error {
 
 	// Mode guidance is provided by the agent's system prompt; avoid
 	// duplicating it here to prevent conflicting instructions.
-	prompt := morningPromptTemplate
+	today := now.Format("2006-01-02")
+	twoWeeksAgo := now.AddDate(0, 0, -morningLookbackDays).Format("2006-01-02")
+	prompt := morningPrompt(today, twoWeeksAgo)
 
 	internalID := uuid.NewString()
 	taskIn := &pb.TaskIn{
