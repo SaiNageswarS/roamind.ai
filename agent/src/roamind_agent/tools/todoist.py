@@ -16,12 +16,12 @@ The module is runnable standalone — `.env` is loaded automatically
 (searched upwards from the current directory):
 
     # from agent/
-    python -m app.tools.todoist [--no-completed] [--days 14] [--json]
+    python -m roamind_agent.tools.todoist [--no-completed] [--days 14] [--json]
 
     # from the repo root
-    cd agent && python -m app.tools.todoist
+    cd agent && python -m roamind_agent.tools.todoist
     # or, without changing directory:
-    PYTHONPATH=agent python -m app.tools.todoist
+    PYTHONPATH=agent/src python -m roamind_agent.tools.todoist
 
 Set `TODOIST_API_TOKEN` in your `.env` (Settings → Integrations →
 Developer in Todoist) or export it in the shell.
@@ -380,7 +380,7 @@ def _main(argv: list[str] | None = None) -> int:
     load_dotenv()
 
     parser = argparse.ArgumentParser(
-        prog="python -m app.tools.todoist",
+        prog="python -m roamind_agent.tools.todoist",
         description="Fetch and render the current Todoist tasks for the configured user.",
     )
     parser.add_argument(

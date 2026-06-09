@@ -40,7 +40,7 @@ from .stream import (
 )
 
 MAX_DELIVERIES = 5
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.ini"
+CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config.ini"
 
 log = structlog.get_logger("roamind.agent")
 

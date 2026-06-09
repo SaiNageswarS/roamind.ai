@@ -15,12 +15,12 @@ The module is runnable standalone for ad-hoc smoke testing — `.env`
 is loaded automatically (searched upwards from the current directory):
 
     # from agent/
-    python -m app.tools.search web "langgraph tutorial"
-    python -m app.tools.search github "gin web framework"
-    python -m app.tools.search news "openai" --days 7
-    python -m app.tools.search research "transformer attention"
-    python -m app.tools.search finance AAPL,MSFT,BTC-USD
-    python -m app.tools.search maps "coffee near Times Square" --limit 3
+    python -m roamind_agent.tools.search web "langgraph tutorial"
+    python -m roamind_agent.tools.search github "gin web framework"
+    python -m roamind_agent.tools.search news "openai" --days 7
+    python -m roamind_agent.tools.search research "transformer attention"
+    python -m roamind_agent.tools.search finance AAPL,MSFT,BTC-USD
+    python -m roamind_agent.tools.search maps "coffee near Times Square" --limit 3
 """
 
 from __future__ import annotations
@@ -382,7 +382,7 @@ _TOOL_BY_NAME = {
 
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m app.tools.search",
+        prog="python -m roamind_agent.tools.search",
         description="Invoke one of the search @tool callables for local testing.",
     )
     parser.add_argument(
