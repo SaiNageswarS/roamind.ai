@@ -13,9 +13,11 @@ Two modes:
   stdin
     Reads user input from stdin interactively, runs it through the same
     LangGraph, and prints the reply to stdout. Redis is still required for
-    short-term memory (chat:hot:{user_id}) and the LLM response cache, but
-    the task-transport streams (tasks.in / tasks.out) are not used.
-    Use this mode for local development: no gateway, no gRPC, no roamind-cli.
+    short-term memory (chat:hot:{user_id}:{conversation_id}) and the LLM
+    response cache, but the task-transport streams (tasks.in / tasks.out)
+    are not used. Use this mode for local development: no gateway, no gRPC.
+    Each invocation of start-local.sh sets a unique CONVERSATION_ID, isolating
+    short-term memory per session while sharing the same user_id for long-term memory.
 
 The graph is built once at startup and shared across all requests in both modes.
 """
@@ -105,10 +107,7 @@ def main() -> int:
     return 0
 
 
-def _run_redis_worker(
-    client: redis.Redis,
-    graph,
-) -> None:
+def _run_redis_worker(client: redis.Redis, graph) -> None:
     log.info("agent started", stream=STREAM_TASKS_IN, group=GROUP_AGENT)
 
     while not _should_stop:
@@ -122,19 +121,86 @@ def _run_redis_worker(
             for msg_id, fields in messages:
                 if _should_stop:
                     return
-                _process_message(client, graph, msg_id, fields)
+
+                # --- parse ---
+                raw = fields.get("payload")
+                if not raw:
+                    log.warning("payload missing", msg_id=msg_id)
+                    xack_tasks_in(client, [msg_id])
+                    continue
+
+                try:
+                    task_in = parse_task_in(raw)
+                except Exception as e:
+                    log.error("parse TaskIn failed", err=str(e), msg_id=msg_id)
+                    _ack_or_dlq(client, msg_id, raw)
+                    continue
+
+                log.info(
+                    "processing task",
+                    task_id=task_in.id,
+                    channel=task_in.channel,
+                    user_id=task_in.user_id,
+                    conversation_id=task_in.conversation_id,
+                )
+
+                # --- invoke ---
+                try:
+                    final = graph.invoke(AgentState(task_in=task_in))
+                except Exception as e:
+                    log.exception("graph invoke failed", err=str(e), task_id=task_in.id)
+                    _ack_or_dlq(client, msg_id, raw)
+                    continue
+
+                task_out = final["task_out"] if isinstance(final, dict) else getattr(final, "task_out", None)
+                if task_out is None:
+                    log.error("graph produced no TaskOut", task_id=task_in.id)
+                    _ack_or_dlq(client, msg_id, raw)
+                    continue
+
+                # --- emit ---
+                try:
+                    xadd_tasks_out(client, task_out.to_wire_json())
+                except Exception as e:
+                    log.error("emit tasks.out failed", err=str(e), task_id=task_in.id)
+                    _ack_or_dlq(client, msg_id, raw)
+                    continue
+
+                xack_tasks_in(client, [msg_id])
+                log.info(
+                    "replied",
+                    task_id=task_in.id,
+                    in_reply_to=task_out.in_reply_to,
+                    intent=task_out.intent,
+                )
 
     log.info("agent stopping")
+
+
+def _ack_or_dlq(client: redis.Redis, msg_id: str, raw: str | None) -> None:
+    try:
+        retries = pending_retry_count(client, msg_id)
+    except Exception:
+        retries = MAX_DELIVERIES  # fail-safe: don't loop on parse errors
+
+    if retries >= MAX_DELIVERIES:
+        try:
+            xadd_dlq(client, raw or "", msg_id)
+        finally:
+            xack_tasks_in(client, [msg_id])
+        log.warning("message moved to DLQ", msg_id=msg_id, retries=retries)
 
 
 def _stdin_loop(graph) -> None:
     """Interactive REPL over stdin/stdout. Redis is used for memory and LLM
     cache, but task-transport streams are bypassed entirely."""
     user_id = os.getenv("CLI_USER_ID", "local")
+    conversation_id = os.getenv("CONVERSATION_ID", str(uuid.uuid4()))
     channel = "cli"
-    log.info("agent started in stdin mode", user_id=user_id)
+    log.info("agent started in stdin mode", user_id=user_id, conversation_id=conversation_id)
 
-    print("Roamind local agent. Type your message and press Enter. Ctrl+D or Ctrl+C to exit.\n")
+    print(f"Roamind local agent  [user: {user_id}  conversation: {conversation_id}]")
+    print("Type your message and press Enter. Ctrl+D or Ctrl+C to exit.\n")
 
     while not _should_stop:
         try:
@@ -153,6 +219,7 @@ def _stdin_loop(graph) -> None:
             id=str(uuid.uuid4()),
             trace_id=str(uuid.uuid4()),
             user_id=user_id,
+            conversation_id=conversation_id,
             channel=channel,
             text=text,
             received_at=datetime.now(timezone.utc),
@@ -173,71 +240,6 @@ def _stdin_loop(graph) -> None:
         print(f"\n{task_out.payload}\n")
 
     log.info("agent stopping")
-
-
-def _process_message(client: redis.Redis, graph, msg_id: str, fields: dict) -> None:
-    raw = fields.get("payload")
-    if not raw:
-        log.warning("payload missing", msg_id=msg_id)
-        xack_tasks_in(client, [msg_id])
-        return
-
-    try:
-        task_in = parse_task_in(raw)
-    except Exception as e:
-        log.error("parse TaskIn failed", err=str(e), msg_id=msg_id)
-        _ack_or_dlq(client, msg_id, raw)
-        return
-
-    log.info(
-        "processing task",
-        task_id=task_in.id,
-        channel=task_in.channel,
-        user_id=task_in.user_id,
-    )
-
-    try:
-        final = graph.invoke(AgentState(task_in=task_in))
-    except Exception as e:
-        log.exception("graph invoke failed", err=str(e), task_id=task_in.id)
-        _ack_or_dlq(client, msg_id, raw)
-        return
-
-    # LangGraph returns a dict-like state for dataclass schemas.
-    task_out = final["task_out"] if isinstance(final, dict) else getattr(final, "task_out", None)
-    if task_out is None:
-        log.error("graph produced no TaskOut", task_id=task_in.id)
-        _ack_or_dlq(client, msg_id, raw)
-        return
-
-    try:
-        xadd_tasks_out(client, task_out.to_wire_json())
-    except Exception as e:
-        log.error("emit tasks.out failed", err=str(e), task_id=task_in.id)
-        _ack_or_dlq(client, msg_id, raw)
-        return
-
-    xack_tasks_in(client, [msg_id])
-    log.info(
-        "replied",
-        task_id=task_in.id,
-        in_reply_to=task_out.in_reply_to,
-        intent=task_out.intent,
-    )
-
-
-def _ack_or_dlq(client: redis.Redis, msg_id: str, raw: str | None) -> None:
-    try:
-        retries = pending_retry_count(client, msg_id)
-    except Exception:
-        retries = MAX_DELIVERIES  # fail-safe: don't loop on parse errors
-
-    if retries >= MAX_DELIVERIES:
-        try:
-            xadd_dlq(client, raw or "", msg_id)
-        finally:
-            xack_tasks_in(client, [msg_id])
-        log.warning("message moved to DLQ", msg_id=msg_id, retries=retries)
 
 
 def _parse_args() -> argparse.Namespace:

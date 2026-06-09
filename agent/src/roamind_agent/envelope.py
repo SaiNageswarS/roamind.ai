@@ -27,6 +27,7 @@ class TaskIn(BaseModel):
     id: str
     trace_id: str = Field(default="", alias="traceId")
     user_id: str = Field(default="", alias="userId")
+    conversation_id: str = Field(default="", alias="conversationId")
     channel: str = ""
     channel_msg_id: str = Field(default="", alias="channelMsgId")
     text: str = ""

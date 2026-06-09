@@ -124,7 +124,7 @@ class RoamindGraph:
             if mode_guidance:
                 system_parts.append(f"{mode_guidance}")
 
-        history = _to_lc_messages(self.short_term.load(task_in.user_id))
+        history = _to_lc_messages(self.short_term.load(task_in.user_id, task_in.conversation_id))
 
         state.messages = [
             SystemMessage(content="\n\n".join(system_parts)),
@@ -204,6 +204,7 @@ class RoamindGraph:
 
         self._persist_turn(
             user_id=incoming.user_id,
+            conversation_id=incoming.conversation_id,
             channel=incoming.channel,
             user_text=incoming.text,
             assistant_text=text,
@@ -261,16 +262,19 @@ class RoamindGraph:
         self,
         *,
         user_id: str,
+        conversation_id: str,
         channel: str,
         user_text: str,
         assistant_text: str,
     ) -> None:
         self.short_term.append(
             user_id,
+            conversation_id,
             ChatMessage(role="user", content=user_text, channel=channel),
         )
         self.short_term.append(
             user_id,
+            conversation_id,
             ChatMessage(role="assistant", content=assistant_text, channel=channel),
         )
 

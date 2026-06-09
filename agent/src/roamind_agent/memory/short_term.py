@@ -1,11 +1,14 @@
-"""Short-term memory: last N messages per user, in Redis.
+"""Short-term memory: last N messages per conversation, in Redis.
 
 Exclusive store for recent conversation history. No Mongo persistence,
 no rehydrate — if Redis loses the key, the recent history is gone (use
 Redis AOF/RDB for durability).
 
-Key: `chat:hot:{user_id}` — a Redis LIST of JSON-encoded `ChatMessage`s,
-oldest at index 0. `LTRIM` keeps only the last `max_messages` entries.
+Key: `chat:hot:{user_id}:{conversation_id}` — a Redis LIST of
+JSON-encoded `ChatMessage`s, oldest at index 0. `LTRIM` keeps only the
+last `max_messages` entries. The `conversation_id` isolates sessions
+(e.g. separate terminal windows or Telegram threads) while keeping the
+same `user_id` for long-term memory lookups.
 """
 
 from __future__ import annotations
@@ -31,10 +34,10 @@ class ShortTermMemory:
 
     # --- Public API -----------------------------------------------------
 
-    def load(self, user_id: str) -> list[ChatMessage]:
+    def load(self, user_id: str, conversation_id: str) -> list[ChatMessage]:
         if not user_id:
             return []
-        raw = self._redis.lrange(_key(user_id), 0, -1) or []
+        raw = self._redis.lrange(_key(user_id, conversation_id), 0, -1) or []
         out: list[ChatMessage] = []
         for entry in raw:
             try:
@@ -43,22 +46,22 @@ class ShortTermMemory:
                 log.warning("short_term decode failed", err=str(e))
         return out
 
-    def append(self, user_id: str, message: ChatMessage) -> None:
+    def append(self, user_id: str, conversation_id: str, message: ChatMessage) -> None:
         if not user_id:
             return
-        key = _key(user_id)
+        key = _key(user_id, conversation_id)
         pipe = self._redis.pipeline()
         pipe.rpush(key, message.model_dump_json())
         pipe.ltrim(key, -self._max, -1)
         pipe.execute()
 
-    def clear(self, user_id: str) -> None:
+    def clear(self, user_id: str, conversation_id: str) -> None:
         if user_id:
-            self._redis.delete(_key(user_id))
+            self._redis.delete(_key(user_id, conversation_id))
 
 
 # --- Module-level helpers -----------------------------------------------
 
 
-def _key(user_id: str) -> str:
-    return f"{KEY_PREFIX}{user_id}"
+def _key(user_id: str, conversation_id: str) -> str:
+    return f"{KEY_PREFIX}{user_id}:{conversation_id}"
