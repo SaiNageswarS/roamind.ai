@@ -36,10 +36,13 @@ import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import structlog
 from dotenv import load_dotenv
 from langchain_core.tools import tool
 
 from ._http import http_get_json
+
+log = structlog.get_logger("roamind.agent.tools.todoist")
 
 
 _ACTIVE_TASKS_URL = "https://api.todoist.com/api/v1/tasks"
@@ -242,6 +245,7 @@ def get_todoist_tasks(
         completed_days: Lookback window in days for completed tasks
             (1-30). Defaults to 30.
     """
+    log.info("get_todoist_tasks", include_completed=include_completed, completed_days=completed_days)
     client = TodoistTool()
     data = client.fetch(
         include_completed=include_completed,

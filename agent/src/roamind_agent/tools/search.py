@@ -167,6 +167,7 @@ def finance_search(symbols: str) -> str:
         symbols: Comma-separated list of up to 5 ticker symbols
             (e.g. "AAPL,MSFT,BTC-USD").
     """
+    log.info("finance search", symbols=symbols)
     raw = (symbols or "").strip()
     if not raw:
         return "finance_search: no symbols provided"
@@ -239,6 +240,7 @@ def _exa_search(
         return "search: empty query"
     if not _EXA_API_KEY:
         return "search: not configured (EXA_API_KEY missing)"
+    log.info("exa search", query=query, category=category or "web")
 
     body: dict[str, Any] = {
         "query": query,
@@ -297,6 +299,7 @@ def _exa_search(
 
 def _google_places_text_search(query: str, limit: int) -> str | None:
     """Call Google Places (New) Text Search."""
+    log.info("maps search", query=query)
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": _GOOGLE_MAPS_API_KEY or "",

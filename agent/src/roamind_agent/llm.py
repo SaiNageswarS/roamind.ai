@@ -123,24 +123,20 @@ class LLMClient:
         if cache_key is not None:
             cached = self._cache_get(cache_key)
             if cached is not None:
-                log.info("[CACHED] LLM Response", model=model_name, response=cached.content)
+                log.info("llm cache hit", model=model_name)
                 return cached
 
+        log.info("llm invoke", model=model_name)
         response = self.chat_model.invoke(messages_list, **kwargs)
         if not isinstance(response, AIMessage):
             # LangChain chat models always return AIMessage, but guard anyway.
             response = AIMessage(content=getattr(response, "content", str(response)))
 
-        log.info(
-            "[API] LLM Response",
-            model=model_name,
-            response=response.content,
-        )
-
         if cache_key is not None:
             self._cache_set(cache_key, response)
 
         return response
+
 
     def bind_tools(self, tools: Sequence[Any], **kwargs: Any) -> "LLMClient":
         """Return a new `LLMClient` whose underlying model has tools bound.

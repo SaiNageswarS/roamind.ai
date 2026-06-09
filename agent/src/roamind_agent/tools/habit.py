@@ -7,9 +7,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import structlog
 from langchain_core.tools import tool
 
 from ._context import get_current_user, get_long_term
+
+log = structlog.get_logger("roamind.agent.tools.habit")
 
 
 @tool
@@ -53,6 +56,7 @@ def get_habit_summary(period: str = "today", habit_name: str = "") -> str:
         habit_name: Optional habit slug or substring to filter to one
             habit. Empty returns all tracked habits.
     """
+    log.info("get_habit_summary", period=period, habit_name=habit_name or "*")
     user_id = get_current_user()
     long_term = get_long_term()
     if not user_id or long_term is None:

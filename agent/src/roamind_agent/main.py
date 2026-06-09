@@ -267,6 +267,9 @@ def _install_signal_handlers() -> None:
 def _configure_logging() -> None:
     level = os.getenv("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(stream=sys.stdout, level=level, format="%(message)s")
+    # httpx logs every HTTP request at INFO — suppress to WARNING to avoid
+    # noise like "HTTP Request: POST https://api.anthropic.com/v1/messages".
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     structlog.configure(
         processors=[
             structlog.processors.add_log_level,
