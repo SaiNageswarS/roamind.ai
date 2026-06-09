@@ -50,3 +50,4 @@ RUN useradd --create-home --uid 10001 roamind \
 USER roamind
 
 ENTRYPOINT ["roamind-agent"]
+CMD ["--mode", "redis"]

@@ -14,7 +14,6 @@ import (
 	"github.com/SaiNageswarS/roamind.ai/gateway/db"
 	"github.com/SaiNageswarS/roamind.ai/gateway/jobs"
 	"github.com/SaiNageswarS/roamind.ai/gateway/services"
-	pb "github.com/SaiNageswarS/roamind.ai/proto/generated"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
@@ -31,7 +30,6 @@ func main() {
 		logger.Fatal("redis init failed", zap.Error(err))
 	}
 
-	// Mongo is optional: Telegram requires it; CLI does not.
 	mongoClient := odm.ProvideMongoClient()
 
 	if mongoClient != nil {
@@ -50,16 +48,11 @@ func main() {
 	dispatcher := services.NewEgressDispatcher(rdb)
 
 	boot, err := server.New().
-		GRPCPort(":50051").
 		HTTPPort(":8081").
 		Provide(rdb).
 		Provide(dispatcher).
 		Provide(habitService).
 		Provide(profileService).
-		RegisterService(
-			server.Adapt(pb.RegisterAssistantCLIServer),
-			services.NewCliService,
-		).
 		Build()
 	if err != nil {
 		logger.Fatal("Dependency Injection Failed", zap.Error(err))

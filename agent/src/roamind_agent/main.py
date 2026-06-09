@@ -1,21 +1,35 @@
 """Roamind agent worker loop.
 
-Consumes `tasks.in` via XREADGROUP, runs each envelope through the
-LangGraph, and emits the resulting `TaskOut` to `tasks.out`. Failed
-messages are retried up to `MAX_DELIVERIES` then routed to `tasks.dlq`.
-This worker is designed to process one message at a time per process instance.
-For concurrency, run multiple instances behind a process manager. 
+Two modes:
 
-In a single run for a message from redis, the entire flow shares the same graph and user context.
+  redis (default)
+    Consumes `tasks.in` via XREADGROUP, runs each envelope through the
+    LangGraph, and emits the resulting `TaskOut` to `tasks.out`. Failed
+    messages are retried up to `MAX_DELIVERIES` then routed to `tasks.dlq`.
+    This worker is designed to process one message at a time per process
+    instance. For concurrency, run multiple instances behind a process
+    manager.
+
+  stdin
+    Reads user input from stdin interactively, runs it through the same
+    LangGraph, and prints the reply to stdout. Redis is still required for
+    short-term memory (chat:hot:{user_id}) and the LLM response cache, but
+    the task-transport streams (tasks.in / tasks.out) are not used.
+    Use this mode for local development: no gateway, no gRPC, no roamind-cli.
+
+The graph is built once at startup and shared across all requests in both modes.
 """
 
 from __future__ import annotations
 
+import argparse
 import configparser
 import logging
 import os
 import signal
 import sys
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import redis
@@ -23,7 +37,7 @@ import structlog
 from dotenv import load_dotenv
 
 from .db import MongoDB
-from .envelope import parse_task_in
+from .envelope import TaskIn, parse_task_in
 from .graph import AgentState, RoamindGraph
 from .llm import LLMClient
 from .memory import LongTermMemory, ShortTermMemory
@@ -52,12 +66,17 @@ def main() -> int:
     _configure_logging()
     _install_signal_handlers()
 
+    args = _parse_args()
+
     mongo: MongoDB | None = None
     try:
         cfg = configparser.ConfigParser()
         cfg.read(CONFIG_PATH)
         client = new_redis_client()
-        ensure_group(client, STREAM_TASKS_IN, GROUP_AGENT)
+
+        if args.mode == "redis":
+            ensure_group(client, STREAM_TASKS_IN, GROUP_AGENT)
+
         llm = LLMClient.from_config(cfg, redis_client=client)
         mongo = MongoDB.connect(
             uri=cfg.get("mongo", "uri", fallback=""),
@@ -72,8 +91,13 @@ def main() -> int:
         log.error("startup failed", err=str(e))
         return 1
 
+    graph = RoamindGraph.build(llm, short_term, long_term)
+
     try:
-        _run_loop(client, llm, short_term, long_term)
+        if args.mode == "redis":
+            _run_redis_worker(client, graph)
+        else:
+            _stdin_loop(graph)
     finally:
         client.close()
         if mongo is not None:
@@ -81,13 +105,10 @@ def main() -> int:
     return 0
 
 
-def _run_loop(
+def _run_redis_worker(
     client: redis.Redis,
-    llm: LLMClient,
-    short_term: ShortTermMemory,
-    long_term: LongTermMemory,
+    graph,
 ) -> None:
-    graph = RoamindGraph.build(llm, short_term, long_term)
     log.info("agent started", stream=STREAM_TASKS_IN, group=GROUP_AGENT)
 
     while not _should_stop:
@@ -102,6 +123,54 @@ def _run_loop(
                 if _should_stop:
                     return
                 _process_message(client, graph, msg_id, fields)
+
+    log.info("agent stopping")
+
+
+def _stdin_loop(graph) -> None:
+    """Interactive REPL over stdin/stdout. Redis is used for memory and LLM
+    cache, but task-transport streams are bypassed entirely."""
+    user_id = os.getenv("CLI_USER_ID", "local")
+    channel = "cli"
+    log.info("agent started in stdin mode", user_id=user_id)
+
+    print("Roamind local agent. Type your message and press Enter. Ctrl+D or Ctrl+C to exit.\n")
+
+    while not _should_stop:
+        try:
+            text = input("> ").strip()
+        except EOFError:
+            print()
+            break
+        except KeyboardInterrupt:
+            print()
+            break
+
+        if not text:
+            continue
+
+        task_in = TaskIn(
+            id=str(uuid.uuid4()),
+            trace_id=str(uuid.uuid4()),
+            user_id=user_id,
+            channel=channel,
+            text=text,
+            received_at=datetime.now(timezone.utc),
+        )
+
+        try:
+            final = graph.invoke(AgentState(task_in=task_in))
+        except Exception as e:
+            log.exception("graph invoke failed", err=str(e))
+            print(f"[error] {e}\n")
+            continue
+
+        task_out = final["task_out"] if isinstance(final, dict) else getattr(final, "task_out", None)
+        if task_out is None:
+            print("[error] agent produced no response\n")
+            continue
+
+        print(f"\n{task_out.payload}\n")
 
     log.info("agent stopping")
 
@@ -171,6 +240,18 @@ def _ack_or_dlq(client: redis.Redis, msg_id: str, raw: str | None) -> None:
         log.warning("message moved to DLQ", msg_id=msg_id, retries=retries)
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Roamind agent")
+    parser.add_argument(
+        "--mode",
+        choices=["redis", "stdin"],
+        default="redis",
+        help="Transport mode: 'redis' (default) consumes tasks.in stream; "
+             "'stdin' reads from stdin for local interactive use.",
+    )
+    return parser.parse_args()
+
+
 def _install_signal_handlers() -> None:
     def _handler(signum, _frame):
         global _should_stop
@@ -191,11 +272,6 @@ def _configure_logging() -> None:
             structlog.processors.JSONRenderer(),
         ],
     )
-
-
-def _build_llm(cfg: configparser.ConfigParser, client: redis.Redis) -> LLMClient:
-    """Construct the cached chat model from config.ini."""
-    return LLMClient.from_config(cfg, redis_client=client)
 
 
 if __name__ == "__main__":
