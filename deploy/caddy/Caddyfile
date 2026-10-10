@@ -1,0 +1,43 @@
+# Dashboards, served privately on the tailnet by Caddy + caddy-tailscale.
+#
+# Each dashboard joins the tailnet as its own node and gets its own HTTPS name,
+# https://<node>.<tailnet>.ts.net. Access is limited to the Tailscale logins in
+# ROAMIND_DASHBOARD_USERS (the tailnet may be shared with other people).
+#
+# Env:
+#   TS_AUTHKEY               Tailscale auth key, read by the plugin itself; only needed on
+#                            first run (state persists). If unset, Caddy logs a login URL
+#                            to approve the node instead.
+#   ROAMIND_DATA_DIR         node state is kept under <data>/caddy/tailscale
+#   ROAMIND_DASHBOARD_USERS_CEL  allowed logins as CEL list items; built by deploy/bin/run-caddy.sh
+#                                from ROAMIND_DASHBOARD_USERS (comma-separated logins)
+#   HATCHET_UPSTREAM         Hatchet API/dashboard host:port (set by deploy/bin/with-hatchet.sh)
+#
+# To add a dashboard: copy the hatchet block, change the node name and upstream.
+{
+	admin localhost:2019
+	tailscale {
+		state_dir {$ROAMIND_DATA_DIR:./data}/caddy/tailscale
+		ephemeral false
+	}
+}
+
+(tailnet_owner_only) {
+	tls {
+		get_certificate tailscale
+	}
+	tailscale_auth
+	@stranger not expression `{http.auth.user.id} in [{$ROAMIND_DASHBOARD_USERS_CEL}]`
+	respond @stranger "Forbidden" 403
+}
+
+# Hatchet dashboard → https://hatchet.<tailnet>.ts.net
+:443 {
+	bind tailscale/hatchet
+	import tailnet_owner_only
+	reverse_proxy {$HATCHET_UPSTREAM:127.0.0.1:8888} {
+		# `hatchet server start` issues login cookies for Domain=localhost;
+		# dropping the Domain makes them host-only for the tailnet name.
+		header_down Set-Cookie "(?i);\s*domain=[^;]*" ""
+	}
+}

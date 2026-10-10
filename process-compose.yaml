@@ -1,0 +1,38 @@
+# Long-running Roamind processes: `process-compose up` (reads ./.env).
+#
+# Prerequisites (one-shot, see ./build.sh):
+#   ./build.sh hatchet-env   Hatchet server + Slack webhook + Funnel
+#   ./build.sh all           bin/caddy, bin/worker, bin/memory
+#
+# Processes that talk to Hatchet run through deploy/bin/with-hatchet.sh, which
+# loads the Hatchet CLI profile created by `hatchet server start`.
+version: "0.5"
+log_location: ./data/logs/process-compose.log
+processes:
+  caddy:
+    description: Tailnet-only dashboards (hatchet.<tailnet>.ts.net, ...)
+    command: deploy/bin/run-caddy.sh
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 2019
+        path: /config/
+      initial_delay_seconds: 2
+      period_seconds: 5
+    availability:
+      restart: on_failure
+      backoff_seconds: 5
+
+  worker:
+    description: Roamind Hatchet worker (chat-turn)
+    command: deploy/bin/with-hatchet.sh ./bin/worker
+    availability:
+      restart: on_failure
+      backoff_seconds: 5
+
+  memory:
+    description: Long-term memory service (phase 2 placeholder)
+    command: ./bin/memory
+    availability:
+      restart: on_failure
+      backoff_seconds: 5

@@ -1,0 +1,65 @@
+# Create the Slack app from this manifest (api.slack.com/apps → Create New App
+# → From a manifest), then set the request URL printed by
+# `./build.sh hatchet-env` under Event Subscriptions.
+display_information:
+  name: Roamind
+  description: Personal assistant
+features:
+  app_home:
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: roamind
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      # Conversations: read where the bot is a member (or DMed), see channel lists
+      - app_mentions:read
+      - channels:history
+      - channels:read
+      - channels:join
+      - groups:history
+      - groups:read
+      - im:history
+      - im:read
+      - im:write
+      - mpim:history
+      - mpim:read
+      - mpim:write
+      # Replying
+      - chat:write
+      - chat:write.public
+      - reactions:read
+      - reactions:write
+      - pins:read
+      - pins:write
+      - bookmarks:read
+      - bookmarks:write
+      # Files shared with / produced by the agent
+      - files:read
+      - files:write
+      # Links (unfurl what the agent posts)
+      - links:read
+      - links:write
+      # Identity (users are keyed by email)
+      - users:read
+      - users:read.email
+      - users.profile:read
+      - team:read
+settings:
+  event_subscriptions:
+    request_url: https://REPLACE-ME.ts.net/api/v1/stable/tenants/TENANT/webhooks/slack
+    # Only app_mention and message.im start runs (see channels/slack.EventKeyExpression);
+    # the rest arrive as slack:ignored:* events, ready for later features.
+    bot_events:
+      - app_mention
+      - message.im
+      - message.mpim
+      - message.channels
+      - message.groups
+      - file_shared
+      - reaction_added
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
