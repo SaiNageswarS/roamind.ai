@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/template"
 	"time"
 
 	"roamind.ai/agent/citation"
 	"roamind.ai/agent/claude"
+	"roamind.ai/memory"
 	"roamind.ai/protocol"
 )
 
@@ -31,6 +33,8 @@ type Config struct {
 	// ClaudeBinary defaults to "claude".
 	ClaudeBinary string
 	Model        string
+	// Memory enables long-term memory for turns that name a project.
+	Memory *memory.Config
 }
 
 // Emit receives packets as the turn progresses.
@@ -42,15 +46,24 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, channel str
 	if in.UserID == "" {
 		return protocol.TurnOutput{}, errors.New("agent: empty user id")
 	}
-	dir := filepath.Join(cfg.DataDir, "users", in.UserID, "workspace")
+	dir, err := WorkspaceDir(cfg, in.UserID)
+	if err != nil {
+		return protocol.TurnOutput{}, err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return protocol.TurnOutput{}, err
 	}
+	withMemory := cfg.Memory != nil && in.MemoryProject != ""
 	var sp bytes.Buffer
-	err := systemPrompt.Execute(&sp, map[string]string{
-		"UserName": orDefault(in.UserName, "the user"),
-		"Channel":  orDefault(channel, "chat"),
-		"Date":     time.Now().Format("Monday, 2 January 2006"),
+	err = systemPrompt.Execute(&sp, map[string]any{
+		"UserName":  orDefault(in.UserName, "the user"),
+		"UserEmail": in.UserEmail,
+		"Channel":   orDefault(channel, "chat"),
+		"Date":      time.Now().Format("Monday, 2 January 2006"),
+		"ISODate":   time.Now().Format("2006-01-02"),
+		// Evidence notes record where a fact came from, e.g. "slack".
+		"Source": strings.ToLower(orDefault(channel, "chat")),
+		"Memory": withMemory,
 	})
 	if err != nil {
 		return protocol.TurnOutput{}, err
@@ -61,6 +74,19 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, channel str
 		SessionID:    in.SessionID,
 		Model:        cfg.Model,
 		SystemPrompt: sp.String(),
+		Tools:        workspaceTools,
+		Settings:     workspaceSettings,
+		AllowedTools: allowedWorkspaceTools(dir),
+	}
+	if withMemory {
+		if err := cfg.Memory.Ensure(in.MemoryProject); err != nil {
+			return protocol.TurnOutput{}, err
+		}
+		if opts.MCPConfig, err = cfg.Memory.MCPConfig(in.MemoryProject); err != nil {
+			return protocol.TurnOutput{}, err
+		}
+		opts.AllowedTools = append(opts.AllowedTools, memory.AllowedTools...)
+		opts.DisallowedTools = memory.DisallowedTools
 	}
 
 	out, err := runOnce(ctx, opts, in.Text, emit)
@@ -74,6 +100,13 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, channel str
 		return out, err
 	}
 	return out, nil
+}
+
+// WorkspaceDir is the user's workspace: claude's working directory, where
+// its file tools and sandboxed commands may write. It is absolute, because
+// the workspace permission rules name it.
+func WorkspaceDir(cfg Config, userID string) (string, error) {
+	return filepath.Abs(filepath.Join(cfg.DataDir, "users", userID, "workspace"))
 }
 
 func runOnce(ctx context.Context, opts claude.Options, prompt string, emit Emit) (protocol.TurnOutput, error) {

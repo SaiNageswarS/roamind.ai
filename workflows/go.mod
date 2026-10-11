@@ -97,6 +97,7 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 	modernc.org/sqlite v1.60.1 // indirect
+	roamind.ai/memory v0.0.0
 )
 
 replace roamind.ai/protocol => ../protocol
@@ -104,3 +105,5 @@ replace roamind.ai/protocol => ../protocol
 replace roamind.ai/agent => ../agent
 
 replace roamind.ai/channels => ../channels
+
+replace roamind.ai/memory => ../memory

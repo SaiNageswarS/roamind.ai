@@ -2,7 +2,7 @@
 #
 # Prerequisites (one-shot, see ./build.sh):
 #   ./build.sh hatchet-env   Hatchet server + Slack webhook + Funnel
-#   ./build.sh all           bin/caddy, bin/worker, bin/memory
+#   ./build.sh all           bin/caddy, bin/worker
 #
 # Processes that talk to Hatchet run through deploy/bin/with-hatchet.sh, which
 # loads the Hatchet CLI profile created by `hatchet server start`.
@@ -23,16 +23,46 @@ processes:
       restart: on_failure
       backoff_seconds: 5
 
+  embed:
+    description: Qwen3-Embedding-0.6B on the GPU for Basic Memory search (127.0.0.1:8800)
+    command: deploy/bin/run-vllm.sh embed
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 8800
+        path: /health
+      initial_delay_seconds: 10
+      period_seconds: 5
+      failure_threshold: 60
+    availability:
+      restart: on_failure
+      backoff_seconds: 10
+
+  rerank:
+    description: Qwen3-Reranker-0.6B on the GPU for Basic Memory search (127.0.0.1:8801)
+    command: deploy/bin/run-vllm.sh rerank
+    # Start after embed: each vLLM sizes itself from the GPU memory it sees.
+    depends_on:
+      embed:
+        condition: process_healthy
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 8801
+        path: /health
+      initial_delay_seconds: 10
+      period_seconds: 5
+      failure_threshold: 60
+    availability:
+      restart: on_failure
+      backoff_seconds: 10
+
   worker:
     description: Roamind Hatchet worker (chat-turn)
     command: deploy/bin/with-hatchet.sh ./bin/worker
-    availability:
-      restart: on_failure
-      backoff_seconds: 5
-
-  memory:
-    description: Long-term memory service (phase 2 placeholder)
-    command: ./bin/memory
+    depends_on:
+      rerank:
+        condition: process_healthy
     availability:
       restart: on_failure
       backoff_seconds: 5

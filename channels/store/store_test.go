@@ -69,3 +69,37 @@ func TestMarkEvent(t *testing.T) {
 		}
 	}
 }
+
+func TestAssignMemoryProject(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	for _, u := range []User{
+		{ID: "a", Email: "a@x", DisplayName: "Sai", SlackTeamID: "T", SlackUserID: "U1"},
+		{ID: "b", Email: "b@x", DisplayName: "Sai", SlackTeamID: "T", SlackUserID: "U2"},
+	} {
+		if err := s.UpsertSlackUser(ctx, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if u, _ := s.UserBySlack(ctx, "T", "U1"); u.MemoryProject != "" {
+		t.Fatalf("unassigned project = %q", u.MemoryProject)
+	}
+	pa, err := s.AssignMemoryProject(ctx, "a", "bm-u-sai")
+	if err != nil || pa != "bm-u-sai-1" {
+		t.Fatalf("a = %q, %v", pa, err)
+	}
+	pb, err := s.AssignMemoryProject(ctx, "b", "bm-u-sai")
+	if err != nil || pb != "bm-u-sai-2" {
+		t.Fatalf("b = %q, %v", pb, err)
+	}
+	// Sticky, whatever the base, and read back with the user row.
+	if p, _ := s.AssignMemoryProject(ctx, "a", "bm-u-renamed"); p != "bm-u-sai-1" {
+		t.Fatalf("a again = %q", p)
+	}
+	if err := s.UpsertSlackUser(ctx, User{ID: "a", Email: "a@x", DisplayName: "Renamed", SlackTeamID: "T", SlackUserID: "U1"}); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := s.UserBySlack(ctx, "T", "U1"); u.MemoryProject != "bm-u-sai-1" {
+		t.Fatalf("user row project = %q", u.MemoryProject)
+	}
+}

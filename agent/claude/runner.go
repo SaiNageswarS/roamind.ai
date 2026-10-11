@@ -26,33 +26,47 @@ type Options struct {
 	// SystemPrompt replaces claude's default (coding-agent) system prompt, which
 	// would otherwise describe tools the agent does not have.
 	SystemPrompt string
+	// Tools are the built-in tools to enable (--tools); empty disables them all.
+	Tools []string
+	// Settings is a JSON string or file path for --settings, e.g. the sandbox
+	// and permission rules. It is honored even though user, project and local
+	// settings files are ignored.
+	Settings string
 	// MCPConfig is a JSON string or file path for --mcp-config.
 	MCPConfig string
-	// AllowedTools lists tools (e.g. mcp__roamind__memory_search) the model may
-	// call without a permission prompt. All built-in tools stay disabled.
+	// AllowedTools lists tools (e.g. Bash, mcp__memory) the model may call;
+	// in dontAsk mode everything else is denied.
 	AllowedTools []string
-	Env          []string
+	// DisallowedTools are removed from the model's view entirely.
+	DisallowedTools []string
+	Env             []string
 }
 
-// Args builds the command-line arguments. Built-in tools, user settings and
-// ambient MCP servers are always disabled: the model only gets the tools we
-// hand it.
+// Args builds the command-line arguments. User settings and ambient MCP
+// servers are always ignored, and anything not explicitly allowed is denied
+// (dontAsk): the model only gets the tools we hand it.
 func (o Options) Args() []string {
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
 		"--verbose",
 		"--include-partial-messages",
-		"--tools", "",
+		"--tools", strings.Join(o.Tools, ","),
 		"--strict-mcp-config",
 		"--setting-sources", "",
 		"--permission-mode", "dontAsk",
+	}
+	if o.Settings != "" {
+		args = append(args, "--settings", o.Settings)
 	}
 	if o.MCPConfig != "" {
 		args = append(args, "--mcp-config", o.MCPConfig)
 	}
 	if len(o.AllowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(o.AllowedTools, ","))
+	}
+	if len(o.DisallowedTools) > 0 {
+		args = append(args, "--disallowedTools", strings.Join(o.DisallowedTools, ","))
 	}
 	if o.SystemPrompt != "" {
 		args = append(args, "--system-prompt", o.SystemPrompt)

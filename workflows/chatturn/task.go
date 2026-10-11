@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
@@ -15,6 +16,7 @@ import (
 	"roamind.ai/channels/identity"
 	"roamind.ai/channels/slack"
 	"roamind.ai/channels/store"
+	"roamind.ai/memory"
 	"roamind.ai/protocol"
 )
 
@@ -28,6 +30,7 @@ const ConcurrencyExpression = `input.event.channel + ':' + (has(input.event.thre
 // SlackAPI is the Slack client surface the task needs.
 type SlackAPI interface {
 	slack.API
+	slack.FileAPI
 	GetUserInfoContext(ctx context.Context, user string, options ...slackapi.GetUserInfoOption) (*slackapi.User, error)
 }
 
@@ -120,11 +123,27 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ou
 	if err != nil {
 		return out, fmt.Errorf("post placeholder: %w", err)
 	}
+	text := slack.CleanText(ev.Text)
+	if len(ev.Files) > 0 {
+		dir, err := agent.WorkspaceDir(d.Agent, user.ID)
+		if err != nil {
+			return out, err
+		}
+		saved := slack.SaveFiles(ctx, d.Slack, ev.Files, dir)
+		for _, f := range saved {
+			if f.Problem != "" {
+				log.Warn("file not saved", "name", f.Name, "problem", f.Problem)
+			}
+		}
+		text = strings.TrimSpace(text + "\n\n" + slack.AttachmentNote(saved))
+	}
 	turn, runErr := agent.RunTurn(ctx, d.Agent, protocol.TurnInput{
-		UserID:    user.ID,
-		SessionID: sessionID,
-		Text:      slack.CleanText(ev.Text),
-		UserName:  user.DisplayName,
+		UserID:        user.ID,
+		SessionID:     sessionID,
+		Text:          text,
+		UserName:      user.DisplayName,
+		UserEmail:     user.Email,
+		MemoryProject: user.MemoryProject,
 	}, "Slack", up.Apply)
 
 	note := ""
@@ -180,6 +199,9 @@ func (d Deps) resolveUser(ctx context.Context, env slack.Envelope) (*store.User,
 			SlackTeamID: team, SlackUserID: slackUser,
 		}
 		if err := d.Store.UpsertSlackUser(ctx, *u); err != nil {
+			return nil, "", err
+		}
+		if u.MemoryProject, err = d.Store.AssignMemoryProject(ctx, u.ID, memory.ProjectBase(u.DisplayName)); err != nil {
 			return nil, "", err
 		}
 	}

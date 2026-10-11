@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -21,6 +22,7 @@ CREATE TABLE IF NOT EXISTS users (
 	slack_team_id    TEXT,
 	slack_user_id    TEXT,
 	telegram_user_id TEXT UNIQUE,
+	memory_project   TEXT UNIQUE, -- Basic Memory project, bm-u-<name>-<idx>
 	created_at       INTEGER NOT NULL,
 	updated_at       INTEGER NOT NULL,
 	UNIQUE (slack_team_id, slack_user_id)
@@ -69,15 +71,18 @@ type User struct {
 	DisplayName string
 	SlackTeamID string
 	SlackUserID string
+	// MemoryProject is the user's Basic Memory project, assigned once by
+	// AssignMemoryProject; empty until then.
+	MemoryProject string
 }
 
 // UserBySlack finds the user linked to a Slack identity, or nil.
 func (s *Store) UserBySlack(ctx context.Context, teamID, slackUserID string) (*User, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, email, display_name, slack_team_id, slack_user_id FROM users
+		`SELECT id, email, display_name, slack_team_id, slack_user_id, COALESCE(memory_project, '') FROM users
 		 WHERE slack_team_id = ? AND slack_user_id = ?`, teamID, slackUserID)
 	var u User
-	err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.SlackTeamID, &u.SlackUserID)
+	err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.SlackTeamID, &u.SlackUserID, &u.MemoryProject)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -98,6 +103,38 @@ func (s *Store) UpsertSlackUser(ctx context.Context, u User) error {
 			updated_at = excluded.updated_at`,
 		u.ID, u.Email, u.DisplayName, u.SlackTeamID, u.SlackUserID, now, now)
 	return err
+}
+
+// AssignMemoryProject gives the user a Basic Memory project named base-<n>,
+// with the smallest n no other user has, and returns it. It is called when
+// the user is created; afterwards the name is read with the user row, and
+// it sticks even if the user is renamed.
+func (s *Store) AssignMemoryProject(ctx context.Context, userID, base string) (string, error) {
+	var cur sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT memory_project FROM users WHERE id = ?`, userID).Scan(&cur)
+	if err != nil {
+		return "", err
+	}
+	if cur.Valid && cur.String != "" {
+		return cur.String, nil
+	}
+	for n := 1; n < 1000; n++ {
+		name := fmt.Sprintf("%s-%d", base, n)
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE users SET memory_project = ? WHERE id = ? AND memory_project IS NULL`, name, userID)
+		if err != nil {
+			if strings.Contains(err.Error(), "UNIQUE") {
+				continue // taken by another user
+			}
+			return "", err
+		}
+		if k, _ := res.RowsAffected(); k == 1 {
+			return name, nil
+		}
+		// Assigned concurrently; use that.
+		return s.AssignMemoryProject(ctx, userID, base)
+	}
+	return "", fmt.Errorf("no free memory project name for %s", base)
 }
 
 // Thread maps a chat thread to a claude session.

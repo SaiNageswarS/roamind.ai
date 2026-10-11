@@ -28,6 +28,8 @@ type Event struct {
 	TS          string `json:"ts"`
 	ThreadTS    string `json:"thread_ts,omitempty"`
 	Team        string `json:"team,omitempty"`
+	// Files are shared with the message (subtype file_share in DMs).
+	Files []File `json:"files,omitempty"`
 }
 
 // ThreadTS is the timestamp of the thread root; a top-level message starts
@@ -40,10 +42,12 @@ func (e Event) RootTS() string {
 }
 
 // EventKeyExpression is the CEL expression configured on the Hatchet Slack
-// webhook. Chat messages (mentions, and plain DMs to the bot) get the key
-// "slack:chat"; everything else, including the bot's own messages, is routed
-// to "slack:ignored:<type>" so it never starts a run.
-const EventKeyExpression = `has(input.event) && !has(input.event.bot_id) && !has(input.event.subtype) && ` +
+// webhook. Chat messages (mentions, and DMs to the bot, with or without
+// shared files) get the key "slack:chat"; everything else, including the
+// bot's own messages and edits, is routed to "slack:ignored:<type>" so it
+// never starts a run.
+const EventKeyExpression = `has(input.event) && !has(input.event.bot_id) && ` +
+	`(!has(input.event.subtype) || input.event.subtype == 'file_share') && ` +
 	`(input.event.type == 'app_mention' || (input.event.type == 'message' && has(input.event.channel_type) && input.event.channel_type == 'im')) ` +
 	`? 'slack:chat' : 'slack:ignored:' + (has(input.event) ? input.event.type : input.type)`
 
@@ -53,7 +57,7 @@ const ChatEventKey = "slack:chat"
 // IsChat mirrors EventKeyExpression in Go, as a second line of defence.
 func (e Envelope) IsChat() bool {
 	ev := e.Event
-	if ev.BotID != "" || ev.Subtype != "" || ev.User == "" {
+	if ev.BotID != "" || (ev.Subtype != "" && ev.Subtype != "file_share") || ev.User == "" {
 		return false
 	}
 	return ev.Type == "app_mention" || (ev.Type == "message" && ev.ChannelType == "im")

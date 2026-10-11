@@ -36,8 +36,13 @@ type Message struct {
 	Content []ContentBlock `json:"content"`
 }
 
-// UnmarshalJSON accepts content as either a string or a block array.
+// UnmarshalJSON accepts content as either a string or a block array. A
+// message that is itself a string (system events such as permission_denied
+// carry a human-readable "message") decodes as empty.
 func (m *Message) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '"' {
+		return nil
+	}
 	var raw struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`

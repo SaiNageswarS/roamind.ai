@@ -2,6 +2,7 @@ package chatturn
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,23 @@ func (f *fakeSlack) UpdateMessageContext(_ context.Context, _, ts string, _ ...s
 	return "", ts, "", nil
 }
 
+// files maps download URLs to their content.
+var files = map[string]string{"https://files.slack.com/paper.pdf": "%PDF-1.4 fake"}
+
+func (f *fakeSlack) GetFileInfoContext(_ context.Context, id string, _, _ int) (*slackapi.File, []slackapi.Comment, *slackapi.Paging, error) {
+	return &slackapi.File{ID: id, Name: "../../notes.txt", Mimetype: "text/plain", Size: 5,
+		URLPrivateDownload: "https://files.slack.com/notes"}, nil, nil, nil
+}
+
+func (f *fakeSlack) GetFileContext(_ context.Context, url string, w io.Writer) error {
+	body, ok := files[url]
+	if !ok {
+		body = "hello"
+	}
+	_, err := io.WriteString(w, body)
+	return err
+}
+
 func (f *fakeSlack) GetUserInfoContext(_ context.Context, user string, _ ...slackapi.GetUserInfoOption) (*slackapi.User, error) {
 	u := &slackapi.User{ID: user, RealName: "Test " + user}
 	u.Profile.Email = f.emails[user]
@@ -57,7 +75,7 @@ func fakeClaude(t *testing.T) (bin, argsLog string) {
 	bin = filepath.Join(dir, "claude")
 	// One log line per invocation; the system prompt's newlines are flattened.
 	script := "#!/bin/sh\nprintf '%s ' \"$@\" | tr '\\n' ' ' >> " + argsLog + "\necho >> " + argsLog +
-		"\ncat > /dev/null\ncat " + fixture + "\n"
+		"\ncat >> " + filepath.Join(dir, "stdin.log") + "\ncat " + fixture + "\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -136,6 +154,36 @@ func TestProcessRefusals(t *testing.T) {
 		out, err := d.Process(ctx, "r", c.env)
 		if err != nil || !strings.Contains(out.Skipped, c.want) {
 			t.Errorf("want skip %q, got out=%+v err=%v", c.want, out, err)
+		}
+	}
+}
+
+func TestProcessSavesSharedFiles(t *testing.T) {
+	ctx := context.Background()
+	d, _, argsLog := setup(t)
+	env := slack.Envelope{TeamID: "T1", EventID: "EvF", Event: slack.Event{
+		Type: "message", Subtype: "file_share", ChannelType: "im", User: "U1",
+		Text: "summarize this", Channel: "D1", TS: "2.0",
+		Files: []slack.File{
+			{ID: "F1", Name: "paper.pdf", Mimetype: "application/pdf", Size: 13, URLPrivateDownload: "https://files.slack.com/paper.pdf"},
+			{ID: "F2", FileAccess: "check_file_info"}, // details via files.info; hostile name
+			{ID: "F3", Name: "huge.mov", Size: slack.MaxFileSize + 1, URLPrivateDownload: "https://files.slack.com/huge"},
+		},
+	}}
+	if out, err := d.Process(ctx, "runF", env); err != nil || out.Skipped != "" {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+	ws, _ := agent.WorkspaceDir(d.Agent, identity.UserID("owner@x.com"))
+	if b, err := os.ReadFile(filepath.Join(ws, "uploads", "paper.pdf")); err != nil || string(b) != "%PDF-1.4 fake" {
+		t.Fatalf("paper.pdf = %q, %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "uploads", "notes.txt")); err != nil {
+		t.Fatalf("files.info file not saved inside uploads: %v", err)
+	}
+	stdin, _ := os.ReadFile(filepath.Join(filepath.Dir(argsLog), "stdin.log"))
+	for _, want := range []string{"summarize this", "uploads/paper.pdf (application/pdf, 13 B)", "uploads/notes.txt", "huge.mov: not saved, larger than 50 MB"} {
+		if !strings.Contains(string(stdin), want) {
+			t.Errorf("prompt lacks %q:\n%s", want, stdin)
 		}
 	}
 }

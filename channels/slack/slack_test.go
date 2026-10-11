@@ -131,3 +131,25 @@ func TestUpdaterSpillsIntoReplies(t *testing.T) {
 		t.Fatal("placeholder not updated")
 	}
 }
+
+func TestIsChatFileShare(t *testing.T) {
+	dm := Envelope{Event: Event{Type: "message", ChannelType: "im", User: "U1", Subtype: "file_share"}}
+	if !dm.IsChat() {
+		t.Fatal("file_share DM not treated as chat")
+	}
+	dm.Event.Subtype = "message_changed"
+	if dm.IsChat() {
+		t.Fatal("edit treated as chat")
+	}
+}
+
+func TestSafeName(t *testing.T) {
+	for in, want := range map[string]string{
+		"../../etc/passwd": "passwd", "report v2.pdf": "report v2.pdf", "..hidden": "hidden",
+		"a/b\\c?.txt": "b_c_.txt", "": "file",
+	} {
+		if got := safeName(in); got != want {
+			t.Errorf("safeName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

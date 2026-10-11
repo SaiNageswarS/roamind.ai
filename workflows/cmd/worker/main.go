@@ -16,6 +16,7 @@ import (
 	"roamind.ai/agent"
 	"roamind.ai/channels/identity"
 	"roamind.ai/channels/store"
+	"roamind.ai/memory"
 	"roamind.ai/workflows/chatturn"
 )
 
@@ -47,6 +48,16 @@ func run() error {
 	}
 	allow := identity.ParseAllowlist(os.Getenv("ROAMIND_ALLOWED_EMAILS"))
 
+	// Long-term memory needs Basic Memory's bm CLI; without it turns run
+	// without memory.
+	mem, err := memory.New(filepath.Join(dataDir, "memory"), os.Getenv("ROAMIND_BM_BIN"))
+	if err != nil {
+		slog.Warn("memory disabled", "err", err)
+		mem = nil
+	} else {
+		mem.Search = memory.DefaultSearch
+	}
+
 	client, err := hatchet.NewClient()
 	if err != nil {
 		return err
@@ -59,6 +70,7 @@ func run() error {
 			DataDir:      dataDir,
 			ClaudeBinary: os.Getenv("ROAMIND_CLAUDE_BIN"),
 			Model:        os.Getenv("ROAMIND_MODEL"),
+			Memory:       mem,
 		},
 	})
 

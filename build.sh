@@ -12,9 +12,11 @@
 #   funnel        expose only the Slack webhook path publicly via Tailscale Funnel
 #   caddy         build ./bin/caddy with the Tailscale plugin
 #   worker        build ./bin/worker
-#   memory        build ./bin/memory
-#   all           build caddy, worker and memory
+#   all           build caddy and worker
+#   vllm          install vLLM and download the GPU search models
 #   test | vet    run go test / go vet in every module
+#   bm [project] <args>   run Basic Memory's CLI against a user's project
+#                 (default: the only project), e.g. ./build.sh bm project info
 #   turn <msg>    run one agent turn from the terminal
 set -euo pipefail
 
@@ -29,6 +31,8 @@ HATCHET_VERSION="v0.110.22" # keep in step with the Go SDK in workflows/go.mod
 CADDY_VERSION="v2.11.7"
 CADDY_TAILSCALE="de41b249af4f"
 XCADDY_VERSION="v0.4.7"
+VLLM_VERSION="0.30.0"
+SEARCH_MODELS=(Qwen/Qwen3-Embedding-0.6B Qwen/Qwen3-Reranker-0.6B)
 
 load_env() {
   if [[ -f "$ENV_FILE" ]]; then
@@ -86,19 +90,41 @@ cmd_worker() {
   go build -o bin/worker ./workflows/cmd/worker
 }
 
-cmd_memory() {
-  log "building bin/memory"
-  go build -o bin/memory ./memory/cmd/memory
+cmd_vllm() {
+  log "installing vLLM $VLLM_VERSION"
+  # A uv-managed Python ships the headers Triton compiles against.
+  uv tool install "vllm==$VLLM_VERSION" --python 3.12 --managed-python
+  for m in "${SEARCH_MODELS[@]}"; do
+    log "downloading $m"
+    "$(uv tool dir)/vllm/bin/hf" download "$m" >/dev/null
+  done
 }
 
 cmd_all() {
   cmd_caddy
   cmd_worker
-  cmd_memory
 }
 
 each_module() {
   for m in "${MODULES[@]}"; do (cd "$m" && go "$@" ./...); done
+}
+
+cmd_bm() {
+  local users="${ROAMIND_DATA_DIR:-./data}/memory/users" project=""
+  if [[ $# -gt 0 && -d "$users/$1" ]]; then
+    project="$1"
+    shift
+  else
+    local all=()
+    [[ -d "$users" ]] && mapfile -t all < <(ls "$users")
+    if [[ ${#all[@]} -ne 1 ]]; then
+      echo "usage: ./build.sh bm <project> <bm args>; projects: ${all[*]:-none}" >&2
+      exit 1
+    fi
+    project="${all[0]}"
+  fi
+  # Scoped to this command, so the user's own bm and MCP setups never see it.
+  BASIC_MEMORY_CONFIG_DIR="$(cd "$users/$project/config" && pwd)" bm "$@"
 }
 
 cmd_turn() {
@@ -122,10 +148,11 @@ main() {
     funnel) cmd_funnel ;;
     caddy) cmd_caddy ;;
     worker) cmd_worker ;;
-    memory) cmd_memory ;;
     all) cmd_all ;;
+    vllm) cmd_vllm ;;
     test) each_module test ;;
     vet) each_module vet ;;
+    bm) cmd_bm "$@" ;;
     turn) cmd_turn "$@" ;;
     -h | --help | help) usage ;;
     *)

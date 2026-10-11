@@ -8,6 +8,12 @@ type TurnInput struct {
 	Text      string `json:"text"`
 	// UserName is shown to the model so it can address the user.
 	UserName string `json:"user_name,omitempty"`
+	// UserEmail is the user's verified email (their identity), shown to the
+	// model as theirs.
+	UserEmail string `json:"user_email,omitempty"`
+	// MemoryProject is the user's Basic Memory project; empty runs the turn
+	// without memory.
+	MemoryProject string `json:"memory_project,omitempty"`
 }
 
 // TurnOutput is the final result of a turn.

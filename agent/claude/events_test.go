@@ -3,6 +3,7 @@ package claude
 import (
 	"os"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -49,5 +50,18 @@ func TestArgs(t *testing.T) {
 	i := slices.Index(args, "--tools")
 	if args[i+1] != "" {
 		t.Fatalf("--tools should be empty, got %q", args[i+1])
+	}
+}
+
+func TestDecodeSystemStringMessage(t *testing.T) {
+	in := `{"type":"system","subtype":"permission_denied","tool_name":"mcp__memory__x","message":"Permission denied"}` + "\n" +
+		`{"type":"result","subtype":"success"}` + "\n"
+	var types []string
+	err := Decode(strings.NewReader(in), func(ev Event) error {
+		types = append(types, ev.Type)
+		return nil
+	})
+	if err != nil || len(types) != 2 {
+		t.Fatalf("types = %v, err = %v", types, err)
 	}
 }
