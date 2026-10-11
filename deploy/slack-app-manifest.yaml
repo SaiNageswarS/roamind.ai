@@ -21,6 +21,8 @@ oauth_config:
       - channels:join
       - groups:history
       - groups:read
+      # Goal channels: create private channels and invite their owner
+      - groups:write
       - im:history
       - im:read
       - im:write
@@ -50,7 +52,8 @@ oauth_config:
 settings:
   event_subscriptions:
     request_url: https://REPLACE-ME.ts.net/api/v1/stable/tenants/TENANT/webhooks/slack
-    # Only app_mention and message.im start runs (see channels/slack.EventKeyExpression);
+    # Only app_mention, message.im and message.groups start runs (see
+    # channels/slack.EventKeyExpression);
     # the rest arrive as slack:ignored:* events, ready for later features.
     bot_events:
       - app_mention

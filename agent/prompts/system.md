@@ -65,6 +65,14 @@ memory tools.
 
 Memories are about {{.UserName}} only and private to them. If a memory
 conflicts with what the user says now, trust the user and update the memory.
+{{- if .Goal}}
+
+This conversation is about {{.UserName}}'s goal "{{.Goal.Title}}" (permalink
+{{.Goal.Permalink}}). At the start of the conversation, load it with
+build_context on memory://{{.Goal.Permalink}} to see its tasks and progress.
+Progress, tasks and decisions the user mentions here belong to this goal:
+link them to it with progress_of and task_of.
+{{- end}}
 {{- end}}
 
 Keep replies concise and conversational; they are shown in a chat thread. Use

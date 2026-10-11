@@ -15,6 +15,7 @@ import (
 	"roamind.ai/channels/identity"
 	"roamind.ai/channels/slack"
 	"roamind.ai/channels/store"
+	"roamind.ai/memory"
 )
 
 type fakeSlack struct {
@@ -184,6 +185,68 @@ func TestProcessSavesSharedFiles(t *testing.T) {
 	for _, want := range []string{"summarize this", "uploads/paper.pdf (application/pdf, 13 B)", "uploads/notes.txt", "huge.mov: not saved, larger than 50 MB"} {
 		if !strings.Contains(string(stdin), want) {
 			t.Errorf("prompt lacks %q:\n%s", want, stdin)
+		}
+	}
+}
+
+func TestProcessGoalChannel(t *testing.T) {
+	ctx := context.Background()
+	d, _, argsLog := setup(t)
+	mem, err := memory.New(t.TempDir(), "true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Agent.Memory = mem
+	var after []string
+	d.AfterTurn = func(_ context.Context, u *store.User) error {
+		after = append(after, u.MemoryProject)
+		return nil
+	}
+
+	// First contact creates the owner; then their goal gets channel G1.
+	if _, err := d.Process(ctx, "r0", mention("Ev0", "U1", "1.0", "")); err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 || after[0] == "" {
+		t.Fatalf("AfterTurn calls = %v", after)
+	}
+	owner := identity.UserID("owner@x.com")
+	err = d.Store.SaveGoalChannel(ctx, store.GoalChannel{
+		UserID: owner, GoalPermalink: "bm-u-test-u1-1/goals/learn-jax", GoalTitle: "Learn JAX",
+		Provider: "slack", ChannelID: "G1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg := func(id, user, channel, ts string) slack.Envelope {
+		return slack.Envelope{TeamID: "T1", EventID: id, Event: slack.Event{
+			Type: "message", ChannelType: "group", User: user, Text: "finished the vmap chapter", Channel: channel, TS: ts,
+		}}
+	}
+	inGoal := func(m slack.Envelope) slack.Envelope { m.Event.Channel = "G1"; return m }
+	cases := []struct {
+		name string
+		env  slack.Envelope
+		skip string // "" means a turn runs
+	}{
+		{"owner message in goal channel", msg("Ev1", "U1", "G1", "2.0"), ""},
+		{"owner mention in goal channel", inGoal(mention("Ev2", "U1", "2.1", "")), "handled as its message"},
+		{"other user's message in goal channel", msg("Ev3", "U2", "G1", "2.2"), "not addressed"},
+		{"other user's mention in goal channel", inGoal(mention("Ev4", "U2", "2.3", "")), ""},
+		{"message in another private channel", msg("Ev5", "U1", "G9", "2.4"), "not addressed"},
+	}
+	for _, c := range cases {
+		os.Remove(argsLog)
+		out, err := d.Process(ctx, "r", c.env)
+		if err != nil || !strings.Contains(out.Skipped, c.skip) || (c.skip == "") != (out.Skipped == "") {
+			t.Errorf("%s: want skip %q, got out=%+v err=%v", c.name, c.skip, out, err)
+			continue
+		}
+		args, _ := os.ReadFile(argsLog)
+		goalPrompt := strings.Contains(string(args), "memory://bm-u-test-u1-1/goals/learn-jax")
+		if wantGoal := c.name == "owner message in goal channel"; goalPrompt != wantGoal {
+			t.Errorf("%s: goal in prompt = %v, want %v", c.name, goalPrompt, wantGoal)
 		}
 	}
 }

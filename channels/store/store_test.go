@@ -103,3 +103,33 @@ func TestAssignMemoryProject(t *testing.T) {
 		t.Fatalf("user row project = %q", u.MemoryProject)
 	}
 }
+
+func TestGoalChannels(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	if err := s.UpsertSlackUser(ctx, User{ID: "h1", Email: "a@x.com", SlackTeamID: "T1", SlackUserID: "U1"}); err != nil {
+		t.Fatal(err)
+	}
+	if u, err := s.UserByID(ctx, "h1"); err != nil || u == nil || u.SlackUserID != "U1" {
+		t.Fatalf("UserByID = %+v %v", u, err)
+	}
+	if gc, err := s.GoalChannelByChannel(ctx, "slack", "G1"); err != nil || gc != nil {
+		t.Fatalf("gc=%v err=%v", gc, err)
+	}
+	gc := GoalChannel{UserID: "h1", GoalPermalink: "p/goals/jax", GoalTitle: "Learn JAX", Provider: "slack", ChannelID: "G1"}
+	if err := s.SaveGoalChannel(ctx, gc); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveGoalChannel(ctx, gc); err == nil {
+		t.Fatal("duplicate goal channel saved")
+	}
+	got, err := s.GoalChannelByChannel(ctx, "slack", "G1")
+	gc.OwnerSlackUserID = "U1"
+	if err != nil || got == nil || *got != gc {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+	have, err := s.GoalsWithChannel(ctx, "h1", "slack")
+	if err != nil || len(have) != 1 || !have["p/goals/jax"] {
+		t.Fatalf("have=%v err=%v", have, err)
+	}
+}

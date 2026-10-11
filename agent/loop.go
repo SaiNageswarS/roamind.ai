@@ -64,6 +64,7 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, channel str
 		// Evidence notes record where a fact came from, e.g. "slack".
 		"Source": strings.ToLower(orDefault(channel, "chat")),
 		"Memory": withMemory,
+		"Goal":   in.Goal,
 	})
 	if err != nil {
 		return protocol.TurnOutput{}, err

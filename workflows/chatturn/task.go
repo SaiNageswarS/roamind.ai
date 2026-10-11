@@ -40,6 +40,9 @@ type Deps struct {
 	Slack     SlackAPI
 	Allowlist identity.Allowlist
 	Agent     agent.Config
+	// AfterTurn, when set, runs after each turn with memory, e.g. to give
+	// new goals their channels. Its errors are logged.
+	AfterTurn func(ctx context.Context, u *store.User) error
 }
 
 // Output is recorded as the run's result in Hatchet.
@@ -94,6 +97,15 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ou
 		}
 	}
 
+	goal, skip, err := d.route(ctx, ev)
+	if err != nil {
+		return out, err
+	}
+	if skip != "" {
+		out.Skipped = skip
+		return out, nil
+	}
+
 	user, refusal, err := d.resolveUser(ctx, env)
 	if err != nil {
 		return out, err
@@ -144,6 +156,7 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ou
 		UserName:      user.DisplayName,
 		UserEmail:     user.Email,
 		MemoryProject: user.MemoryProject,
+		Goal:          goal,
 	}, "Slack", up.Apply)
 
 	note := ""
@@ -165,11 +178,41 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ou
 			log.Error("save thread", "err", err)
 		}
 	}
+	if d.AfterTurn != nil && user.MemoryProject != "" {
+		if err := d.AfterTurn(finishCtx, user); err != nil {
+			log.Error("after turn", "err", err)
+		}
+	}
 	out.SessionID, out.CostUSD, out.Reset = turn.SessionID, turn.CostUSD, turn.SessionReset
 	if runErr != nil {
 		return out, runErr
 	}
 	return out, nil
+}
+
+// route decides whether a chat event starts a turn, and which goal it is
+// about. In a goal's channel, every message from the goal's owner is a turn
+// about that goal (their @mentions there arrive twice, so the mention copy
+// is skipped); elsewhere, and for anyone else, private-channel messages
+// start a turn only through their @mention copy.
+func (d Deps) route(ctx context.Context, ev slack.Event) (*protocol.GoalRef, string, error) {
+	var gc *store.GoalChannel
+	if ev.ChannelType == "group" || ev.Type == "app_mention" {
+		var err error
+		if gc, err = d.Store.GoalChannelByChannel(ctx, "slack", ev.Channel); err != nil {
+			return nil, "", err
+		}
+	}
+	owner := gc != nil && gc.OwnerSlackUserID == ev.User
+	switch {
+	case ev.Type == "message" && ev.ChannelType == "group" && !owner:
+		return nil, "not addressed to the agent", nil
+	case ev.Type == "app_mention" && owner:
+		return nil, "mention in own goal channel, handled as its message", nil
+	case owner:
+		return &protocol.GoalRef{Title: gc.GoalTitle, Permalink: gc.GoalPermalink}, "", nil
+	}
+	return nil, "", nil
 }
 
 // resolveUser maps the Slack sender to a user, creating it from the Slack

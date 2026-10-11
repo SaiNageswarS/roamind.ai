@@ -18,6 +18,7 @@ import (
 	"roamind.ai/channels/store"
 	"roamind.ai/memory"
 	"roamind.ai/workflows/chatturn"
+	"roamind.ai/workflows/goalchannels"
 )
 
 func main() {
@@ -62,9 +63,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	sc := slackapi.New(token)
+	gcDeps := goalchannels.Deps{Store: st, Slack: sc, Memory: mem}
+	goals := goalchannels.New(client, gcDeps)
+	var afterTurn func(context.Context, *store.User) error
+	if mem != nil {
+		afterTurn = goalchannels.Trigger(goals, gcDeps)
+	}
 	task := chatturn.New(client, chatturn.Deps{
 		Store:     st,
-		Slack:     slackapi.New(token),
+		Slack:     sc,
 		Allowlist: allow,
 		Agent: agent.Config{
 			DataDir:      dataDir,
@@ -72,10 +80,11 @@ func run() error {
 			Model:        os.Getenv("ROAMIND_MODEL"),
 			Memory:       mem,
 		},
+		AfterTurn: afterTurn,
 	})
 
 	slots, _ := strconv.Atoi(envOr("ROAMIND_WORKER_SLOTS", "4"))
-	w, err := client.NewWorker("roamind-worker", hatchet.WithWorkflows(task), hatchet.WithSlots(slots))
+	w, err := client.NewWorker("roamind-worker", hatchet.WithWorkflows(task, goals), hatchet.WithSlots(slots))
 	if err != nil {
 		return err
 	}

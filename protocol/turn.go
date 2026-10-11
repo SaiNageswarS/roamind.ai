@@ -14,6 +14,15 @@ type TurnInput struct {
 	// MemoryProject is the user's Basic Memory project; empty runs the turn
 	// without memory.
 	MemoryProject string `json:"memory_project,omitempty"`
+	// Goal is the memory note the conversation is about (in a goal's
+	// channel); nil for general conversations.
+	Goal *GoalRef `json:"goal,omitempty"`
+}
+
+// GoalRef names a goal note in the user's memory.
+type GoalRef struct {
+	Title     string `json:"title"`
+	Permalink string `json:"permalink"`
 }
 
 // TurnOutput is the final result of a turn.

@@ -1,5 +1,5 @@
 // Package store is the SQLite persistence for channels: user identities,
-// thread → claude session mapping and inbound event dedupe. Conversation
+// thread → claude session mapping, goal channels and inbound event dedupe. Conversation
 // content itself lives only in claude's session files.
 package store
 
@@ -36,6 +36,17 @@ CREATE TABLE IF NOT EXISTS threads (
 	created_at        INTEGER NOT NULL,
 	updated_at        INTEGER NOT NULL,
 	PRIMARY KEY (provider, channel_id, thread_ts)
+);
+-- One channel per goal, created by the harness; the agent never sees it.
+CREATE TABLE IF NOT EXISTS goal_channels (
+	user_id        TEXT NOT NULL REFERENCES users(id),
+	goal_permalink TEXT NOT NULL, -- Basic Memory permalink of the goal note
+	goal_title     TEXT NOT NULL,
+	provider       TEXT NOT NULL,
+	channel_id     TEXT NOT NULL,
+	created_at     INTEGER NOT NULL,
+	PRIMARY KEY (user_id, goal_permalink, provider),
+	UNIQUE (provider, channel_id)
 );
 CREATE TABLE IF NOT EXISTS inbound_events (
 	provider    TEXT NOT NULL,
@@ -81,6 +92,19 @@ func (s *Store) UserBySlack(ctx context.Context, teamID, slackUserID string) (*U
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, email, display_name, slack_team_id, slack_user_id, COALESCE(memory_project, '') FROM users
 		 WHERE slack_team_id = ? AND slack_user_id = ?`, teamID, slackUserID)
+	var u User
+	err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.SlackTeamID, &u.SlackUserID, &u.MemoryProject)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return &u, err
+}
+
+// UserByID finds a user by id, or nil.
+func (s *Store) UserByID(ctx context.Context, id string) (*User, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, email, display_name, COALESCE(slack_team_id, ''), COALESCE(slack_user_id, ''), COALESCE(memory_project, '') FROM users
+		 WHERE id = ?`, id)
 	var u User
 	err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.SlackTeamID, &u.SlackUserID, &u.MemoryProject)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -167,6 +191,58 @@ func (s *Store) SaveThread(ctx context.Context, t Thread) error {
 			claude_session_id = excluded.claude_session_id,
 			updated_at = excluded.updated_at`,
 		t.Provider, t.ChannelID, t.ThreadTS, t.UserID, t.ClaudeSessionID, now, now)
+	return err
+}
+
+// GoalChannel is the chat channel of one of a user's goals.
+type GoalChannel struct {
+	UserID, GoalPermalink, GoalTitle string
+	Provider, ChannelID              string
+	// OwnerSlackUserID is the goal owner's Slack user, read from users.
+	OwnerSlackUserID string
+}
+
+// GoalChannelByChannel returns the goal channel with this id, or nil when
+// the channel is not a goal's.
+func (s *Store) GoalChannelByChannel(ctx context.Context, provider, channelID string) (*GoalChannel, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT g.user_id, g.goal_permalink, g.goal_title, COALESCE(u.slack_user_id, '')
+		FROM goal_channels g JOIN users u ON u.id = g.user_id
+		WHERE g.provider = ? AND g.channel_id = ?`, provider, channelID)
+	gc := GoalChannel{Provider: provider, ChannelID: channelID}
+	err := row.Scan(&gc.UserID, &gc.GoalPermalink, &gc.GoalTitle, &gc.OwnerSlackUserID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return &gc, err
+}
+
+// GoalsWithChannel returns the permalinks of the user's goals that have a
+// channel on provider.
+func (s *Store) GoalsWithChannel(ctx context.Context, userID, provider string) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT goal_permalink FROM goal_channels WHERE user_id = ? AND provider = ?`, userID, provider)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	have := map[string]bool{}
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		have[p] = true
+	}
+	return have, rows.Err()
+}
+
+// SaveGoalChannel records the channel created for a goal.
+func (s *Store) SaveGoalChannel(ctx context.Context, gc GoalChannel) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO goal_channels (user_id, goal_permalink, goal_title, provider, channel_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		gc.UserID, gc.GoalPermalink, gc.GoalTitle, gc.Provider, gc.ChannelID, time.Now().Unix())
 	return err
 }
 
