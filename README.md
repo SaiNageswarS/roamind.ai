@@ -1,6 +1,23 @@
 # Roamind
 
-A multi-user personal agent. Phase 1 is chat over Slack. Slack sends events to Hatchet's Slack webhook. Each message becomes one `chat-turn` run, which drives `claude -p` and streams the reply into the Slack thread by editing a message. Phase 2 adds long-term memory: each user has a [Basic Memory](https://github.com/basicmachines-co/basic-memory) project, and claude talks to Basic Memory's own MCP server directly.
+A self-hosted, multi-user personal agent in Slack, organised around your goals.
+
+## What sets it apart
+
+- **Each goal gets its own channel.** Roamind recognises when you set out to build, learn or achieve something. It records that as a goal and opens a private Slack channel for it. Every conversation there is about that goal, with no @mention needed: Roamind loads the goal's tasks and progress first and files new updates under it. Your goals become a set of focused workspaces rather than one long chat.
+- **Memory is a typed knowledge graph you own.** Facts are saved as plain Markdown notes that follow schemas: Person, Place, Event, Preference, Goal, Progress and Task.
+  - The notes link to each other through typed relations, such as works at, task of and progress of.
+  - Every fact records its provenance: whether it was stated, inferred, observed or corrected, and on which channel and date.
+  - You can read, edit and version the notes like any other files.
+- **Isolation per user, not just per row.** Each user has their own memory database, their own Basic Memory configuration and their own workspace on disk. Shell commands run in a bubblewrap sandbox that can't see other users, the server's secrets or the home directory. Users are identified by a hash of their email and admitted only through an allowlist.
+- **Claude Code is the agent.** The agent loop is `claude -p`, so the agent gets Claude Code's full toolset: web search and fetch, file editing, reading PDFs and images, and shell commands in a persistent per-user workspace. Roamind contributes the orchestration, memory, identity and Slack integration.
+- **Durable, observable runs.** Every message is a [Hatchet](https://hatchet.run) run, serialized per thread. Background work, such as creating goal channels, runs as separate retried tasks. You can inspect, trace and replay every run in the Hatchet dashboard.
+- **Local semantic search.** Memory search is hybrid. Qwen3 embedding and re-ranking models are served by vLLM on your own GPU, so the memory index is built and searched on your machine.
+- **A minimal public surface.** The only public endpoint is the Slack webhook path, exposed through Tailscale Funnel. Dashboards are reachable only over your tailnet, including from your phone, and only for listed logins.
+
+## How it works
+
+Slack sends events to Hatchet's Slack webhook. Each message becomes one `chat-turn` run, which drives `claude -p` and streams the reply into the Slack thread by editing a message. Claude talks to Basic Memory's own MCP server, pinned to the user's project. After each turn, the harness checks whether any active goal still needs a channel.
 
 ```
 Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─event slack:chat─▶ worker: chat-turn
@@ -8,6 +25,8 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
                                                                                          ├ thread → claude session (SQLite)
                                                                                          └ claude -p --resume … → throttled chat.update
                                                                                               └ stdio: bm mcp --project bm-u-<name>-<n>
+                                                                                         └ after the turn: an active goal without a channel? ─▶ goal-channels run
+                                                                                              └ conversations.create (private #goal-<slug>) → invite owner → intro
 ```
 
 ## Modules (`go.work`)
@@ -16,9 +35,9 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
 |---|---|
 | `protocol` | Packet types (onyx-style), turn input/output, snapshot accumulator |
 | `agent` | `claude -p` runner and stream-json decoder; packet translation; Go port of onyx's citation processor; `cmd/turn` dev CLI |
-| `channels` | SQLite store (users, threads, inbound events), email-hash identity and allowlist, Slack event types, mrkdwn renderer, streaming updater |
-| `workflows` | Hatchet worker (`cmd/worker`), `chat-turn` task, `cmd/setup-webhook` |
-| `memory` | Per-user Basic Memory projects: creates and seeds a project, builds claude's `--mcp-config` and tool allow/deny lists |
+| `channels` | SQLite store (users, threads, goal channels, inbound events), email-hash identity and allowlist, Slack event types, mrkdwn renderer, streaming updater |
+| `workflows` | Hatchet worker (`cmd/worker`), `chat-turn` and `goal-channels` tasks, `cmd/setup-webhook` |
+| `memory` | Per-user Basic Memory projects: creates and seeds a project, builds claude's `--mcp-config` and tool allow/deny lists, reads goal notes from disk |
 
 **Design rules**
 - Conversation history lives only in claude's session files (`~/.claude/projects/<cwd>`). SQLite maps each thread to its session id and stores nothing else about the conversation.
@@ -31,6 +50,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
   - User settings and ambient MCP servers are still ignored (`--strict-mcp-config`, `--setting-sources ""`); the turn's own `--settings` carries the rules above.
 - A thread belongs to the user who started it. Other users in that thread are asked to start their own.
 - Runs in the same thread are serialized by the Hatchet concurrency key `channel:thread_ts`.
+- Runs started from webhook events can't carry custom run metadata. To find a conversation's runs, use the run output (`thread`, `user_id`, `session_id`).
 
 **Memory**
 - Each user has one Basic Memory project, `bm-u-<slugified display name>-<n>`. The `-<n>` keeps names unique.
@@ -49,7 +69,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
   - `users/<project>/notes/` holds their Markdown notes.
 
   Each turn's bm gets only that user's `BASIC_MEMORY_CONFIG_DIR`, so it can't open another user's database. To delete a user's memory, remove `users/<project>`. Notes are plain Markdown, so you can browse and edit them directly.
-- New projects are seeded with the Picoschema notes in `memory/schemas/*.md` (person, place, project, preference, event), which are embedded in the binary. Add or edit a file there to change the schemas; existing projects keep their copies. The prompt tells the model which folder and `note_type` to use for each.
+- New projects are seeded with the Picoschema notes in `memory/schemas/*.md` (person, place, preference, event, goal, progress, task), which are embedded in the binary. Add or edit a file there to change the schemas; existing projects keep their copies. The prompt tells the model which folder and `note_type` to use for each.
 - **Preferences are atomic:** one note per preference in `preferences/<subject>/`, with exactly the schema fields `[preference]`, `[subject]` and `[evidence]`.
   - `subject` is an enum: food, travel, fitness, health, work, tech, communication, shopping, entertainment, home, finance, other.
   - `evidence` is an enum: stated, inferred, observed or corrected. The channel and date go in its context, e.g. `- [evidence] stated (slack, 2026-10-11)`.
@@ -66,7 +86,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
   - **Tasks:** optional. Each task is a note in `tasks/<goal>/` (`status`, `due`, `with`) that must belong to exactly one goal via `task_of`; the agent asks which goal when none fits.
   - Both link to the goal, so a goal accumulates updates and tasks without its own note growing.
 - **Links between types:** people link to workplaces with `works_at`. Events link to people and places with `with` and `at`, and goals link to people with `with`.
-- **Other notes** (people, places, projects, events) are one note per thing. Each fact ends with its evidence as Basic Memory observation context, e.g. `- [interest] oscillatory neural networks (stated, slack, 2026-10-11)`. bm stores that context in the observation's `context` field.
+- **Other notes** (people, places, events) are one note per thing. Each fact ends with its evidence as Basic Memory observation context, e.g. `- [interest] oscillatory neural networks (stated, slack, 2026-10-11)`. bm stores that context in the observation's `context` field.
 - **Links between notes** are relations written as `- works_at [[places/ibm-research-zurich]]`, using the target's permalink so the link is exact.
   - bm indexes each one as a row in its `relation` table, with `to_id` as a foreign key to the target note. A link to a note that doesn't exist yet stays unresolved (`to_id` NULL) until that note is created.
   - People link to Place notes with `works_at`. Places hold `location` (the address) and `coordinates` (`lat,lon`, WGS84 decimal degrees, saved only when the user gives them).
@@ -74,6 +94,25 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
   - The schema header must be valid YAML; bm silently ignores a schema it can't parse, so quote values that contain `: `. `TestSchemaFrontmatterParses` enforces this.
 - **Evidence** says how a fact was learned (`stated`, `inferred`, `observed` or `corrected`), plus the channel and date.
 - The agent decides what to save; the rules are in `agent/prompts/system.md`.
+
+**Goal channels**
+- **What gets a channel:** every Goal note (`goals/`) whose `status` is `active` gets a private Slack channel, `#goal-<slugified title>`. A goal saved without a status counts as active.
+  - If the name is taken, the channel gets a suffix: `-2`, `-3`, …
+  - A paused goal gets its channel when it becomes active again.
+  - Achieved and dropped goals get none.
+- **When it's created:** after every chat turn, `goalchannels.Trigger` compares the user's goal notes on disk (`memory.Goals`) with the `goal_channels` table. This needs only file reads and SQLite, so most turns start nothing.
+  - When an active goal has no channel, it starts a `goal-channels` run (`workflows/goalchannels`).
+  - That run creates the channel, records it, invites the owner and posts an intro.
+  - Runs are serialized per user and retried up to 3 times. The row is saved right after the channel is created, so a retry never creates a second channel.
+  - A goal that already exists gets its channel on the user's next message anywhere.
+- **The `goal_channels` table:** it maps (user, goal permalink, provider) to a channel id and is managed only by the harness. The agent is never told about channels.
+- **Chatting in a goal channel:** the owner's plain messages start turns, with no @mention needed.
+  - Slack also sends an `app_mention` copy of a message that mentions the bot; that copy is skipped, so each message runs once.
+  - The turn's `protocol.GoalRef` adds a paragraph to the system prompt naming the goal and its permalink. That paragraph asks the agent to load the goal with `build_context` and to link new progress and tasks to it.
+  - As everywhere, each top-level message starts its own thread and claude session.
+- **Other private-channel messages:** the webhook routes every `message` event from a private channel (`channel_type == group`) to `slack:chat`. `chatturn.route` then skips the ones that aren't the owner's messages in their own goal channel. Other people in a goal channel, and anyone in other private channels, reach the agent only by @mentioning it, and those turns carry no goal.
+- **Archiving:** the harness never archives or deletes channels; users archive them. An archived goal's row stays, so its channel isn't re-created.
+- **Slack scopes:** `groups:write` (create private channels and invite people), plus `groups:history` and the `message.groups` event for reading them.
 
 ## Deployment
 
@@ -83,7 +122,7 @@ hatchet server start (Hatchet CLI)        process-compose (`process-compose up`)
   dashboard/API :8889, gRPC :7078            caddy  → tailnet dashboards (hatchet.<tailnet>.ts.net)
   profile "local" (token, addresses)         funnel → public Slack webhook path only
                                              embed/rerank → vLLM search models (GPU, loopback)
-                                             worker → chat-turn
+                                             worker → chat-turn, goal-channels
 ```
 
 - **Hatchet is started by the Hatchet CLI** (`./build.sh hatchet`, i.e. `hatchet server start`, pinned to the SDK's version), outside process-compose.
@@ -107,6 +146,10 @@ All one-shot steps are subcommands of `./build.sh` (run `./build.sh help` to lis
    - Set `TS_AUTHKEY` (needed only for Caddy's first run) and `ROAMIND_DASHBOARD_USERS` (comma-separated logins, e.g. `you@example.com`).
    - Set `ROAMIND_ALLOWED_EMAILS`.
 2. **Slack app.** Create it from `deploy/slack-app-manifest.yaml` and install it. Put `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` in `.env`.
+   - **Upgrading an app created from an older manifest:**
+     - Add the bot scope `groups:write` under OAuth & Permissions, then reinstall the app.
+     - Re-run `./build.sh webhook` so the routing expression includes private-channel messages.
+     - Rebuild and restart the worker.
 3. **Hatchet environment.** `./build.sh hatchet-env` does three things:
    - starts the Hatchet server;
    - registers the Slack webhook, with the routing expression `channels/slack.EventKeyExpression`;
@@ -120,33 +163,3 @@ Development commands:
 - `./build.sh test` and `./build.sh vet` run in every module.
 - `./build.sh bm [project] <args>` runs Basic Memory's CLI against a user's project (`./build.sh bm project info`, `./build.sh bm tool search-notes …`). It sets `BASIC_MEMORY_CONFIG_DIR` for that one command only, so your own `bm` and MCP setups keep using `~/.basic-memory`.
 - `./build.sh turn "hello"` runs one real `claude -p` turn from the terminal.
-
-## Step-0 spike results (2026-10-10, hatchet v0.110.22)
-
-**Verified locally against hatchet-lite:**
-- The Slack `url_verification` challenge is answered by Hatchet.
-- A bad `X-Slack-Signature` is rejected with 403.
-- The raw Slack JSON body arrives as the task input (`slack.Envelope`).
-- The event-key expression sends bot and other non-chat events to `slack:ignored:*`, so they create no run.
-- An `app_mention` produces exactly one `chat-turn` run.
-- `/api/ready` works as the readiness probe.
-- The webhook can be created from code (`features.WebhooksClient`, source `SLACK`, HMAC on `X-Slack-Signature`).
-
-**Not yet verified:**
-- A real Slack app end to end (Slack → Funnel → Hatchet → worker → Slack).
-- Caddy and caddy-tailscale joining the tailnet. The config validates, and handlers run in order: tailnet auth, then 403 for anyone not listed, then the proxy.
-- Hatchet embedded mode. Not used, because its dashboard needs a per-start URL token.
-
-**Also verified:**
-- The webhook and its signing secret survive recreating the hatchet-lite container.
-- Changing `SERVER_URL` invalidates existing API tokens.
-- With `hatchet server start`:
-  - the worker connects using the CLI profile, and a signed Slack event reaches `slack:chat`;
-  - login works through a Caddy proxy under a different host name once the cookie's Domain is stripped.
-
-**Verified over the public internet through Tailscale Funnel:**
-- The dashboard, the login page, `/api/ready` and the tenant API all return 404, so only the webhook path is exposed.
-- A signed Slack URL check at `…/webhooks/slack` returns the challenge, which shows `--set-path` keeps the path prefix.
-- A bad signature returns 403.
-
-**Known limitation:** Runs started from webhook events can't carry custom run metadata. To find a conversation's runs, use the run output (`thread`, `user_id`, `session_id`) rather than metadata filters.
