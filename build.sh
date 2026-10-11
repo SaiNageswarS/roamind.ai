@@ -14,6 +14,8 @@
 #   worker        build ./bin/worker
 #   all           build caddy and worker
 #   vllm          install vLLM and download the GPU search models
+#   service       install + enable the roamind systemd user service, which runs
+#                 process-compose at boot (systemctl --user start|stop|status roamind)
 #   test | vet    run go test / go vet in every module
 #   bm [project] <args>   run Basic Memory's CLI against a user's project
 #                 (default: the only project), e.g. ./build.sh bm project info
@@ -100,6 +102,35 @@ cmd_vllm() {
   done
 }
 
+# process-compose runs in the foreground without its TUI; systemd is the
+# daemon (Linger keeps the user manager up from boot). Attach to it with
+# `process-compose attach`.
+cmd_service() {
+  local unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/roamind.service"
+  log "writing $unit"
+  mkdir -p "$(dirname "$unit")"
+  cat >"$unit" <<UNIT
+[Unit]
+Description=Roamind (process-compose: caddy, embed, rerank, worker)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$ROOT
+Environment=PATH=$PATH
+ExecStart=$(command -v process-compose) up --tui=false
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+UNIT
+  systemctl --user daemon-reload
+  systemctl --user enable roamind.service
+  [[ "$(loginctl show-user "$USER" -p Linger --value)" == yes ]] ||
+    log "enable boot start without login: sudo loginctl enable-linger $USER"
+}
+
 cmd_all() {
   cmd_caddy
   cmd_worker
@@ -150,6 +181,7 @@ main() {
     worker) cmd_worker ;;
     all) cmd_all ;;
     vllm) cmd_vllm ;;
+    service) cmd_service ;;
     test) each_module test ;;
     vet) each_module vet ;;
     bm) cmd_bm "$@" ;;

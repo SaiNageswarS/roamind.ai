@@ -159,6 +159,8 @@ All one-shot steps are subcommands of `./build.sh` (run `./build.sh help` to lis
 4. **Build.** `./build.sh all` builds `bin/caddy` and `bin/worker`. `./build.sh vllm` installs vLLM (pinned, on a uv-managed Python so Triton finds `Python.h`) and downloads the two search models. This needs an NVIDIA GPU. For memory, install Basic Memory's `bm` CLI on `PATH` with `uv tool install basic-memory` (tested with 0.23.2). Its first start downloads an embedding model.
 5. **Run.** `process-compose up` from the repo root. It reads `process-compose.yaml` and `.env`. Then log into `https://hatchet.<tailnet>.ts.net` as `admin@example.com` / `Admin123!!` and change the password.
 
+   To start at boot instead, `./build.sh service` installs and enables a `roamind` systemd user service that runs `process-compose up --tui=false` from the repo root. Manage it with `systemctl --user start|stop|status roamind`, and attach with `process-compose attach`. It starts at boot without a login only when lingering is on (`sudo loginctl enable-linger $USER`).
+
 Development commands:
 - `./build.sh test` and `./build.sh vet` run in every module.
 - `./build.sh bm [project] <args>` runs Basic Memory's CLI against a user's project (`./build.sh bm project info`, `./build.sh bm tool search-notes …`). It sets `BASIC_MEMORY_CONFIG_DIR` for that one command only, so your own `bm` and MCP setups keep using `~/.basic-memory`.
