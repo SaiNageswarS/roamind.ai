@@ -12,7 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"roamind.ai/protocol"
+	"roamind.ai/agent/protocol"
 )
 
 // Mode controls how citations appear in the output text.

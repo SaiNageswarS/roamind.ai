@@ -26,7 +26,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 ENV_FILE=".env"
-MODULES=(protocol agent channels worker memory)
+MODULES=(agent channels worker memory)
 WITH_HATCHET="deploy/bin/with-hatchet.sh"
 
 HATCHET_VERSION="v0.110.22" # keep in step with the Go SDK in worker/go.mod

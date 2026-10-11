@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/slack-go/slack v0.30.1
 	modernc.org/sqlite v1.60.1
-	roamind.ai/protocol v0.0.0
+	roamind.ai/agent v0.0.0
 )
 
 require (
@@ -21,4 +21,6 @@ require (
 	modernc.org/memory v1.12.1 // indirect
 )
 
-replace roamind.ai/protocol => ../protocol
+replace roamind.ai/agent => ../agent
+
+replace roamind.ai/memory => ../memory

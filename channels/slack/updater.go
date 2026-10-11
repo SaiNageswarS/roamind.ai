@@ -8,7 +8,7 @@ import (
 
 	"github.com/slack-go/slack"
 
-	"roamind.ai/protocol"
+	"roamind.ai/agent/protocol"
 )
 
 // API is the subset of the Slack client the updater needs.

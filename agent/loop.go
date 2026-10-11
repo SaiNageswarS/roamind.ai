@@ -17,8 +17,8 @@ import (
 
 	"roamind.ai/agent/citation"
 	"roamind.ai/agent/claude"
+	"roamind.ai/agent/protocol"
 	"roamind.ai/memory"
-	"roamind.ai/protocol"
 )
 
 //go:embed prompts/system.md

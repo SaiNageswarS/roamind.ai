@@ -11,11 +11,11 @@ import (
 	slackapi "github.com/slack-go/slack"
 
 	"roamind.ai/agent"
+	"roamind.ai/agent/protocol"
 	"roamind.ai/channels/identity"
 	"roamind.ai/channels/slack"
 	"roamind.ai/channels/store"
 	"roamind.ai/memory"
-	"roamind.ai/protocol"
 )
 
 // ChatTurnName is the chat-turn workflow: one agent turn for one Slack

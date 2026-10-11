@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"roamind.ai/agent/claude"
-	"roamind.ai/protocol"
+	"roamind.ai/agent/protocol"
 )
 
 func TestTranslatorFixture(t *testing.T) {

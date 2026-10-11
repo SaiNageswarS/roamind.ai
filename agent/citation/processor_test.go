@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"roamind.ai/protocol"
+	"roamind.ai/agent/protocol"
 )
 
 func docs() map[int]protocol.SearchDoc {

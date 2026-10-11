@@ -10,7 +10,7 @@ import (
 
 	"github.com/slack-go/slack"
 
-	"roamind.ai/protocol"
+	"roamind.ai/agent/protocol"
 )
 
 func TestIsChat(t *testing.T) {

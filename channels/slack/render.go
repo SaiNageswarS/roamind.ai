@@ -7,7 +7,7 @@ import (
 
 	"github.com/slack-go/slack"
 
-	"roamind.ai/protocol"
+	"roamind.ai/agent/protocol"
 )
 
 // MaxChunk bounds each Slack message so it also fits a section block (3000).

@@ -34,8 +34,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
 
 | Module | What it holds |
 |---|---|
-| `protocol` | Packet types (onyx-style), turn input/output, snapshot accumulator |
-| `agent` | `claude -p` runner and stream-json decoder; packet translation; Go port of onyx's citation processor; `cmd/turn` dev CLI |
+| `agent` | `claude -p` runner and stream-json decoder; packet translation; Go port of onyx's citation processor; `cmd/turn` dev CLI. `agent/protocol` is the contract with the channels: packet types (onyx-style), turn input/output and the snapshot accumulator. It's a separate package with no dependencies, so channels import it without the agent runtime |
 | `channels` | SQLite store (users, threads, goal channels, exercises, inbound events), email-hash identity, Slack event types, mrkdwn renderer, streaming updater |
 | `worker` | The Hatchet worker, laid out like Hatchet's Go quickstart: `cmd/worker`, `cmd/setup-webhook`, `client` (the Hatchet client) and `workflows`, one file per workflow with its tasks and wiring: `chat-turn`, `goal-channels`, `learning-exercises`, `learning-exercise` |
 | `memory` | Per-user Basic Memory projects: creates and seeds a project, builds claude's `--mcp-config` and tool allow/deny lists, reads goal notes from disk |

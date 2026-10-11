@@ -16,8 +16,8 @@ import (
 	"path/filepath"
 
 	"roamind.ai/agent"
+	"roamind.ai/agent/protocol"
 	"roamind.ai/memory"
-	"roamind.ai/protocol"
 )
 
 func main() {

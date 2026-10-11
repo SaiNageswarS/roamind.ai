@@ -12,10 +12,10 @@ import (
 	slackapi "github.com/slack-go/slack"
 
 	"roamind.ai/agent"
+	"roamind.ai/agent/protocol"
 	"roamind.ai/channels/slack"
 	"roamind.ai/channels/store"
 	"roamind.ai/memory"
-	"roamind.ai/protocol"
 )
 
 // LearningExerciseName is the learning-exercise workflow, which posts
