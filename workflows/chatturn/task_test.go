@@ -93,17 +93,17 @@ func setup(t *testing.T) (Deps, *fakeSlack, string) {
 	bin, argsLog := fakeClaude(t)
 	fs := &fakeSlack{emails: map[string]string{"U1": "Owner@x.com", "U2": "other@x.com", "U3": "stranger@x.com"}}
 	return Deps{
-		Store:     st,
-		Slack:     fs,
-		Allowlist: identity.ParseAllowlist("owner@x.com,other@x.com"),
-		Agent:     agent.Config{DataDir: t.TempDir(), ClaudeBinary: bin},
+		Store: st,
+		Slack: fs,
+		Agent: agent.Config{DataDir: t.TempDir(), ClaudeBinary: bin},
 	}, fs, argsLog
 }
 
 func mention(eventID, user, ts, threadTS string) slack.Envelope {
-	return slack.Envelope{TeamID: "T1", EventID: eventID, Event: slack.Event{
-		Type: "app_mention", User: user, Text: "<@UBOT> hello", Channel: "C1", TS: ts, ThreadTS: threadTS,
-	}}
+	return slack.Envelope{TeamID: "T1", EventID: eventID,
+		Authorizations: []slack.Authorization{{UserID: "UBOT", IsBot: true}}, Event: slack.Event{
+			Type: "app_mention", User: user, Text: "<@UBOT> hello", Channel: "C1", TS: ts, ThreadTS: threadTS,
+		}}
 }
 
 func TestProcessConversation(t *testing.T) {
@@ -143,11 +143,13 @@ func TestProcessRefusals(t *testing.T) {
 	if _, err := d.Process(ctx, "r1", mention("Ev1", "U1", "1.0", "")); err != nil {
 		t.Fatal(err)
 	}
+	external := mention("Ev2", "U3", "2.0", "")
+	external.Event.Team = "TOTHER"
 	cases := []struct {
 		env  slack.Envelope
 		want string
 	}{
-		{mention("Ev2", "U3", "2.0", ""), "don't have access"},
+		{external, "members of this workspace"},
 		{mention("Ev3", "U2", "1.2", "1.0"), "another user"},
 		{slack.Envelope{EventID: "Ev4", Event: slack.Event{Type: "message", ChannelType: "im", User: "U1", BotID: "B1"}}, "not a chat"},
 	}

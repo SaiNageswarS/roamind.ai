@@ -36,10 +36,9 @@ type SlackAPI interface {
 
 // Deps are the long-lived dependencies of the task.
 type Deps struct {
-	Store     *store.Store
-	Slack     SlackAPI
-	Allowlist identity.Allowlist
-	Agent     agent.Config
+	Store *store.Store
+	Slack SlackAPI
+	Agent agent.Config
 	// AfterTurn, when set, runs after each turn with memory, e.g. to give
 	// new goals their channels. Its errors are logged.
 	AfterTurn func(ctx context.Context, u *store.User) error
@@ -135,7 +134,7 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ou
 	if err != nil {
 		return out, fmt.Errorf("post placeholder: %w", err)
 	}
-	text := slack.CleanText(ev.Text)
+	text := slack.CleanText(ctx, d.Slack, ev.Text, env.BotUserID())
 	if len(ev.Files) > 0 {
 		dir, err := agent.WorkspaceDir(d.Agent, user.ID)
 		if err != nil {
@@ -220,6 +219,10 @@ func (d Deps) route(ctx context.Context, ev slack.Event) (*protocol.GoalRef, str
 // not use the agent.
 func (d Deps) resolveUser(ctx context.Context, env slack.Envelope) (*store.User, string, error) {
 	team, slackUser := env.TeamOf(), env.Event.User
+	if team != env.TeamID {
+		// Someone from another organisation, e.g. in a Slack Connect channel.
+		return nil, "Sorry, I only work with members of this workspace.", nil
+	}
 	u, err := d.Store.UserBySlack(ctx, team, slackUser)
 	if err != nil {
 		return nil, "", err
@@ -247,9 +250,6 @@ func (d Deps) resolveUser(ctx context.Context, env slack.Envelope) (*store.User,
 		if u.MemoryProject, err = d.Store.AssignMemoryProject(ctx, u.ID, memory.ProjectBase(u.DisplayName)); err != nil {
 			return nil, "", err
 		}
-	}
-	if !d.Allowlist.Allowed(u.Email) {
-		return nil, "Sorry, you don't have access to this assistant.", nil
 	}
 	return u, "", nil
 }

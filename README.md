@@ -9,7 +9,7 @@ A self-hosted, multi-user personal agent in Slack, organised around your goals.
   - The notes link to each other through typed relations, such as works at, task of and progress of.
   - Every fact records its provenance: whether it was stated, inferred, observed or corrected, and on which channel and date.
   - You can read, edit and version the notes like any other files.
-- **Isolation per user, not just per row.** Each user has their own memory database, their own Basic Memory configuration and their own workspace on disk. Shell commands run in a bubblewrap sandbox that can't see other users, the server's secrets or the home directory. Users are identified by a hash of their email and admitted only through an allowlist.
+- **Isolation per user, not just per row.** Each user has their own memory database, their own Basic Memory configuration and their own workspace on disk. Shell commands run in a bubblewrap sandbox that can't see other users, the server's secrets or the home directory. Users are identified by a hash of their email; everyone in the Slack workspace can use the agent, people from other organisations in shared channels can't.
 - **Claude Code is the agent.** The agent loop is `claude -p`, so the agent gets Claude Code's full toolset: web search and fetch, file editing, reading PDFs and images, and shell commands in a persistent per-user workspace. Roamind contributes the orchestration, memory, identity and Slack integration.
 - **Durable, observable runs.** Every message is a [Hatchet](https://hatchet.run) run, serialized per thread. Background work, such as creating goal channels, runs as separate retried tasks. You can inspect, trace and replay every run in the Hatchet dashboard.
 - **Local semantic search.** Memory search is hybrid. Qwen3 embedding and re-ranking models are served by vLLM on your own GPU, so the memory index is built and searched on your machine.
@@ -21,7 +21,7 @@ Slack sends events to Hatchet's Slack webhook. Each message becomes one `chat-tu
 
 ```
 Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─event slack:chat─▶ worker: chat-turn
-                                                                                         ├ identity (sha256(email)), allowlist
+                                                                                         ├ identity (sha256(email))
                                                                                          ├ thread → claude session (SQLite)
                                                                                          └ claude -p --resume … → throttled chat.update
                                                                                               └ stdio: bm mcp --project bm-u-<name>-<n>
@@ -35,7 +35,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
 |---|---|
 | `protocol` | Packet types (onyx-style), turn input/output, snapshot accumulator |
 | `agent` | `claude -p` runner and stream-json decoder; packet translation; Go port of onyx's citation processor; `cmd/turn` dev CLI |
-| `channels` | SQLite store (users, threads, goal channels, inbound events), email-hash identity and allowlist, Slack event types, mrkdwn renderer, streaming updater |
+| `channels` | SQLite store (users, threads, goal channels, inbound events), email-hash identity, Slack event types, mrkdwn renderer, streaming updater |
 | `workflows` | Hatchet worker (`cmd/worker`), `chat-turn` and `goal-channels` tasks, `cmd/setup-webhook` |
 | `memory` | Per-user Basic Memory projects: creates and seeds a project, builds claude's `--mcp-config` and tool allow/deny lists, reads goal notes from disk |
 
@@ -144,7 +144,6 @@ All one-shot steps are subcommands of `./build.sh` (run `./build.sh help` to lis
 
 1. **Config.** Copy `.env.example` to `.env`.
    - Set `TS_AUTHKEY` (needed only for Caddy's first run) and `ROAMIND_DASHBOARD_USERS` (comma-separated logins, e.g. `you@example.com`).
-   - Set `ROAMIND_ALLOWED_EMAILS`.
 2. **Slack app.** Create it from `deploy/slack-app-manifest.yaml` and install it. Put `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` in `.env`.
    - **Upgrading an app created from an older manifest:**
      - Add the bot scope `groups:write` under OAuth & Permissions, then reinstall the app.

@@ -3,8 +3,11 @@
 package slack
 
 import (
+	"context"
 	"regexp"
 	"strings"
+
+	"github.com/slack-go/slack"
 )
 
 // Envelope is a Slack Events API event_callback payload.
@@ -14,6 +17,25 @@ type Envelope struct {
 	APIAppID string `json:"api_app_id"`
 	EventID  string `json:"event_id"`
 	Event    Event  `json:"event"`
+	// Authorizations name the installation the event was delivered for; its
+	// user is the bot itself.
+	Authorizations []Authorization `json:"authorizations,omitempty"`
+}
+
+// Authorization is one installation an event was delivered for.
+type Authorization struct {
+	UserID string `json:"user_id"`
+	IsBot  bool   `json:"is_bot"`
+}
+
+// BotUserID returns the bot's own user id, or "" if the payload has none.
+func (e Envelope) BotUserID() string {
+	for _, a := range e.Authorizations {
+		if a.IsBot {
+			return a.UserID
+		}
+	}
+	return ""
 }
 
 // Event is the inner event of an Envelope.
@@ -73,9 +95,37 @@ func (e Envelope) TeamOf() string {
 	return e.TeamID
 }
 
-var mentionRe = regexp.MustCompile(`<@[A-Z0-9]+>`)
+var mentionRe = regexp.MustCompile(`<@([A-Z0-9]+)(?:\|[^>]*)?>`)
 
-// CleanText removes user mentions (the bot's own @-mention) from message text.
-func CleanText(text string) string {
-	return strings.TrimSpace(mentionRe.ReplaceAllString(text, ""))
+// UserAPI looks up the people mentioned in a message.
+type UserAPI interface {
+	GetUserInfoContext(ctx context.Context, user string, options ...slack.GetUserInfoOption) (*slack.User, error)
+}
+
+// CleanText removes the bot's own @-mention from message text and replaces
+// mentions of other people with "@Name", so the agent knows who is meant.
+// A mention whose user can't be looked up is kept as is.
+func CleanText(ctx context.Context, api UserAPI, text, botUserID string) string {
+	names := map[string]string{}
+	text = mentionRe.ReplaceAllStringFunc(text, func(m string) string {
+		id := mentionRe.FindStringSubmatch(m)[1]
+		if id == botUserID {
+			return ""
+		}
+		name, ok := names[id]
+		if !ok {
+			if info, err := api.GetUserInfoContext(ctx, id); err == nil {
+				name = info.Profile.DisplayName
+				if name == "" {
+					name = info.RealName
+				}
+			}
+			names[id] = name
+		}
+		if name == "" {
+			return m
+		}
+		return "@" + name
+	})
+	return strings.TrimSpace(text)
 }

@@ -14,7 +14,6 @@ import (
 	slackapi "github.com/slack-go/slack"
 
 	"roamind.ai/agent"
-	"roamind.ai/channels/identity"
 	"roamind.ai/channels/store"
 	"roamind.ai/memory"
 	"roamind.ai/workflows/chatturn"
@@ -47,7 +46,6 @@ func run() error {
 	if token == "" {
 		slog.Warn("SLACK_BOT_TOKEN is not set; Slack calls will fail")
 	}
-	allow := identity.ParseAllowlist(os.Getenv("ROAMIND_ALLOWED_EMAILS"))
 
 	// Long-term memory needs Basic Memory's bm CLI; without it turns run
 	// without memory.
@@ -71,9 +69,8 @@ func run() error {
 		afterTurn = goalchannels.Trigger(goals, gcDeps)
 	}
 	task := chatturn.New(client, chatturn.Deps{
-		Store:     st,
-		Slack:     sc,
-		Allowlist: allow,
+		Store: st,
+		Slack: sc,
 		Agent: agent.Config{
 			DataDir:      dataDir,
 			ClaudeBinary: os.Getenv("ROAMIND_CLAUDE_BIN"),

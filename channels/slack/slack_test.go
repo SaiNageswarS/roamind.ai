@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -31,13 +32,41 @@ func TestIsChat(t *testing.T) {
 }
 
 func TestEnvelopeDecode(t *testing.T) {
-	raw := `{"type":"event_callback","team_id":"T1","event_id":"Ev1","event":{"type":"app_mention","user":"U1","text":"<@UBOT> hi there","channel":"C1","ts":"1.1","thread_ts":"1.0"}}`
+	raw := `{"type":"event_callback","team_id":"T1","event_id":"Ev1","authorizations":[{"user_id":"UBOT","is_bot":true}],"event":{"type":"app_mention","user":"U1","text":"<@UBOT> hi there","channel":"C1","ts":"1.1","thread_ts":"1.0"}}`
 	var e Envelope
 	if err := json.Unmarshal([]byte(raw), &e); err != nil {
 		t.Fatal(err)
 	}
-	if e.Event.RootTS() != "1.0" || CleanText(e.Event.Text) != "hi there" || e.TeamOf() != "T1" {
+	if e.Event.RootTS() != "1.0" || CleanText(context.Background(), users{}, e.Event.Text, e.BotUserID()) != "hi there" || e.TeamOf() != "T1" {
 		t.Fatalf("%+v", e)
+	}
+}
+
+// users names U<n> "Person <n>"; UGONE can't be looked up.
+type users struct{}
+
+func (users) GetUserInfoContext(_ context.Context, id string, _ ...slack.GetUserInfoOption) (*slack.User, error) {
+	if id == "UGONE" {
+		return nil, errors.New("user_not_found")
+	}
+	u := &slack.User{ID: id, RealName: "Real " + id}
+	if id != "U2" {
+		u.Profile.DisplayName = "Person " + strings.TrimPrefix(id, "U")
+	}
+	return u, nil
+}
+
+func TestCleanText(t *testing.T) {
+	cases := map[string]string{
+		"<@UBOT> remember <@U1> is my father": "remember @Person 1 is my father",
+		"<@U1> and <@U1|kam> met <@U2>":       "@Person 1 and @Person 1 met @Real U2",
+		"ask <@UGONE>":                        "ask <@UGONE>",
+		"no mentions":                         "no mentions",
+	}
+	for in, want := range cases {
+		if got := CleanText(context.Background(), users{}, in, "UBOT"); got != want {
+			t.Errorf("CleanText(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
