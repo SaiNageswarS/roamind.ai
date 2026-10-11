@@ -17,6 +17,10 @@ type Goal struct {
 	// Status is the goal's [status] observation; empty when the note has
 	// none yet.
 	Status string
+	// Kind is the goal's [kind] observation: build, learn or personal.
+	Kind string
+	// Body is the note's content after its frontmatter.
+	Body string
 }
 
 // Active reports whether the user is working on the goal. A goal saved
@@ -24,7 +28,10 @@ type Goal struct {
 // missing only on a fresh note.
 func (g Goal) Active() bool { return g.Status == "" || g.Status == "active" }
 
-var statusRe = regexp.MustCompile(`(?m)^- \[status\] ([a-z]+)`)
+var (
+	statusRe = regexp.MustCompile(`(?m)^- \[status\] ([a-z]+)`)
+	kindRe   = regexp.MustCompile(`(?m)^- \[kind\] ([a-z]+)`)
+)
 
 // Goals reads the goal notes in project's goals/ folder straight from disk.
 // Notes bm has not given a permalink yet are skipped; they appear once bm
@@ -49,9 +56,12 @@ func (c *Config) Goals(project string) ([]Goal, error) {
 		if fm["type"] != "goal" || fm["permalink"] == "" {
 			return nil
 		}
-		g := Goal{Title: fm["title"], Permalink: fm["permalink"]}
+		g := Goal{Title: fm["title"], Permalink: fm["permalink"], Body: strings.TrimSpace(body)}
 		if m := statusRe.FindStringSubmatch(body); m != nil {
 			g.Status = m[1]
+		}
+		if m := kindRe.FindStringSubmatch(body); m != nil {
+			g.Kind = m[1]
 		}
 		goals = append(goals, g)
 		return nil

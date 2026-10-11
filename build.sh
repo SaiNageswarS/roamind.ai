@@ -26,10 +26,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 ENV_FILE=".env"
-MODULES=(protocol agent channels workflows memory)
+MODULES=(protocol agent channels worker memory)
 WITH_HATCHET="deploy/bin/with-hatchet.sh"
 
-HATCHET_VERSION="v0.110.22" # keep in step with the Go SDK in workflows/go.mod
+HATCHET_VERSION="v0.110.22" # keep in step with the Go SDK in worker/go.mod
 CADDY_VERSION="v2.11.7"
 CADDY_TAILSCALE="de41b249af4f"
 XCADDY_VERSION="v0.4.7"
@@ -60,7 +60,7 @@ cmd_webhook() {
     return
   fi
   log "registering Slack webhook"
-  "$WITH_HATCHET" go run ./workflows/cmd/setup-webhook
+  "$WITH_HATCHET" go run ./worker/cmd/setup-webhook
 }
 
 cmd_funnel() {
@@ -89,7 +89,7 @@ cmd_caddy() {
 
 cmd_worker() {
   log "building bin/worker"
-  go build -o bin/worker ./workflows/cmd/worker
+  go build -o bin/worker ./worker/cmd/worker
 }
 
 cmd_vllm() {

@@ -1,4 +1,4 @@
-module roamind.ai/workflows
+module roamind.ai/worker
 
 go 1.26.7
 

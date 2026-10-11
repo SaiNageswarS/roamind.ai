@@ -1,15 +1,12 @@
-package chatturn
+package workflows
 
 import (
 	"context"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
-
-	slackapi "github.com/slack-go/slack"
+	"time"
 
 	"roamind.ai/agent"
 	"roamind.ai/channels/identity"
@@ -17,87 +14,6 @@ import (
 	"roamind.ai/channels/store"
 	"roamind.ai/memory"
 )
-
-type fakeSlack struct {
-	mu      sync.Mutex
-	posts   []string
-	updates int
-	emails  map[string]string
-}
-
-func (f *fakeSlack) PostMessageContext(_ context.Context, _ string, _ ...slackapi.MsgOption) (string, string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	ts := "m" + string(rune('0'+len(f.posts)))
-	f.posts = append(f.posts, ts)
-	return "", ts, nil
-}
-
-func (f *fakeSlack) UpdateMessageContext(_ context.Context, _, ts string, _ ...slackapi.MsgOption) (string, string, string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.updates++
-	return "", ts, "", nil
-}
-
-// files maps download URLs to their content.
-var files = map[string]string{"https://files.slack.com/paper.pdf": "%PDF-1.4 fake"}
-
-func (f *fakeSlack) GetFileInfoContext(_ context.Context, id string, _, _ int) (*slackapi.File, []slackapi.Comment, *slackapi.Paging, error) {
-	return &slackapi.File{ID: id, Name: "../../notes.txt", Mimetype: "text/plain", Size: 5,
-		URLPrivateDownload: "https://files.slack.com/notes"}, nil, nil, nil
-}
-
-func (f *fakeSlack) GetFileContext(_ context.Context, url string, w io.Writer) error {
-	body, ok := files[url]
-	if !ok {
-		body = "hello"
-	}
-	_, err := io.WriteString(w, body)
-	return err
-}
-
-func (f *fakeSlack) GetUserInfoContext(_ context.Context, user string, _ ...slackapi.GetUserInfoOption) (*slackapi.User, error) {
-	u := &slackapi.User{ID: user, RealName: "Test " + user}
-	u.Profile.Email = f.emails[user]
-	return u, nil
-}
-
-// fakeClaude writes a script that replays the agent's recorded stream-json
-// fixture and logs its arguments.
-func fakeClaude(t *testing.T) (bin, argsLog string) {
-	t.Helper()
-	dir := t.TempDir()
-	fixture, err := filepath.Abs("../../agent/claude/testdata/tool_use.jsonl")
-	if err != nil {
-		t.Fatal(err)
-	}
-	argsLog = filepath.Join(dir, "args.log")
-	bin = filepath.Join(dir, "claude")
-	// One log line per invocation; the system prompt's newlines are flattened.
-	script := "#!/bin/sh\nprintf '%s ' \"$@\" | tr '\\n' ' ' >> " + argsLog + "\necho >> " + argsLog +
-		"\ncat >> " + filepath.Join(dir, "stdin.log") + "\ncat " + fixture + "\n"
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return bin, argsLog
-}
-
-func setup(t *testing.T) (Deps, *fakeSlack, string) {
-	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
-	bin, argsLog := fakeClaude(t)
-	fs := &fakeSlack{emails: map[string]string{"U1": "Owner@x.com", "U2": "other@x.com", "U3": "stranger@x.com"}}
-	return Deps{
-		Store: st,
-		Slack: fs,
-		Agent: agent.Config{DataDir: t.TempDir(), ClaudeBinary: bin},
-	}, fs, argsLog
-}
 
 func mention(eventID, user, ts, threadTS string) slack.Envelope {
 	return slack.Envelope{TeamID: "T1", EventID: eventID,
@@ -237,8 +153,22 @@ func TestProcessGoalChannel(t *testing.T) {
 		{"other user's message in goal channel", msg("Ev3", "U2", "G1", "2.2"), "not addressed"},
 		{"other user's mention in goal channel", inGoal(mention("Ev4", "U2", "2.3", "")), ""},
 		{"message in another private channel", msg("Ev5", "U1", "G9", "2.4"), "not addressed"},
+		{"member's message with their own goal in a shared channel", msg("Ev6", "U2", "G1", "2.5"), ""},
 	}
+	// U2 joins G1 with the same goal in their own memory, for the last case.
+	if _, err := d.Process(ctx, "r0", mention("Ev00", "U2", "1.1", "")); err != nil {
+		t.Fatal(err)
+	}
+	other := identity.UserID("other@x.com")
 	for _, c := range cases {
+		if c.env.EventID == "Ev6" {
+			if err := d.Store.SaveGoalChannel(ctx, store.GoalChannel{
+				UserID: other, GoalPermalink: "bm-u-test-u2-1/goals/learn-jax", GoalTitle: "Learn JAX",
+				Provider: "slack", ChannelID: "G1",
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
 		os.Remove(argsLog)
 		out, err := d.Process(ctx, "r", c.env)
 		if err != nil || !strings.Contains(out.Skipped, c.skip) || (c.skip == "") != (out.Skipped == "") {
@@ -250,5 +180,66 @@ func TestProcessGoalChannel(t *testing.T) {
 		if wantGoal := c.name == "owner message in goal channel"; goalPrompt != wantGoal {
 			t.Errorf("%s: goal in prompt = %v, want %v", c.name, goalPrompt, wantGoal)
 		}
+		if c.env.EventID == "Ev6" && !strings.Contains(string(args), "memory://bm-u-test-u2-1/goals/learn-jax") {
+			t.Errorf("%s: member's own goal not in prompt", c.name)
+		}
+	}
+}
+
+func TestProcessExerciseAnswer(t *testing.T) {
+	ctx := context.Background()
+	d, _, argsLog := setup(t)
+	mem, err := memory.New(t.TempDir(), "true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Agent.Memory = mem
+	if _, err := d.Process(ctx, "r0", mention("Ev0", "U1", "1.0", "")); err != nil {
+		t.Fatal(err)
+	}
+	owner := identity.UserID("owner@x.com")
+	goal := "bm-u-test-u1-1/goals/learn-german"
+	if err := d.Store.SaveGoalChannel(ctx, store.GoalChannel{
+		UserID: owner, GoalPermalink: goal, GoalTitle: "Learn German", Provider: "slack", ChannelID: "G1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Store.SaveExercise(ctx, store.Exercise{
+		UserID: owner, GoalPermalink: goal, Provider: "slack", ChannelID: "G1", ThreadTS: "5.0", NotePermalink: "bm-u-test-u1-1/exercises/learn-german/2026-10-12", PostedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reply := func(id, user, ts, threadTS string) slack.Envelope {
+		return slack.Envelope{TeamID: "T1", EventID: id, Event: slack.Event{
+			Type: "message", ChannelType: "group", User: user, Text: "Ich gehe in den Park.", Channel: "G1", TS: ts, ThreadTS: threadTS,
+		}}
+	}
+	exercisePrompt := func() bool {
+		args, _ := os.ReadFile(argsLog)
+		return strings.Contains(string(args), "saved in memory as bm-u-test-u1-1/exercises/learn-german/2026-10-12")
+	}
+
+	// A top-level message in the goal channel is a plain goal turn.
+	os.Remove(argsLog)
+	if _, err := d.Process(ctx, "r1", reply("Ev1", "U1", "6.0", "")); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := d.Store.LastExercise(ctx, owner, goal); !e.AnsweredAt.IsZero() || exercisePrompt() {
+		t.Fatal("top-level message answered the exercise")
+	}
+	// Someone else's reply doesn't answer it.
+	if _, err := d.Process(ctx, "r2", reply("Ev2", "U2", "6.1", "5.0")); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := d.Store.LastExercise(ctx, owner, goal); !e.AnsweredAt.IsZero() {
+		t.Fatal("other user's reply answered the exercise")
+	}
+	// The owner's reply in the thread does, and the turn evaluates it.
+	os.Remove(argsLog)
+	if _, err := d.Process(ctx, "r3", reply("Ev3", "U1", "6.2", "5.0")); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := d.Store.LastExercise(ctx, owner, goal); e.AnsweredAt.IsZero() || !exercisePrompt() {
+		t.Fatal("owner's reply did not answer the exercise")
 	}
 }

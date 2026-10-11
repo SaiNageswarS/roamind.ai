@@ -8,7 +8,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
+	"time"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 	slackapi "github.com/slack-go/slack"
@@ -16,8 +18,8 @@ import (
 	"roamind.ai/agent"
 	"roamind.ai/channels/store"
 	"roamind.ai/memory"
-	"roamind.ai/workflows/chatturn"
-	"roamind.ai/workflows/goalchannels"
+	"roamind.ai/worker/client"
+	"roamind.ai/worker/workflows"
 )
 
 func main() {
@@ -57,36 +59,54 @@ func run() error {
 		mem.Search = memory.DefaultSearch
 	}
 
-	client, err := hatchet.NewClient()
+	loc, err := location(os.Getenv("ROAMIND_TZ"))
 	if err != nil {
 		return err
 	}
-	sc := slackapi.New(token)
-	gcDeps := goalchannels.Deps{Store: st, Slack: sc, Memory: mem}
-	goals := goalchannels.New(client, gcDeps)
-	var afterTurn func(context.Context, *store.User) error
-	if mem != nil {
-		afterTurn = goalchannels.Trigger(goals, gcDeps)
+	c, err := client.HatchetClient()
+	if err != nil {
+		return err
 	}
-	task := chatturn.New(client, chatturn.Deps{
+	wfs := workflows.Register(c, workflows.Deps{
 		Store: st,
-		Slack: sc,
+		Slack: slackapi.New(token),
 		Agent: agent.Config{
 			DataDir:      dataDir,
 			ClaudeBinary: os.Getenv("ROAMIND_CLAUDE_BIN"),
 			Model:        os.Getenv("ROAMIND_MODEL"),
 			Memory:       mem,
 		},
-		AfterTurn: afterTurn,
+		Memory:   mem,
+		Location: loc,
 	})
+	if mem != nil {
+		slog.Info("daily exercises", "tz", loc.String(),
+			"crons_utc", workflows.ExerciseCrons(loc, workflows.ExerciseHour))
+	}
 
 	slots, _ := strconv.Atoi(envOr("ROAMIND_WORKER_SLOTS", "4"))
-	w, err := client.NewWorker("roamind-worker", hatchet.WithWorkflows(task, goals), hatchet.WithSlots(slots))
+	w, err := c.NewWorker("roamind-worker", hatchet.WithWorkflows(wfs...), hatchet.WithSlots(slots))
 	if err != nil {
 		return err
 	}
 	slog.Info("worker starting", "data_dir", dataDir, "slots", slots)
 	return w.StartBlocking(ctx)
+}
+
+// location loads the zone tz, or by default the server's zone under its
+// name (e.g. Europe/Berlin rather than Local), read from /etc/localtime.
+func location(tz string) (*time.Location, error) {
+	if tz != "" {
+		return time.LoadLocation(tz)
+	}
+	if target, err := os.Readlink("/etc/localtime"); err == nil {
+		if _, name, ok := strings.Cut(target, "zoneinfo/"); ok {
+			if loc, err := time.LoadLocation(name); err == nil {
+				return loc, nil
+			}
+		}
+	}
+	return time.Local, nil
 }
 
 func envOr(k, d string) string {

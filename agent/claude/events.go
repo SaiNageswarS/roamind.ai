@@ -28,6 +28,8 @@ type Event struct {
 	TotalCostUSD float64  `json:"total_cost_usd"`
 	NumTurns     int      `json:"num_turns"`
 	Errors       []string `json:"errors,omitempty"`
+	// StructuredOutput is set with --json-schema.
+	StructuredOutput json.RawMessage `json:"structured_output,omitempty"`
 }
 
 // Message is an Anthropic message as echoed by claude.

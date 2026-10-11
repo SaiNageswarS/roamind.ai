@@ -1,6 +1,4 @@
-// Package chatturn is the Hatchet task that handles one chat message: one
-// run per message, serialized per thread.
-package chatturn
+package workflows
 
 import (
 	"context"
@@ -20,32 +18,16 @@ import (
 	"roamind.ai/protocol"
 )
 
-// Name is the Hatchet workflow/task name.
-const Name = "chat-turn"
+// ChatTurnName is the chat-turn workflow: one agent turn for one Slack
+// message, one run per message, serialized per thread.
+const ChatTurnName = "chat-turn"
 
-// ConcurrencyExpression serializes runs within one Slack thread so turns never
+// ChatTurnConcurrency serializes runs within one Slack thread so turns never
 // resume the same claude session concurrently.
-const ConcurrencyExpression = `input.event.channel + ':' + (has(input.event.thread_ts) ? input.event.thread_ts : input.event.ts)`
+const ChatTurnConcurrency = `input.event.channel + ':' + (has(input.event.thread_ts) ? input.event.thread_ts : input.event.ts)`
 
-// SlackAPI is the Slack client surface the task needs.
-type SlackAPI interface {
-	slack.API
-	slack.FileAPI
-	GetUserInfoContext(ctx context.Context, user string, options ...slackapi.GetUserInfoOption) (*slackapi.User, error)
-}
-
-// Deps are the long-lived dependencies of the task.
-type Deps struct {
-	Store *store.Store
-	Slack SlackAPI
-	Agent agent.Config
-	// AfterTurn, when set, runs after each turn with memory, e.g. to give
-	// new goals their channels. Its errors are logged.
-	AfterTurn func(ctx context.Context, u *store.User) error
-}
-
-// Output is recorded as the run's result in Hatchet.
-type Output struct {
+// ChatTurnOutput is recorded as the run's result in Hatchet.
+type ChatTurnOutput struct {
 	Skipped   string  `json:"skipped,omitempty"`
 	UserID    string  `json:"user_id,omitempty"`
 	Thread    string  `json:"thread,omitempty"`
@@ -54,15 +36,15 @@ type Output struct {
 	Reset     bool    `json:"session_reset,omitempty"`
 }
 
-// New registers the chat-turn task on the client.
-func New(c *hatchet.Client, d Deps) *hatchet.StandaloneTask {
+// ChatTurn declares the chat-turn task.
+func ChatTurn(c *hatchet.Client, d Deps) *hatchet.StandaloneTask {
 	maxRuns := int32(1)
 	strategy := hatchet.GroupRoundRobin
-	return c.NewStandaloneTask(Name, d.handle,
+	return c.NewStandaloneTask(ChatTurnName, d.handleChat,
 		hatchet.WithWorkflowEvents(slack.ChatEventKey),
 		hatchet.WithWorkflowDescription("One agent turn for one Slack message"),
 		hatchet.WithConcurrency(&hatchet.Concurrency{
-			Expression:    ConcurrencyExpression,
+			Expression:    ChatTurnConcurrency,
 			MaxRuns:       &maxRuns,
 			LimitStrategy: &strategy,
 		}),
@@ -71,14 +53,14 @@ func New(c *hatchet.Client, d Deps) *hatchet.StandaloneTask {
 	)
 }
 
-func (d Deps) handle(ctx hatchet.Context, env slack.Envelope) (Output, error) {
+func (d Deps) handleChat(ctx hatchet.Context, env slack.Envelope) (ChatTurnOutput, error) {
 	return d.Process(ctx, ctx.WorkflowRunId(), env)
 }
 
 // Process handles one Slack message end to end.
-func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Output, error) {
+func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (ChatTurnOutput, error) {
 	ev := env.Event
-	out := Output{Thread: ev.Channel + ":" + ev.RootTS()}
+	out := ChatTurnOutput{Thread: ev.Channel + ":" + ev.RootTS()}
 	log := slog.With("run", runID, "thread", out.Thread)
 
 	if !env.IsChat() {
@@ -129,6 +111,17 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ou
 	if thread != nil {
 		sessionID = thread.ClaudeSessionID
 	}
+	var exercise *protocol.ExerciseRef
+	if goal != nil && ev.ThreadTS != "" {
+		// A reply in a daily exercise's thread answers it.
+		note, err := d.Store.MarkExerciseAnswered(ctx, provider, ev.Channel, ev.ThreadTS)
+		if err != nil {
+			return out, err
+		}
+		if note != "" {
+			exercise = &protocol.ExerciseRef{Permalink: note}
+		}
+	}
 
 	up, err := slack.NewUpdater(ctx, d.Slack, ev.Channel, ev.RootTS())
 	if err != nil {
@@ -156,6 +149,7 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ou
 		UserEmail:     user.Email,
 		MemoryProject: user.MemoryProject,
 		Goal:          goal,
+		Exercise:      exercise,
 	}, "Slack", up.Apply)
 
 	note := ""
@@ -190,25 +184,25 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ou
 }
 
 // route decides whether a chat event starts a turn, and which goal it is
-// about. In a goal's channel, every message from the goal's owner is a turn
-// about that goal (their @mentions there arrive twice, so the mention copy
-// is skipped); elsewhere, and for anyone else, private-channel messages
-// start a turn only through their @mention copy.
+// about. In a goal channel, every message from a user with a goal there is a
+// turn about their goal (their @mentions there arrive twice, so the mention
+// copy is skipped); a channel can hold several users' goals, each in their
+// own memory. Elsewhere, and for anyone else, private-channel messages start
+// a turn only through their @mention copy.
 func (d Deps) route(ctx context.Context, ev slack.Event) (*protocol.GoalRef, string, error) {
 	var gc *store.GoalChannel
 	if ev.ChannelType == "group" || ev.Type == "app_mention" {
 		var err error
-		if gc, err = d.Store.GoalChannelByChannel(ctx, "slack", ev.Channel); err != nil {
+		if gc, err = d.Store.GoalChannelOf(ctx, "slack", ev.Channel, ev.User); err != nil {
 			return nil, "", err
 		}
 	}
-	owner := gc != nil && gc.OwnerSlackUserID == ev.User
 	switch {
-	case ev.Type == "message" && ev.ChannelType == "group" && !owner:
+	case ev.Type == "message" && ev.ChannelType == "group" && gc == nil:
 		return nil, "not addressed to the agent", nil
-	case ev.Type == "app_mention" && owner:
+	case ev.Type == "app_mention" && gc != nil:
 		return nil, "mention in own goal channel, handled as its message", nil
-	case owner:
+	case gc != nil:
 		return &protocol.GoalRef{Title: gc.GoalTitle, Permalink: gc.GoalPermalink}, "", nil
 	}
 	return nil, "", nil

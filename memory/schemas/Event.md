@@ -5,7 +5,7 @@ entity: event
 version: 1
 schema:
   date: string, ISO date or date-time; as precise as known (2027-06, 2027-06-14, 2027-06-14T18:30)
-  recurring?: string, e.g. yearly, every Monday
+  recurring?: string, how often it repeats, in words
   with?(array): Person, who is involved
   at?: Place, where it happens
 settings:

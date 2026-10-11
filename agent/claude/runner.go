@@ -39,7 +39,10 @@ type Options struct {
 	AllowedTools []string
 	// DisallowedTools are removed from the model's view entirely.
 	DisallowedTools []string
-	Env             []string
+	// JSONSchema makes claude return structured output matching it
+	// (--json-schema), in the result event's structured_output.
+	JSONSchema string
+	Env        []string
 }
 
 // Args builds the command-line arguments. User settings and ambient MCP
@@ -76,6 +79,9 @@ func (o Options) Args() []string {
 	}
 	if o.SessionID != "" {
 		args = append(args, "--resume", o.SessionID)
+	}
+	if o.JSONSchema != "" {
+		args = append(args, "--json-schema", o.JSONSchema)
 	}
 	return args
 }

@@ -14,7 +14,7 @@ settings:
 ---
 
 One update on a goal; a goal has many. Save in folder
-progress/<goal folder name>/ with note_type progress, titled with the date
-and a few words, e.g. 2026-10-11 First prototype runs. Write a new progress
+progress/<goal folder name>/ with note_type progress, titled with the ISO
+date followed by a few words on the update. Write a new progress
 note for each update rather than editing an earlier one, and link it to its
 goal with progress_of.

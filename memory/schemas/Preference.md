@@ -15,8 +15,7 @@ One preference per note: how the user likes one thing done. Save in folder
 preferences/<subject>/ with note_type preference, titled with the
 preference itself. The note has exactly three observations, with the
 categories preference, subject and evidence. The evidence value is how the
-preference was learned, followed by the channel and date in parentheses,
-e.g. stated (slack, 2026-10-11). How it was learned is one of stated (the user said it
+preference was learned, followed by the channel and ISO date in parentheses. How it was learned is one of stated (the user said it
 directly), inferred (deduced from what the user said), observed (a pattern
 in what the user does or asks) or corrected (the user corrected an earlier
 preference).

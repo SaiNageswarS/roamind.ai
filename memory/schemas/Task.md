@@ -15,5 +15,4 @@ settings:
 A concrete action towards a goal. Every task belongs to exactly one goal:
 link it with task_of to the goal it serves, and when no existing goal fits,
 ask the user which goal it belongs to or offer to create one. Save in folder
-tasks/<goal folder name>/ with note_type task, titled with the action, e.g.
-Book parents' travel. Update its status as it moves along.
+tasks/<goal folder name>/ with note_type task, titled with the action. Update its status as it moves along.

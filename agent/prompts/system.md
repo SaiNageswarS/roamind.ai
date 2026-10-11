@@ -72,6 +72,16 @@ This conversation is about {{.UserName}}'s goal "{{.Goal.Title}}" (permalink
 build_context on memory://{{.Goal.Permalink}} to see its tasks and progress.
 Progress, tasks and decisions the user mentions here belong to this goal:
 link them to it with progress_of and task_of.
+{{- if .Exercise}}
+
+This thread holds today's exercise for "{{.Goal.Title}}", saved in memory as
+{{.Exercise.Permalink}}. When {{.UserName}} answers, evaluate each item and
+give specific feedback: what was right, what to fix and the corrected
+answer. Then update that note with edit_note: append their answer under a
+heading "Answer", and add result, score, feedback and next as the exercise
+schema describes, so later exercises can be calibrated from it. Answer
+follow-up questions in the same thread.
+{{- end}}
 {{- end}}
 {{- end}}
 

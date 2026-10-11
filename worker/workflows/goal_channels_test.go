@@ -1,4 +1,4 @@
-package goalchannels
+package workflows
 
 import (
 	"context"
@@ -7,51 +7,24 @@ import (
 	"path/filepath"
 	"testing"
 
-	slackapi "github.com/slack-go/slack"
-
 	"roamind.ai/channels/store"
 	"roamind.ai/memory"
 )
 
-type fakeSlack struct {
-	taken   map[string]bool
-	created []string
-	invites map[string]string
-	posts   map[string]int
-}
-
-func (f *fakeSlack) CreateConversationContext(_ context.Context, p slackapi.CreateConversationParams) (*slackapi.Channel, error) {
-	if !p.IsPrivate {
-		return nil, fmt.Errorf("public channel requested")
-	}
-	if f.taken[p.ChannelName] {
-		return nil, slackapi.SlackErrorResponse{Err: "name_taken"}
-	}
-	f.taken[p.ChannelName] = true
-	f.created = append(f.created, p.ChannelName)
-	ch := &slackapi.Channel{}
-	ch.ID, ch.Name = fmt.Sprintf("G%d", len(f.created)), p.ChannelName
-	return ch, nil
-}
-
-func (f *fakeSlack) InviteUsersToConversationContext(_ context.Context, ch string, users ...string) (*slackapi.Channel, error) {
-	f.invites[ch] = users[0]
-	return nil, nil
-}
-
-func (f *fakeSlack) PostMessageContext(_ context.Context, ch string, _ ...slackapi.MsgOption) (string, string, error) {
-	f.posts[ch]++
-	return ch, "1.0", nil
-}
-
-func writeGoal(t *testing.T, mem *memory.Config, project, title, slug, status string) {
+// writeGoal saves a goal note with status and any extra observation lines,
+// and returns its permalink.
+func writeGoal(t *testing.T, mem *memory.Config, project, title, slug, status string, extra ...string) string {
 	t.Helper()
 	dir := filepath.Join(mem.Dir, "users", project, "notes", "goals")
 	os.MkdirAll(dir, 0o700)
 	body := fmt.Sprintf("---\ntitle: %s\ntype: goal\npermalink: %s/goals/%s\n---\n\n- [status] %s (stated, slack, 2026-10-11)\n", title, project, slug, status)
+	for _, l := range extra {
+		body += l + "\n"
+	}
 	if err := os.WriteFile(filepath.Join(dir, title+".md"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return project + "/goals/" + slug
 }
 
 func TestSync(t *testing.T) {
@@ -72,7 +45,8 @@ func TestSync(t *testing.T) {
 	if u.MemoryProject, err = st.AssignMemoryProject(ctx, u.ID, "bm-u-a"); err != nil {
 		t.Fatal(err)
 	}
-	fs := &fakeSlack{taken: map[string]bool{"goal-learn-jax": true}, invites: map[string]string{}, posts: map[string]int{}}
+	fs := newFakeSlack()
+	fs.taken["goal-learn-jax"] = true
 	d := Deps{Store: st, Slack: fs, Memory: mem}
 
 	if m, err := d.Missing(ctx, &u); err != nil || len(m) != 0 {
@@ -93,10 +67,10 @@ func TestSync(t *testing.T) {
 	if len(out.Created) != 1 || out.Created[0] != "goal-learn-jax-2" {
 		t.Fatalf("created = %v", out.Created)
 	}
-	if fs.invites["G1"] != "U1" || fs.posts["G1"] != 1 {
-		t.Fatalf("invites=%v posts=%v", fs.invites, fs.posts)
+	if fs.invites["G1"] != "U1" || fs.postsTo["G1"] != 1 {
+		t.Fatalf("invites=%v posts=%v", fs.invites, fs.postsTo)
 	}
-	gc, err := st.GoalChannelByChannel(ctx, "slack", "G1")
+	gc, err := st.GoalChannelOf(ctx, "slack", "G1", "U1")
 	if err != nil || gc == nil || gc.GoalPermalink != u.MemoryProject+"/goals/learn-jax" || gc.GoalTitle != "Learn JAX" {
 		t.Fatalf("gc=%+v err=%v", gc, err)
 	}

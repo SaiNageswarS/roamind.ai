@@ -1,8 +1,4 @@
-// Package goalchannels is the Hatchet task that gives each of a user's
-// active goals its own private Slack channel. The harness owns the mapping;
-// the agent only learns, in a goal channel, which goal the conversation is
-// about. Channels are never archived here: the user archives them.
-package goalchannels
+package workflows
 
 import (
 	"context"
@@ -20,41 +16,29 @@ import (
 	"roamind.ai/memory"
 )
 
-// Name is the Hatchet workflow/task name.
-const Name = "goal-channels"
+// GoalChannelsName is the goal-channels workflow, which gives each of a
+// user's active goals its own private Slack channel. The harness owns the
+// mapping; the agent only learns, in a goal channel, which goal the
+// conversation is about. Channels are never archived here: the user
+// archives them.
+const GoalChannelsName = "goal-channels"
 
-const provider = "slack"
-
-// SlackAPI is the Slack client surface the task needs.
-type SlackAPI interface {
-	CreateConversationContext(ctx context.Context, params slackapi.CreateConversationParams) (*slackapi.Channel, error)
-	InviteUsersToConversationContext(ctx context.Context, channelID string, users ...string) (*slackapi.Channel, error)
-	PostMessageContext(ctx context.Context, channelID string, options ...slackapi.MsgOption) (string, string, error)
-}
-
-// Deps are the long-lived dependencies of the task.
-type Deps struct {
-	Store  *store.Store
-	Slack  SlackAPI
-	Memory *memory.Config
-}
-
-// Input names the user whose goals to sync.
-type Input struct {
+// GoalChannelsInput names the user whose goals to sync.
+type GoalChannelsInput struct {
 	UserID string `json:"user_id"`
 }
 
-// Output lists the channels created by the run.
-type Output struct {
+// GoalChannelsOutput lists the channels created by the run.
+type GoalChannelsOutput struct {
 	Created []string `json:"created,omitempty"` // channel names
 }
 
-// New registers the goal-channels task on the client. Runs are serialized
-// per user, so a goal never gets two channels.
-func New(c *hatchet.Client, d Deps) *hatchet.StandaloneTask {
+// GoalChannels declares the goal-channels task. Runs are serialized per
+// user, so a goal never gets two channels.
+func GoalChannels(c *hatchet.Client, d Deps) *hatchet.StandaloneTask {
 	maxRuns := int32(1)
 	strategy := hatchet.GroupRoundRobin
-	return c.NewStandaloneTask(Name, func(ctx hatchet.Context, in Input) (Output, error) {
+	return c.NewStandaloneTask(GoalChannelsName, func(ctx hatchet.Context, in GoalChannelsInput) (GoalChannelsOutput, error) {
 		return d.Sync(ctx, in.UserID)
 	},
 		hatchet.WithWorkflowDescription("Create a Slack channel for each new active goal"),
@@ -68,16 +52,16 @@ func New(c *hatchet.Client, d Deps) *hatchet.StandaloneTask {
 	)
 }
 
-// Trigger returns a hook for chat-turn: after a turn it starts a sync run
+// goalChannelsTrigger returns a hook for chat-turn: after a turn it starts a sync run
 // for the user when an active goal has no channel yet. The check reads only
 // local files and SQLite, so most turns start no run.
-func Trigger(task *hatchet.StandaloneTask, d Deps) func(ctx context.Context, u *store.User) error {
+func goalChannelsTrigger(task *hatchet.StandaloneTask, d Deps) func(ctx context.Context, u *store.User) error {
 	return func(ctx context.Context, u *store.User) error {
 		missing, err := d.Missing(ctx, u)
 		if err != nil || len(missing) == 0 {
 			return err
 		}
-		_, err = task.RunNoWait(ctx, Input{UserID: u.ID})
+		_, err = task.RunNoWait(ctx, GoalChannelsInput{UserID: u.ID})
 		return err
 	}
 }
@@ -105,8 +89,8 @@ func (d Deps) Missing(ctx context.Context, u *store.User) ([]memory.Goal, error)
 }
 
 // Sync creates a channel for each of the user's active goals that lacks one.
-func (d Deps) Sync(ctx context.Context, userID string) (Output, error) {
-	var out Output
+func (d Deps) Sync(ctx context.Context, userID string) (GoalChannelsOutput, error) {
+	var out GoalChannelsOutput
 	u, err := d.Store.UserByID(ctx, userID)
 	if err != nil || u == nil {
 		return out, err

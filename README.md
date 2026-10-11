@@ -5,7 +5,8 @@ A self-hosted, multi-user personal agent in Slack, organised around your goals.
 ## What sets it apart
 
 - **Each goal gets its own channel.** Roamind recognises when you set out to build, learn or achieve something. It records that as a goal and opens a private Slack channel for it. Every conversation there is about that goal, with no @mention needed: Roamind loads the goal's tasks and progress first and files new updates under it. Your goals become a set of focused workspaces rather than one long chat.
-- **Memory is a typed knowledge graph you own.** Facts are saved as plain Markdown notes that follow schemas: Person, Place, Event, Preference, Goal, Progress and Task.
+- **Daily exercises for what you're learning.** Every morning at 9:00, each learning goal's channel gets one exercise. Roamind evaluates your answer in its thread, and the results of recent exercises set the topic and difficulty of the next one. If you skip an exercise, no new ones are posted until you answer it.
+- **Memory is a typed knowledge graph you own.** Facts are saved as plain Markdown notes that follow schemas: Person, Place, Event, Preference, Goal, Progress, Task and Exercise.
   - The notes link to each other through typed relations, such as works at, task of and progress of.
   - Every fact records its provenance: whether it was stated, inferred, observed or corrected, and on which channel and date.
   - You can read, edit and version the notes like any other files.
@@ -35,8 +36,8 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
 |---|---|
 | `protocol` | Packet types (onyx-style), turn input/output, snapshot accumulator |
 | `agent` | `claude -p` runner and stream-json decoder; packet translation; Go port of onyx's citation processor; `cmd/turn` dev CLI |
-| `channels` | SQLite store (users, threads, goal channels, inbound events), email-hash identity, Slack event types, mrkdwn renderer, streaming updater |
-| `workflows` | Hatchet worker (`cmd/worker`), `chat-turn` and `goal-channels` tasks, `cmd/setup-webhook` |
+| `channels` | SQLite store (users, threads, goal channels, exercises, inbound events), email-hash identity, Slack event types, mrkdwn renderer, streaming updater |
+| `worker` | The Hatchet worker, laid out like Hatchet's Go quickstart: `cmd/worker`, `cmd/setup-webhook`, `client` (the Hatchet client) and `workflows`, one file per workflow with its tasks and wiring: `chat-turn`, `goal-channels`, `learning-exercises`, `learning-exercise` |
 | `memory` | Per-user Basic Memory projects: creates and seeds a project, builds claude's `--mcp-config` and tool allow/deny lists, reads goal notes from disk |
 
 **Design rules**
@@ -69,7 +70,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
   - `users/<project>/notes/` holds their Markdown notes.
 
   Each turn's bm gets only that user's `BASIC_MEMORY_CONFIG_DIR`, so it can't open another user's database. To delete a user's memory, remove `users/<project>`. Notes are plain Markdown, so you can browse and edit them directly.
-- New projects are seeded with the Picoschema notes in `memory/schemas/*.md` (person, place, preference, event, goal, progress, task), which are embedded in the binary. Add or edit a file there to change the schemas; existing projects keep their copies. The prompt tells the model which folder and `note_type` to use for each.
+- New projects are seeded with the Picoschema notes in `memory/schemas/*.md` (person, place, preference, event, goal, progress, task, exercise), which are embedded in the binary. Add or edit a file there to change the schemas; existing projects keep their copies. The prompt tells the model which folder and `note_type` to use for each.
 - **Preferences are atomic:** one note per preference in `preferences/<subject>/`, with exactly the schema fields `[preference]`, `[subject]` and `[evidence]`.
   - `subject` is an enum: food, travel, fitness, health, work, tech, communication, shopping, entertainment, home, finance, other.
   - `evidence` is an enum: stated, inferred, observed or corrected. The channel and date go in its context, e.g. `- [evidence] stated (slack, 2026-10-11)`.
@@ -81,7 +82,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
   - The current job ends with `to present`.
   - These formats are enforced only by the prompt.
 - **Goals, progress and tasks:** a Goal note (`goals/`) is anything worked on over time: a project being built (`kind build`), something being learned (`kind learn`) or another aim (`kind personal`).
-  - It holds only what defines the goal: `status`, `outcome`, `kind`, `target_date`, `why`, `link` and `with`.
+  - It holds only what defines the goal: `status`, `outcome`, `kind`, `target_date`, `why`, `link`, `with` and, for learning goals, `exercise_preference`.
   - **Progress:** each update is its own note in `progress/<goal>/` (`date`, `summary`, `next`, `blocker`), linked back with `progress_of`.
   - **Tasks:** optional. Each task is a note in `tasks/<goal>/` (`status`, `due`, `with`) that must belong to exactly one goal via `task_of`; the agent asks which goal when none fits.
   - Both link to the goal, so a goal accumulates updates and tasks without its own note growing.
@@ -101,18 +102,30 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
   - A paused goal gets its channel when it becomes active again.
   - Achieved and dropped goals get none.
 - **When it's created:** after every chat turn, `goalchannels.Trigger` compares the user's goal notes on disk (`memory.Goals`) with the `goal_channels` table. This needs only file reads and SQLite, so most turns start nothing.
-  - When an active goal has no channel, it starts a `goal-channels` run (`workflows/goalchannels`).
+  - When an active goal has no channel, it starts a `goal-channels` run (`worker/workflows/goal_channels.go`).
   - That run creates the channel, records it, invites the owner and posts an intro.
   - Runs are serialized per user and retried up to 3 times. The row is saved right after the channel is created, so a retry never creates a second channel.
   - A goal that already exists gets its channel on the user's next message anywhere.
 - **The `goal_channels` table:** it maps (user, goal permalink, provider) to a channel id and is managed only by the harness. The agent is never told about channels.
-- **Chatting in a goal channel:** the owner's plain messages start turns, with no @mention needed.
+- **Shared goal channels:** several users can share one channel, each linked to the goal in their own memory. Each user has their own row, with a unique key on (provider, channel, user). In the channel, each user's messages run as their own turns, with their own memory and their own goal note, so memory stays isolated per user. To share a channel, point the other user's row for their goal at it; they can then archive their own channel.
+- **Chatting in a goal channel:** plain messages from any user with a goal in the channel start turns, with no @mention needed.
   - Slack also sends an `app_mention` copy of a message that mentions the bot; that copy is skipped, so each message runs once.
   - The turn's `protocol.GoalRef` adds a paragraph to the system prompt naming the goal and its permalink. That paragraph asks the agent to load the goal with `build_context` and to link new progress and tasks to it.
   - As everywhere, each top-level message starts its own thread and claude session.
 - **Other private-channel messages:** the webhook routes every `message` event from a private channel (`channel_type == group`) to `slack:chat`. `chatturn.route` then skips the ones that aren't the owner's messages in their own goal channel. Other people in a goal channel, and anyone in other private channels, reach the agent only by @mentioning it, and those turns carry no goal.
 - **Archiving:** the harness never archives or deletes channels; users archive them. An archived goal's row stays, so its channel isn't re-created.
 - **Slack scopes:** `groups:write` (create private channels and invite people), plus `groups:history` and the `message.groups` event for reading them.
+
+**Daily exercises (learning goals)**
+- **What gets one:** every active goal with `kind learn` that has a channel, at 9:00 in `ROAMIND_TZ` (default: the server's zone).
+- **Scheduling:** Hatchet crons run in UTC, so `ExerciseCrons` registers the UTC times of 9:00 local in winter and in summer, for example `0 8 * * *` and `0 7 * * *` for Europe/Berlin. The `learning-exercises` cron task does nothing unless it is 9:00 local. Otherwise it starts one `learning-exercise` run per learning goal, as child runs; a DAG can't fan out to a varying number of goals.
+- **The `learning-exercise` DAG** (`worker/workflows/learning_exercise.go`), serialized per goal:
+  1. **`check-skip`** returns a reason to skip when the goal isn't an active learning goal with a channel, today's exercise is already posted, or the latest exercise is unanswered. The latest exercise blocks every later day until the user replies in its thread; answering late resumes exercises the next morning. Hatchet still runs the children of a skipped task, so every later task lists `check-skip` as a parent and skips itself on that reason.
+  2. **`build-context`** reads the goal note, with its `exercise_preference` lines, and the latest five exercise notes, with the user's answers and results. It reads them from disk, because bm's `build_context` lists the linked notes but not their content.
+  3. **`draft-exercise`** runs an agent turn with that context (`agent/prompts/draft_exercise.md`). Its structured output (`claude -p --json-schema`) is topic, difficulty, format and the exercise text. The turn gets no memory tools; it keeps web search for material. It is retried once.
+  4. **`post`** posts the exercise as a new top-level message in the goal channel, with overflow in its thread. It then records the thread → drafting session and the `exercises` row, and writes the Exercise note at `exercises/<goal>/<date>` with `bm tool write-note`. It has no retries, so an exercise is never posted twice.
+- **Answering** is not part of the workflow. When the goal's owner replies in an exercise thread, chat-turn sets `answered_at` and resumes the drafting session, so the agent knows exactly what was asked. The system prompt names the exercise note; the agent evaluates the answer, appends it to the note under Answer, and adds `result`, `score`, `feedback` and `next`.
+- **Exercise preferences** are `exercise_preference` lines on the goal note, saved by the agent when the user states them in the goal channel.
 
 ## Deployment
 
@@ -122,7 +135,7 @@ hatchet server start (Hatchet CLI)        process-compose (`process-compose up`)
   dashboard/API :8889, gRPC :7078            caddy  → tailnet dashboards (hatchet.<tailnet>.ts.net)
   profile "local" (token, addresses)         funnel → public Slack webhook path only
                                              embed/rerank → vLLM search models (GPU, loopback)
-                                             worker → chat-turn, goal-channels
+                                             worker → chat-turn, goal-channels, learning-exercise(s)
 ```
 
 - **Hatchet is started by the Hatchet CLI** (`./build.sh hatchet`, i.e. `hatchet server start`, pinned to the SDK's version), outside process-compose.

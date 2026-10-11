@@ -30,12 +30,16 @@ func TestGoals(t *testing.T) {
 	}
 	got := map[string]Goal{}
 	for _, g := range goals {
+		if g.Body == "" {
+			t.Errorf("%s: no body", g.Permalink)
+		}
+		g.Body = ""
 		got[g.Permalink] = g
 	}
 	want := map[string]Goal{
-		"bm-u-sai-1/goals/learn-jax": {"Learn JAX", "bm-u-sai-1/goals/learn-jax", "active"},
-		"bm-u-sai-1/goals/ship-chip": {"Ship chip: v2", "bm-u-sai-1/goals/ship-chip", "achieved"},
-		"bm-u-sai-1/goals/fresh":     {"Fresh", "bm-u-sai-1/goals/fresh", ""},
+		"bm-u-sai-1/goals/learn-jax": {"Learn JAX", "bm-u-sai-1/goals/learn-jax", "active", "learn", ""},
+		"bm-u-sai-1/goals/ship-chip": {"Ship chip: v2", "bm-u-sai-1/goals/ship-chip", "achieved", "", ""},
+		"bm-u-sai-1/goals/fresh":     {"Fresh", "bm-u-sai-1/goals/fresh", "", "", ""},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("goals = %+v", goals)

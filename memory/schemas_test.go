@@ -14,7 +14,7 @@ func TestSeedSchemas(t *testing.T) {
 	if err := seedSchemas(dir); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"Person.md", "Place.md", "Preference.md", "Event.md", "Goal.md", "Progress.md", "Task.md"} {
+	for _, name := range []string{"Person.md", "Place.md", "Preference.md", "Event.md", "Goal.md", "Progress.md", "Task.md", "Exercise.md"} {
 		if _, err := os.Stat(filepath.Join(dir, "schemas", name)); err != nil {
 			t.Fatal(err)
 		}
@@ -44,6 +44,11 @@ func TestSchemasHaveNoFactsOrLinks(t *testing.T) {
 		body := string(b)
 		if i := strings.Index(body[3:], "---"); i >= 0 {
 			body = body[i+6:] // skip frontmatter
+		}
+		// Example values are indexed too: a search on their words returns the
+		// schema as if it held facts about the user.
+		if strings.Contains(string(b), "e.g.") {
+			t.Errorf("%s: has an example; describe the format instead", e.Name())
 		}
 		for _, line := range strings.Split(body, "\n") {
 			if strings.HasPrefix(strings.TrimSpace(line), "- ") || strings.Contains(line, "[[") {

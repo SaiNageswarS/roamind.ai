@@ -11,6 +11,7 @@ schema:
   why?: string, why the user wants it
   link?(array): string, related URLs such as a repository or course page
   with?(array): Person, who else is involved
+  exercise_preference?(array): string, how the user likes their daily exercises for a learning goal, one preference per line
 settings:
   validation: warn
 ---

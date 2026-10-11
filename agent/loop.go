@@ -62,9 +62,10 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, channel str
 		"Date":      time.Now().Format("Monday, 2 January 2006"),
 		"ISODate":   time.Now().Format("2006-01-02"),
 		// Evidence notes record where a fact came from, e.g. "slack".
-		"Source": strings.ToLower(orDefault(channel, "chat")),
-		"Memory": withMemory,
-		"Goal":   in.Goal,
+		"Source":   strings.ToLower(orDefault(channel, "chat")),
+		"Memory":   withMemory,
+		"Goal":     in.Goal,
+		"Exercise": exercise(in),
 	})
 	if err != nil {
 		return protocol.TurnOutput{}, err
@@ -78,6 +79,7 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, channel str
 		Tools:        workspaceTools,
 		Settings:     workspaceSettings,
 		AllowedTools: allowedWorkspaceTools(dir),
+		JSONSchema:   in.OutputSchema,
 	}
 	if withMemory {
 		if err := cfg.Memory.Ensure(in.MemoryProject); err != nil {
@@ -209,6 +211,7 @@ func (t *translator) handle(ev claude.Event) error {
 		t.out.CostUSD = ev.TotalCostUSD
 		t.out.NumTurns = ev.NumTurns
 		t.out.Citations = t.cites.Seen()
+		t.out.Structured = ev.StructuredOutput
 		if ev.IsError {
 			t.resultErr = ev.Subtype
 			if len(ev.Errors) > 0 {
@@ -225,6 +228,15 @@ func (t *translator) handle(ev claude.Event) error {
 		t.emit(protocol.Packet{Type: protocol.PacketStop, StopReason: "finished"})
 	}
 	return nil
+}
+
+// exercise is the exercise a turn answers, or nil; it is only shown with
+// its goal.
+func exercise(in protocol.TurnInput) *protocol.ExerciseRef {
+	if in.Goal == nil {
+		return nil
+	}
+	return in.Exercise
 }
 
 func orDefault(s, d string) string {
