@@ -75,7 +75,7 @@ func (d Deps) Missing(ctx context.Context, u *store.User) ([]memory.Goal, error)
 	if err != nil {
 		return nil, err
 	}
-	have, err := d.Store.GoalsWithChannel(ctx, u.ID, provider)
+	have, err := d.Store.GoalsWithChannel(ctx, u.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,7 @@ func (d Deps) create(ctx context.Context, u *store.User, g memory.Goal) (*slacka
 	// goal done instead of creating a second channel.
 	err = d.Store.SaveGoalChannel(ctx, store.GoalChannel{
 		UserID: u.ID, GoalPermalink: g.Permalink, GoalTitle: g.Title,
-		Provider: provider, ChannelID: ch.ID,
+		ChannelID: ch.ID,
 	})
 	if err != nil {
 		return nil, err

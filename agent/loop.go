@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"text/template"
 	"time"
 
@@ -42,7 +41,7 @@ type Emit func(protocol.Packet)
 
 // RunTurn runs one turn for in.UserID. When in.SessionID cannot be resumed the
 // turn is retried in a fresh session and the output is marked SessionReset.
-func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, channel string, emit Emit) (protocol.TurnOutput, error) {
+func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, emit Emit) (protocol.TurnOutput, error) {
 	if in.UserID == "" {
 		return protocol.TurnOutput{}, errors.New("agent: empty user id")
 	}
@@ -58,14 +57,11 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, channel str
 	err = systemPrompt.Execute(&sp, map[string]any{
 		"UserName":  orDefault(in.UserName, "the user"),
 		"UserEmail": in.UserEmail,
-		"Channel":   orDefault(channel, "chat"),
 		"Date":      time.Now().Format("Monday, 2 January 2006"),
 		"ISODate":   time.Now().Format("2006-01-02"),
-		// Evidence notes record where a fact came from, e.g. "slack".
-		"Source":   strings.ToLower(orDefault(channel, "chat")),
-		"Memory":   withMemory,
-		"Goal":     in.Goal,
-		"Exercise": exercise(in),
+		"Memory":    withMemory,
+		"Goal":      in.Goal,
+		"Exercise":  exercise(in),
 	})
 	if err != nil {
 		return protocol.TurnOutput{}, err

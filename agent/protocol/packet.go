@@ -1,5 +1,5 @@
-// Package protocol holds the types shared between the agent, the channels and
-// the Hatchet workflows. Packets mirror onyx's streaming packet model
+// Package protocol holds the types shared between the agent, the Slack
+// renderer and the Hatchet workflows. Packets mirror onyx's streaming packet model
 // (backend/onyx/server/query_and_chat/streaming_models.py), trimmed to what a
 // claude -p driven turn can produce.
 package protocol

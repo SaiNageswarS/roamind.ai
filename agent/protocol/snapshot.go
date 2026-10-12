@@ -11,7 +11,7 @@ type ToolLine struct {
 }
 
 // Snapshot is the cumulative state of a turn, built by applying packets in
-// order. Channels render snapshots rather than individual packets so a
+// order. The Slack updater renders snapshots rather than individual packets so a
 // renderer can always redraw the whole message.
 type Snapshot struct {
 	Text      string            `json:"text"`

@@ -2,13 +2,25 @@
 
 A self-hosted, multi-user personal agent in Slack, organised around your goals.
 
+Slack is Roamind's only channel, by design. The agent and its workflows are built around Slack's threads, channels and workspace, with no channel abstraction in between: threads, goal channels and exercises are stored by their Slack channel and thread ids.
+
+## <img src="https://cdn.jsdelivr.net/gh/devicons/devicon@v2.16.0/icons/slack/slack-original.svg" alt="Slack" width="24" height="24" align="top"> Why Slack
+
+- **Threads are conversations.** Each top-level message starts a thread, and each thread is one Claude session that resumes on every reply. You can run several conversations side by side without them bleeding into each other, and come back to any of them days later.
+- **Channels are goals.** A private channel per goal gives every goal its own focused space: the agent knows which goal a message is about from the channel alone, so it loads that goal's context without being told, and the channel's history is the goal's timeline.
+- **Shared channels are shared goals.** Invite a collaborator to a goal channel and both of you work on the goal there, each with your own memory and your own goal note.
+- **Scheduled work fits naturally.** A daily exercise is a top-level post in its goal channel, and your answer is a reply in its thread, so each exercise and its evaluation stay together.
+- **The workspace is the identity.** Slack has already verified each member's email, so there's no sign-up or login: everyone in the workspace can use the agent, and people from other organisations in shared channels can't.
+- **Rich interaction for free.** Replies stream in by editing a message, files and images shared with the agent land in its workspace, and @mentions bring the agent into any channel. Slack's desktop and mobile apps, notifications and search come with it.
+- **Reliable delivery.** Slack's Events API retries undelivered events, and Roamind deduplicates them by event id, so each message runs exactly once.
+
 ## What sets it apart
 
 - **Each goal gets its own channel.** Roamind recognises when you set out to build, learn or achieve something. It records that as a goal and opens a private Slack channel for it. Every conversation there is about that goal, with no @mention needed: Roamind loads the goal's tasks and progress first and files new updates under it. Your goals become a set of focused workspaces rather than one long chat.
 - **Daily exercises for what you're learning.** Every morning at 9:00, each learning goal's channel gets one exercise. Roamind evaluates your answer in its thread, and the results of recent exercises set the topic and difficulty of the next one. If you skip an exercise, no new ones are posted until you answer it.
 - **Memory is a typed knowledge graph you own.** Facts are saved as plain Markdown notes that follow schemas: Person, Place, Event, Preference, Goal, Progress, Task and Exercise.
   - The notes link to each other through typed relations, such as works at, task of and progress of.
-  - Every fact records its provenance: whether it was stated, inferred, observed or corrected, and on which channel and date.
+  - Every fact records its provenance: whether it was stated, inferred, observed or corrected, and on which date.
   - You can read, edit and version the notes like any other files.
 - **Isolation per user, not just per row.** Each user has their own memory database, their own Basic Memory configuration and their own workspace on disk. Shell commands run in a bubblewrap sandbox that can't see other users, the server's secrets or the home directory. Users are identified by a hash of their email; everyone in the Slack workspace can use the agent, people from other organisations in shared channels can't.
 - **Claude Code is the agent.** The agent loop is `claude -p`, so the agent gets Claude Code's full toolset: web search and fetch, file editing, reading PDFs and images, and shell commands in a persistent per-user workspace. Roamind contributes the orchestration, memory, identity and Slack integration.
@@ -34,7 +46,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
 
 | Module | What it holds |
 |---|---|
-| `agent` | `claude -p` runner and stream-json decoder; packet translation; Go port of onyx's citation processor; `cmd/turn` dev CLI. `agent/protocol` is the contract with the channels: packet types (onyx-style), turn input/output and the snapshot accumulator. It's a separate package with no dependencies, so channels import it without the agent runtime |
+| `agent` | `claude -p` runner and stream-json decoder; packet translation; Go port of onyx's citation processor; `cmd/turn` dev CLI. `agent/protocol` is the contract with the Slack layer: packet types (onyx-style), turn input/output and the snapshot accumulator. It's a separate package with no dependencies, so the Slack updater imports it without the agent runtime |
 | `channels` | SQLite store (users, threads, goal channels, exercises, inbound events), email-hash identity, Slack event types, mrkdwn renderer, streaming updater |
 | `worker` | The Hatchet worker, laid out like Hatchet's Go quickstart: `cmd/worker`, `cmd/setup-webhook`, `client` (the Hatchet client) and `workflows`, one file per workflow with its tasks and wiring: `chat-turn`, `goal-channels`, `learning-exercises`, `learning-exercise` |
 | `memory` | Per-user Basic Memory projects: creates and seeds a project, builds claude's `--mcp-config` and tool allow/deny lists, reads goal notes from disk |
@@ -72,7 +84,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
 - New projects are seeded with the Picoschema notes in `memory/schemas/*.md` (person, place, preference, event, goal, progress, task, exercise), which are embedded in the binary. Add or edit a file there to change the schemas; existing projects keep their copies. The prompt tells the model which folder and `note_type` to use for each.
 - **Preferences are atomic:** one note per preference in `preferences/<subject>/`, with exactly the schema fields `[preference]`, `[subject]` and `[evidence]`.
   - `subject` is an enum: food, travel, fitness, health, work, tech, communication, shopping, entertainment, home, finance, other.
-  - `evidence` is an enum: stated, inferred, observed or corrected. The channel and date go in its context, e.g. `- [evidence] stated (slack, 2026-10-11)`.
+  - `evidence` is an enum: stated, inferred, observed or corrected. The source and date go in its context, e.g. `- [evidence] stated (slack, 2026-10-11)`.
 - **What `schema_validate` checks:** that required fields are present and enum values are allowed, with warnings rather than errors. It doesn't check types, formats (dates, coordinates), cardinality or the target type of a relation; the prompt carries those rules.
 - **Required fields:** a person's `relationship` (`self` for the user's own note, exactly one per project), a place's `kind`, an event's `date` (as precise as known), a goal's `status` and `outcome`, and a task's `task_of` and `status`.
 - **Person** is kept small: `relationship`, `contact`, `works_at` (a link to a Place), and the career fields `experience`, `education` and `interest`.
@@ -92,7 +104,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
   - People link to Place notes with `works_at`. Places hold `location` (the address) and `coordinates` (`lat,lon`, WGS84 decimal degrees, saved only when the user gives them).
   - Schema notes are indexed like any other note, so their text must not contain fact lines (`- …`) or `[[…]]`. Those would become facts and links in every user's memory. `TestSchemasHaveNoFactsOrLinks` enforces this.
   - The schema header must be valid YAML; bm silently ignores a schema it can't parse, so quote values that contain `: `. `TestSchemaFrontmatterParses` enforces this.
-- **Evidence** says how a fact was learned (`stated`, `inferred`, `observed` or `corrected`), plus the channel and date.
+- **Evidence** says how a fact was learned (`stated`, `inferred`, `observed` or `corrected`), plus the source (`slack`) and date.
 - The agent decides what to save; the rules are in `agent/prompts/system.md`.
 
 **Goal channels**
@@ -105,8 +117,8 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
   - That run creates the channel, records it, invites the owner and posts an intro.
   - Runs are serialized per user and retried up to 3 times. The row is saved right after the channel is created, so a retry never creates a second channel.
   - A goal that already exists gets its channel on the user's next message anywhere.
-- **The `goal_channels` table:** it maps (user, goal permalink, provider) to a channel id and is managed only by the harness. The agent is never told about channels.
-- **Shared goal channels:** several users can share one channel, each linked to the goal in their own memory. Each user has their own row, with a unique key on (provider, channel, user). In the channel, each user's messages run as their own turns, with their own memory and their own goal note, so memory stays isolated per user. To share a channel, point the other user's row for their goal at it; they can then archive their own channel.
+- **The `goal_channels` table:** it maps (user, goal permalink) to a Slack channel id and is managed only by the harness. The agent is never told about channels.
+- **Shared goal channels:** several users can share one channel, each linked to the goal in their own memory. Each user has their own row, with a unique key on (channel, user). In the channel, each user's messages run as their own turns, with their own memory and their own goal note, so memory stays isolated per user. To share a channel, point the other user's row for their goal at it; they can then archive their own channel.
 - **Chatting in a goal channel:** plain messages from any user with a goal in the channel start turns, with no @mention needed.
   - Slack also sends an `app_mention` copy of a message that mentions the bot; that copy is skipped, so each message runs once.
   - The turn's `protocol.GoalRef` adds a paragraph to the system prompt naming the goal and its permalink. That paragraph asks the agent to load the goal with `build_context` and to link new progress and tasks to it.

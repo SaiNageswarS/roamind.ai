@@ -80,7 +80,7 @@ func TestLearningExercise(t *testing.T) {
 	piano := writeGoal(t, mem, p, "Learn piano", "learn-piano", "active", "- [kind] learn") // no channel
 	for i, g := range []string{german, paused, build} {
 		if err := d.Store.SaveGoalChannel(ctx, store.GoalChannel{UserID: u.ID, GoalPermalink: g, GoalTitle: "title of " + g,
-			Provider: "slack", ChannelID: []string{"G0", "G1", "G2"}[i]}); err != nil {
+			ChannelID: []string{"G0", "G1", "G2"}[i]}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -133,7 +133,7 @@ func TestLearningExercise(t *testing.T) {
 	if fs.threads[0] != "" || !strings.Contains(fs.texts[0], "*dem*") || out.ThreadTS != fs.posts[0] {
 		t.Fatalf("posted in thread %q: %q", fs.threads[0], fs.texts[0])
 	}
-	th, err := d.Store.GetThread(ctx, "slack", "G0", out.ThreadTS)
+	th, err := d.Store.GetThread(ctx, "G0", out.ThreadTS)
 	if err != nil || th == nil || th.ClaudeSessionID != dr.SessionID || th.UserID != u.ID {
 		t.Fatalf("thread = %+v %v", th, err)
 	}
@@ -158,7 +158,7 @@ func TestLearningExercise(t *testing.T) {
 			t.Fatalf("day +%d: %+v %v", day, chk, err)
 		}
 	}
-	if note, err := d.Store.MarkExerciseAnswered(ctx, "slack", "G0", out.ThreadTS); err != nil || note != wantNote {
+	if note, err := d.Store.MarkExerciseAnswered(ctx, "G0", out.ThreadTS); err != nil || note != wantNote {
 		t.Fatalf("answer: %q %v", note, err)
 	}
 	if chk, err := d.checkSkip(ctx, in); err != nil || chk.Skip != "" {

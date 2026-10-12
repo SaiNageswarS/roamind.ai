@@ -227,7 +227,7 @@ func (d Deps) draftExercise(ctx context.Context, in ExerciseInput, chk checkOutp
 		UserName:     u.DisplayName,
 		UserEmail:    u.Email,
 		OutputSchema: agent.DraftExerciseSchema,
-	}, "Slack", func(protocol.Packet) {})
+	}, func(protocol.Packet) {})
 	out.SessionID, out.CostUSD = turn.SessionID, turn.CostUSD
 	if err != nil {
 		return out, err
@@ -271,13 +271,13 @@ func (d Deps) postExercise(ctx context.Context, in ExerciseInput, chk checkOutpu
 	// Recorded straight after posting: from here on a reply in the thread
 	// answers the exercise.
 	if err := d.Store.SaveThread(ctx, store.Thread{
-		Provider: provider, ChannelID: chk.ChannelID, ThreadTS: ts,
+		ChannelID: chk.ChannelID, ThreadTS: ts,
 		UserID: u.ID, ClaudeSessionID: dr.SessionID,
 	}); err != nil {
 		return out, err
 	}
 	if err := d.Store.SaveExercise(ctx, store.Exercise{
-		UserID: u.ID, GoalPermalink: in.GoalPermalink, Provider: provider,
+		UserID: u.ID, GoalPermalink: in.GoalPermalink,
 		ChannelID: chk.ChannelID, ThreadTS: ts, NotePermalink: out.NotePermalink, PostedAt: now,
 	}); err != nil {
 		return out, err
@@ -316,7 +316,7 @@ permalink: %s
 
 // goalChannel is the channel of the user's goal, or nil.
 func (d Deps) goalChannel(ctx context.Context, in ExerciseInput) (*store.GoalChannel, error) {
-	gcs, err := d.Store.GoalChannels(ctx, provider)
+	gcs, err := d.Store.GoalChannels(ctx)
 	for _, gc := range gcs {
 		if gc.UserID == in.UserID && gc.GoalPermalink == in.GoalPermalink {
 			return &gc, nil

@@ -74,7 +74,7 @@ func (d Deps) dueGoals(ctx context.Context, now time.Time) (dispatchOutput, []Ex
 		out.Skipped = fmt.Sprintf("it is %s in %s, not %d:00", local.Format("15:04"), d.Location, ExerciseHour)
 		return out, nil, nil
 	}
-	gcs, err := d.Store.GoalChannels(ctx, provider)
+	gcs, err := d.Store.GoalChannels(ctx)
 	if err != nil {
 		return out, nil, err
 	}

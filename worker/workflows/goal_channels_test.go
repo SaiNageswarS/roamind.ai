@@ -70,7 +70,7 @@ func TestSync(t *testing.T) {
 	if fs.invites["G1"] != "U1" || fs.postsTo["G1"] != 1 {
 		t.Fatalf("invites=%v posts=%v", fs.invites, fs.postsTo)
 	}
-	gc, err := st.GoalChannelOf(ctx, "slack", "G1", "U1")
+	gc, err := st.GoalChannelOf(ctx, "G1", "U1")
 	if err != nil || gc == nil || gc.GoalPermalink != u.MemoryProject+"/goals/learn-jax" || gc.GoalTitle != "Learn JAX" {
 		t.Fatalf("gc=%+v err=%v", gc, err)
 	}

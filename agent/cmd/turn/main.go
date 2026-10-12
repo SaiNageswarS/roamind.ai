@@ -48,7 +48,7 @@ func main() {
 	defer stop()
 
 	enc := json.NewEncoder(os.Stdout)
-	out, err := agent.RunTurn(ctx, cfg, in, "terminal", func(p protocol.Packet) { _ = enc.Encode(p) })
+	out, err := agent.RunTurn(ctx, cfg, in, func(p protocol.Packet) { _ = enc.Encode(p) })
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)

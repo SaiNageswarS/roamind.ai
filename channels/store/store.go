@@ -1,4 +1,4 @@
-// Package store is the SQLite persistence for channels: user identities,
+// Package store is the SQLite persistence for Slack: user identities,
 // thread → claude session mapping, goal channels and inbound event dedupe. Conversation
 // content itself lives only in claude's session files.
 package store
@@ -21,21 +21,19 @@ CREATE TABLE IF NOT EXISTS users (
 	display_name     TEXT NOT NULL DEFAULT '',
 	slack_team_id    TEXT,
 	slack_user_id    TEXT,
-	telegram_user_id TEXT UNIQUE,
 	memory_project   TEXT UNIQUE, -- Basic Memory project, bm-u-<name>-<idx>
 	created_at       INTEGER NOT NULL,
 	updated_at       INTEGER NOT NULL,
 	UNIQUE (slack_team_id, slack_user_id)
 );
 CREATE TABLE IF NOT EXISTS threads (
-	provider          TEXT NOT NULL,
 	channel_id        TEXT NOT NULL,
 	thread_ts         TEXT NOT NULL,
 	user_id           TEXT NOT NULL REFERENCES users(id),
 	claude_session_id TEXT NOT NULL DEFAULT '',
 	created_at        INTEGER NOT NULL,
 	updated_at        INTEGER NOT NULL,
-	PRIMARY KEY (provider, channel_id, thread_ts)
+	PRIMARY KEY (channel_id, thread_ts)
 );
 -- One channel per goal, created by the harness; the agent never sees it.
 -- Several users can share a channel, each linked to the goal in their own
@@ -44,31 +42,27 @@ CREATE TABLE IF NOT EXISTS goal_channels (
 	user_id        TEXT NOT NULL REFERENCES users(id),
 	goal_permalink TEXT NOT NULL, -- Basic Memory permalink of the goal note
 	goal_title     TEXT NOT NULL,
-	provider       TEXT NOT NULL,
 	channel_id     TEXT NOT NULL,
 	created_at     INTEGER NOT NULL,
-	PRIMARY KEY (user_id, goal_permalink, provider),
-	UNIQUE (provider, channel_id, user_id)
+	PRIMARY KEY (user_id, goal_permalink),
+	UNIQUE (channel_id, user_id)
 );
 -- Daily exercises posted for learning goals; a reply in the exercise's
 -- thread answers it.
 CREATE TABLE IF NOT EXISTS exercises (
 	user_id        TEXT NOT NULL REFERENCES users(id),
 	goal_permalink TEXT NOT NULL,
-	provider       TEXT NOT NULL,
 	channel_id     TEXT NOT NULL,
 	thread_ts      TEXT NOT NULL, -- the exercise message
 	note_permalink TEXT NOT NULL, -- the exercise note in the user's memory
 	posted_at      INTEGER NOT NULL,
 	answered_at    INTEGER, -- first reply in the thread; NULL until then
-	PRIMARY KEY (provider, channel_id, thread_ts)
+	PRIMARY KEY (channel_id, thread_ts)
 );
 CREATE INDEX IF NOT EXISTS exercises_goal ON exercises (user_id, goal_permalink, posted_at);
 CREATE TABLE IF NOT EXISTS inbound_events (
-	provider    TEXT NOT NULL,
-	event_id    TEXT NOT NULL,
-	received_at INTEGER NOT NULL,
-	PRIMARY KEY (provider, event_id)
+	event_id    TEXT PRIMARY KEY, -- Slack event_id
+	received_at INTEGER NOT NULL
 );
 `
 
@@ -177,19 +171,19 @@ func (s *Store) AssignMemoryProject(ctx context.Context, userID, base string) (s
 	return "", fmt.Errorf("no free memory project name for %s", base)
 }
 
-// Thread maps a chat thread to a claude session.
+// Thread maps a Slack thread to a claude session.
 type Thread struct {
-	Provider, ChannelID, ThreadTS string
-	UserID                        string
-	ClaudeSessionID               string
+	ChannelID, ThreadTS string
+	UserID              string
+	ClaudeSessionID     string
 }
 
 // GetThread returns the thread or nil if it has never been seen.
-func (s *Store) GetThread(ctx context.Context, provider, channelID, threadTS string) (*Thread, error) {
+func (s *Store) GetThread(ctx context.Context, channelID, threadTS string) (*Thread, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT user_id, claude_session_id FROM threads
-		 WHERE provider = ? AND channel_id = ? AND thread_ts = ?`, provider, channelID, threadTS)
-	t := Thread{Provider: provider, ChannelID: channelID, ThreadTS: threadTS}
+		 WHERE channel_id = ? AND thread_ts = ?`, channelID, threadTS)
+	t := Thread{ChannelID: channelID, ThreadTS: threadTS}
 	err := row.Scan(&t.UserID, &t.ClaudeSessionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -201,31 +195,31 @@ func (s *Store) GetThread(ctx context.Context, provider, channelID, threadTS str
 func (s *Store) SaveThread(ctx context.Context, t Thread) error {
 	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO threads (provider, channel_id, thread_ts, user_id, claude_session_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (provider, channel_id, thread_ts) DO UPDATE SET
+		INSERT INTO threads (channel_id, thread_ts, user_id, claude_session_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (channel_id, thread_ts) DO UPDATE SET
 			claude_session_id = excluded.claude_session_id,
 			updated_at = excluded.updated_at`,
-		t.Provider, t.ChannelID, t.ThreadTS, t.UserID, t.ClaudeSessionID, now, now)
+		t.ChannelID, t.ThreadTS, t.UserID, t.ClaudeSessionID, now, now)
 	return err
 }
 
-// GoalChannel is the chat channel of one of a user's goals.
+// GoalChannel is the Slack channel of one of a user's goals.
 type GoalChannel struct {
 	UserID, GoalPermalink, GoalTitle string
-	Provider, ChannelID              string
+	ChannelID                        string
 	// OwnerSlackUserID is the goal owner's Slack user, read from users.
 	OwnerSlackUserID string
 }
 
 // GoalChannelOf returns the goal that the Slack user slackUserID has in
 // this channel, or nil when the channel is not a goal channel of theirs.
-func (s *Store) GoalChannelOf(ctx context.Context, provider, channelID, slackUserID string) (*GoalChannel, error) {
+func (s *Store) GoalChannelOf(ctx context.Context, channelID, slackUserID string) (*GoalChannel, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT g.user_id, g.goal_permalink, g.goal_title
 		FROM goal_channels g JOIN users u ON u.id = g.user_id
-		WHERE g.provider = ? AND g.channel_id = ? AND u.slack_user_id = ?`, provider, channelID, slackUserID)
-	gc := GoalChannel{Provider: provider, ChannelID: channelID, OwnerSlackUserID: slackUserID}
+		WHERE g.channel_id = ? AND u.slack_user_id = ?`, channelID, slackUserID)
+	gc := GoalChannel{ChannelID: channelID, OwnerSlackUserID: slackUserID}
 	err := row.Scan(&gc.UserID, &gc.GoalPermalink, &gc.GoalTitle)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -234,10 +228,10 @@ func (s *Store) GoalChannelOf(ctx context.Context, provider, channelID, slackUse
 }
 
 // GoalsWithChannel returns the permalinks of the user's goals that have a
-// channel on provider.
-func (s *Store) GoalsWithChannel(ctx context.Context, userID, provider string) (map[string]bool, error) {
+// channel.
+func (s *Store) GoalsWithChannel(ctx context.Context, userID string) (map[string]bool, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT goal_permalink FROM goal_channels WHERE user_id = ? AND provider = ?`, userID, provider)
+		`SELECT goal_permalink FROM goal_channels WHERE user_id = ?`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -253,19 +247,19 @@ func (s *Store) GoalsWithChannel(ctx context.Context, userID, provider string) (
 	return have, rows.Err()
 }
 
-// GoalChannels returns every goal channel on provider.
-func (s *Store) GoalChannels(ctx context.Context, provider string) ([]GoalChannel, error) {
+// GoalChannels returns every goal channel.
+func (s *Store) GoalChannels(ctx context.Context) ([]GoalChannel, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT g.user_id, g.goal_permalink, g.goal_title, g.channel_id, COALESCE(u.slack_user_id, '')
 		FROM goal_channels g JOIN users u ON u.id = g.user_id
-		WHERE g.provider = ? ORDER BY g.created_at`, provider)
+		ORDER BY g.created_at`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var gcs []GoalChannel
 	for rows.Next() {
-		gc := GoalChannel{Provider: provider}
+		var gc GoalChannel
 		if err := rows.Scan(&gc.UserID, &gc.GoalPermalink, &gc.GoalTitle, &gc.ChannelID, &gc.OwnerSlackUserID); err != nil {
 			return nil, err
 		}
@@ -277,18 +271,18 @@ func (s *Store) GoalChannels(ctx context.Context, provider string) ([]GoalChanne
 // SaveGoalChannel records the channel created for a goal.
 func (s *Store) SaveGoalChannel(ctx context.Context, gc GoalChannel) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO goal_channels (user_id, goal_permalink, goal_title, provider, channel_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		gc.UserID, gc.GoalPermalink, gc.GoalTitle, gc.Provider, gc.ChannelID, time.Now().Unix())
+		INSERT INTO goal_channels (user_id, goal_permalink, goal_title, channel_id, created_at)
+		VALUES (?, ?, ?, ?, ?)`,
+		gc.UserID, gc.GoalPermalink, gc.GoalTitle, gc.ChannelID, time.Now().Unix())
 	return err
 }
 
 // Exercise is one exercise posted for a learning goal.
 type Exercise struct {
-	UserID, GoalPermalink         string
-	Provider, ChannelID, ThreadTS string
-	NotePermalink                 string
-	PostedAt                      time.Time
+	UserID, GoalPermalink string
+	ChannelID, ThreadTS   string
+	NotePermalink         string
+	PostedAt              time.Time
 	// AnsweredAt is when the user first replied; zero while unanswered.
 	AnsweredAt time.Time
 }
@@ -296,21 +290,21 @@ type Exercise struct {
 // SaveExercise records a posted exercise.
 func (s *Store) SaveExercise(ctx context.Context, e Exercise) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO exercises (user_id, goal_permalink, provider, channel_id, thread_ts, note_permalink, posted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		e.UserID, e.GoalPermalink, e.Provider, e.ChannelID, e.ThreadTS, e.NotePermalink, e.PostedAt.Unix())
+		INSERT INTO exercises (user_id, goal_permalink, channel_id, thread_ts, note_permalink, posted_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		e.UserID, e.GoalPermalink, e.ChannelID, e.ThreadTS, e.NotePermalink, e.PostedAt.Unix())
 	return err
 }
 
 // LastExercise returns the goal's most recent exercise, or nil.
 func (s *Store) LastExercise(ctx context.Context, userID, goalPermalink string) (*Exercise, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT provider, channel_id, thread_ts, note_permalink, posted_at, answered_at FROM exercises
+		SELECT channel_id, thread_ts, note_permalink, posted_at, answered_at FROM exercises
 		WHERE user_id = ? AND goal_permalink = ? ORDER BY posted_at DESC LIMIT 1`, userID, goalPermalink)
 	e := Exercise{UserID: userID, GoalPermalink: goalPermalink}
 	var posted int64
 	var answered sql.NullInt64
-	err := row.Scan(&e.Provider, &e.ChannelID, &e.ThreadTS, &e.NotePermalink, &posted, &answered)
+	err := row.Scan(&e.ChannelID, &e.ThreadTS, &e.NotePermalink, &posted, &answered)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -323,13 +317,13 @@ func (s *Store) LastExercise(ctx context.Context, userID, goalPermalink string) 
 
 // MarkExerciseAnswered records a reply in a thread. When the thread is an
 // exercise's, it returns the exercise's note permalink; otherwise "".
-func (s *Store) MarkExerciseAnswered(ctx context.Context, provider, channelID, threadTS string) (string, error) {
+func (s *Store) MarkExerciseAnswered(ctx context.Context, channelID, threadTS string) (string, error) {
 	var note string
 	err := s.db.QueryRowContext(ctx, `
 		UPDATE exercises SET answered_at = COALESCE(answered_at, ?)
-		WHERE provider = ? AND channel_id = ? AND thread_ts = ?
+		WHERE channel_id = ? AND thread_ts = ?
 		RETURNING note_permalink`,
-		time.Now().Unix(), provider, channelID, threadTS).Scan(&note)
+		time.Now().Unix(), channelID, threadTS).Scan(&note)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -338,10 +332,10 @@ func (s *Store) MarkExerciseAnswered(ctx context.Context, provider, channelID, t
 
 // MarkEvent records an inbound event and reports whether it is new. A false
 // result means the event was already processed (e.g. a Slack retry).
-func (s *Store) MarkEvent(ctx context.Context, provider, eventID string) (bool, error) {
+func (s *Store) MarkEvent(ctx context.Context, eventID string) (bool, error) {
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO inbound_events (provider, event_id, received_at) VALUES (?, ?, ?)
-		 ON CONFLICT DO NOTHING`, provider, eventID, time.Now().Unix())
+		`INSERT INTO inbound_events (event_id, received_at) VALUES (?, ?)
+		 ON CONFLICT DO NOTHING`, eventID, time.Now().Unix())
 	if err != nil {
 		return false, err
 	}

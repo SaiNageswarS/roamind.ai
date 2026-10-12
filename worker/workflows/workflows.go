@@ -21,8 +21,6 @@ import (
 	"roamind.ai/memory"
 )
 
-const provider = "slack"
-
 // SlackAPI is the Slack client surface the workflows need.
 type SlackAPI interface {
 	slack.API

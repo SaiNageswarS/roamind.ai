@@ -68,7 +68,7 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 		return out, nil
 	}
 	if env.EventID != "" {
-		fresh, err := d.Store.MarkEvent(ctx, "slack", env.EventID)
+		fresh, err := d.Store.MarkEvent(ctx, env.EventID)
 		if err != nil {
 			return out, err
 		}
@@ -97,7 +97,7 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 	}
 	out.UserID = user.ID
 
-	thread, err := d.Store.GetThread(ctx, "slack", ev.Channel, ev.RootTS())
+	thread, err := d.Store.GetThread(ctx, ev.Channel, ev.RootTS())
 	if err != nil {
 		return out, err
 	}
@@ -114,7 +114,7 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 	var exercise *protocol.ExerciseRef
 	if goal != nil && ev.ThreadTS != "" {
 		// A reply in a daily exercise's thread answers it.
-		note, err := d.Store.MarkExerciseAnswered(ctx, provider, ev.Channel, ev.ThreadTS)
+		note, err := d.Store.MarkExerciseAnswered(ctx, ev.Channel, ev.ThreadTS)
 		if err != nil {
 			return out, err
 		}
@@ -150,7 +150,7 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 		MemoryProject: user.MemoryProject,
 		Goal:          goal,
 		Exercise:      exercise,
-	}, "Slack", up.Apply)
+	}, up.Apply)
 
 	note := ""
 	if turn.SessionReset && sessionID != "" {
@@ -164,7 +164,7 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 
 	if turn.SessionID != "" {
 		err := d.Store.SaveThread(finishCtx, store.Thread{
-			Provider: "slack", ChannelID: ev.Channel, ThreadTS: ev.RootTS(),
+			ChannelID: ev.Channel, ThreadTS: ev.RootTS(),
 			UserID: user.ID, ClaudeSessionID: turn.SessionID,
 		})
 		if err != nil {
@@ -193,7 +193,7 @@ func (d Deps) route(ctx context.Context, ev slack.Event) (*protocol.GoalRef, str
 	var gc *store.GoalChannel
 	if ev.ChannelType == "group" || ev.Type == "app_mention" {
 		var err error
-		if gc, err = d.Store.GoalChannelOf(ctx, "slack", ev.Channel, ev.User); err != nil {
+		if gc, err = d.Store.GoalChannelOf(ctx, ev.Channel, ev.User); err != nil {
 			return nil, "", err
 		}
 	}

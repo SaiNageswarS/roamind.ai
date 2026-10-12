@@ -131,7 +131,7 @@ func TestProcessGoalChannel(t *testing.T) {
 	owner := identity.UserID("owner@x.com")
 	err = d.Store.SaveGoalChannel(ctx, store.GoalChannel{
 		UserID: owner, GoalPermalink: "bm-u-test-u1-1/goals/learn-jax", GoalTitle: "Learn JAX",
-		Provider: "slack", ChannelID: "G1",
+		ChannelID: "G1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +164,7 @@ func TestProcessGoalChannel(t *testing.T) {
 		if c.env.EventID == "Ev6" {
 			if err := d.Store.SaveGoalChannel(ctx, store.GoalChannel{
 				UserID: other, GoalPermalink: "bm-u-test-u2-1/goals/learn-jax", GoalTitle: "Learn JAX",
-				Provider: "slack", ChannelID: "G1",
+				ChannelID: "G1",
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -200,12 +200,12 @@ func TestProcessExerciseAnswer(t *testing.T) {
 	owner := identity.UserID("owner@x.com")
 	goal := "bm-u-test-u1-1/goals/learn-german"
 	if err := d.Store.SaveGoalChannel(ctx, store.GoalChannel{
-		UserID: owner, GoalPermalink: goal, GoalTitle: "Learn German", Provider: "slack", ChannelID: "G1",
+		UserID: owner, GoalPermalink: goal, GoalTitle: "Learn German", ChannelID: "G1",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Store.SaveExercise(ctx, store.Exercise{
-		UserID: owner, GoalPermalink: goal, Provider: "slack", ChannelID: "G1", ThreadTS: "5.0", NotePermalink: "bm-u-test-u1-1/exercises/learn-german/2026-10-12", PostedAt: time.Now(),
+		UserID: owner, GoalPermalink: goal, ChannelID: "G1", ThreadTS: "5.0", NotePermalink: "bm-u-test-u1-1/exercises/learn-german/2026-10-12", PostedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
 	}
