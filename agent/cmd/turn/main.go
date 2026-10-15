@@ -30,7 +30,8 @@ func main() {
 	flag.Parse()
 
 	cfg := agent.Config{DataDir: *dataDir, Model: *model}
-	in := protocol.TurnInput{UserID: *user, UserName: *user, UserEmail: *email, SessionID: *session, Text: strings.Join(flag.Args(), " ")}
+	in := protocol.TurnInput{UserID: *user, UserName: *user, UserEmail: *email, SessionID: *session,
+		Text: strings.Join(flag.Args(), " "), Tools: protocol.ToolsWorkspace}
 	if *project != "off" {
 		mem, err := memory.New(filepath.Join(*dataDir, "memory"), os.Getenv("ROAMIND_BM_BIN"))
 		if err != nil {

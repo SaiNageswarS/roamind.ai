@@ -52,9 +52,10 @@ oauth_config:
 settings:
   event_subscriptions:
     request_url: https://REPLACE-ME.ts.net/api/v1/stable/tenants/TENANT/webhooks/slack
-    # Only app_mention, message.im and message.groups start runs (see
-    # channels/slack.EventKeyExpression);
-    # the rest arrive as slack:ignored:* events, ready for later features.
+    # app_mention, message.im and message.groups start chat turns, and
+    # reaction_added records feedback on news digests (see
+    # channels/slack.EventKeyExpression); the rest arrive as
+    # slack:ignored:* events, ready for later features.
     bot_events:
       - app_mention
       - message.im

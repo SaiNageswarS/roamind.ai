@@ -52,6 +52,17 @@ type Event struct {
 	Team        string `json:"team,omitempty"`
 	// Files are shared with the message (subtype file_share in DMs).
 	Files []File `json:"files,omitempty"`
+	// Reaction is the emoji name of a reaction_added event, and Item the
+	// message it was added to.
+	Reaction string   `json:"reaction,omitempty"`
+	Item     *ItemRef `json:"item,omitempty"`
+}
+
+// ItemRef is the message a reaction is on.
+type ItemRef struct {
+	Type    string `json:"type"` // message
+	Channel string `json:"channel"`
+	TS      string `json:"ts"`
 }
 
 // ThreadTS is the timestamp of the thread root; a top-level message starts
@@ -66,17 +77,22 @@ func (e Event) RootTS() string {
 // EventKeyExpression is the CEL expression configured on the Hatchet Slack
 // webhook. Chat messages (mentions, DMs to the bot and messages in private
 // channels the bot is in, with or without shared files) get the key
-// "slack:chat"; everything else, including the bot's own messages and
-// edits, is routed to "slack:ignored:<type>" so it never starts a run.
-// Private-channel messages are for goal channels; chat-turn skips them
-// elsewhere, where only mentions address the agent.
-const EventKeyExpression = `has(input.event) && !has(input.event.bot_id) && ` +
+// "slack:chat", and reactions "slack:reaction". Everything else,
+// including the bot's own messages and edits, is routed to
+// "slack:ignored:<type>" so it never starts a run. Private-channel messages
+// are for goal and news channels; chat-turn skips them elsewhere, where only
+// mentions address the agent.
+const EventKeyExpression = `has(input.event) && input.event.type == 'reaction_added' ? 'slack:reaction' : ` +
+	`(has(input.event) && !has(input.event.bot_id) && ` +
 	`(!has(input.event.subtype) || input.event.subtype == 'file_share') && ` +
 	`(input.event.type == 'app_mention' || (input.event.type == 'message' && has(input.event.channel_type) && (input.event.channel_type == 'im' || input.event.channel_type == 'group'))) ` +
-	`? 'slack:chat' : 'slack:ignored:' + (has(input.event) ? input.event.type : input.type)`
+	`? 'slack:chat' : 'slack:ignored:' + (has(input.event) ? input.event.type : input.type))`
 
 // ChatEventKey is the event key chat-turn listens on.
 const ChatEventKey = "slack:chat"
+
+// ReactionEventKey is the event key of reaction_added events.
+const ReactionEventKey = "slack:reaction"
 
 // IsChat mirrors EventKeyExpression in Go, as a second line of defence.
 func (e Envelope) IsChat() bool {

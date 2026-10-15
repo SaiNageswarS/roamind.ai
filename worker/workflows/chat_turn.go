@@ -78,7 +78,7 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 		}
 	}
 
-	goal, skip, err := d.route(ctx, ev)
+	goal, news, skip, err := d.route(ctx, ev)
 	if err != nil {
 		return out, err
 	}
@@ -123,6 +123,32 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 		}
 	}
 
+	var newsRef *protocol.NewsRef
+	if news {
+		newsRef = &protocol.NewsRef{}
+		ins, err := d.Store.UserInterests(ctx, user.ID)
+		if err != nil {
+			return out, err
+		}
+		for _, in := range ins {
+			newsRef.Interests = append(newsRef.Interests, protocol.InterestRef{Interest: in.Interest, Status: in.Status})
+		}
+		if ev.ThreadTS != "" {
+			// A reply in a digest's thread is about the digest, and counts as
+			// liking it.
+			dg, err := d.Store.DigestByTS(ctx, ev.Channel, ev.ThreadTS)
+			if err != nil {
+				return out, err
+			}
+			if dg != nil && dg.UserID == user.ID {
+				newsRef.Digest = dg.Text
+				if err := d.Store.SaveSignal(ctx, store.Signal{UserID: user.ID, DigestID: dg.ID, Kind: "reply", Value: 1}); err != nil {
+					return out, err
+				}
+			}
+		}
+	}
+
 	up, err := slack.NewUpdater(ctx, d.Slack, ev.Channel, ev.RootTS())
 	if err != nil {
 		return out, fmt.Errorf("post placeholder: %w", err)
@@ -150,6 +176,8 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 		MemoryProject: user.MemoryProject,
 		Goal:          goal,
 		Exercise:      exercise,
+		News:          newsRef,
+		Tools:         protocol.ToolsWorkspace,
 	}, up.Apply)
 
 	note := ""
@@ -183,29 +211,37 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 	return out, nil
 }
 
-// route decides whether a chat event starts a turn, and which goal it is
-// about. In a goal channel, every message from a user with a goal there is a
-// turn about their goal (their @mentions there arrive twice, so the mention
-// copy is skipped); a channel can hold several users' goals, each in their
-// own memory. Elsewhere, and for anyone else, private-channel messages start
-// a turn only through their @mention copy.
-func (d Deps) route(ctx context.Context, ev slack.Event) (*protocol.GoalRef, string, error) {
+// route decides whether a chat event starts a turn, and what it is about.
+// In a goal channel, every message from a user with a goal there is a turn
+// about their goal (their @mentions there arrive twice, so the mention copy
+// is skipped); a channel can hold several users' goals, each in their own
+// memory. The user's news channel works the same way, with news turns.
+// Elsewhere, and for anyone else, private-channel messages start a turn only
+// through their @mention copy.
+func (d Deps) route(ctx context.Context, ev slack.Event) (*protocol.GoalRef, bool, string, error) {
 	var gc *store.GoalChannel
+	news := false
 	if ev.ChannelType == "group" || ev.Type == "app_mention" {
 		var err error
 		if gc, err = d.Store.GoalChannelOf(ctx, ev.Channel, ev.User); err != nil {
-			return nil, "", err
+			return nil, false, "", err
+		}
+		if gc == nil {
+			if news, err = d.Store.IsNewsChannelOf(ctx, ev.Channel, ev.User); err != nil {
+				return nil, false, "", err
+			}
 		}
 	}
+	own := gc != nil || news
 	switch {
-	case ev.Type == "message" && ev.ChannelType == "group" && gc == nil:
-		return nil, "not addressed to the agent", nil
-	case ev.Type == "app_mention" && gc != nil:
-		return nil, "mention in own goal channel, handled as its message", nil
+	case ev.Type == "message" && ev.ChannelType == "group" && !own:
+		return nil, false, "not addressed to the agent", nil
+	case ev.Type == "app_mention" && own:
+		return nil, false, "mention in own goal or news channel, handled as its message", nil
 	case gc != nil:
-		return &protocol.GoalRef{Title: gc.GoalTitle, Permalink: gc.GoalPermalink}, "", nil
+		return &protocol.GoalRef{Title: gc.GoalTitle, Permalink: gc.GoalPermalink}, false, "", nil
 	}
-	return nil, "", nil
+	return nil, news, "", nil
 }
 
 // resolveUser maps the Slack sender to a user, creating it from the Slack

@@ -42,7 +42,10 @@ type Options struct {
 	// JSONSchema makes claude return structured output matching it
 	// (--json-schema), in the result event's structured_output.
 	JSONSchema string
-	Env        []string
+	// NoSessionPersistence keeps claude from saving the session
+	// (--no-session-persistence).
+	NoSessionPersistence bool
+	Env                  []string
 }
 
 // Args builds the command-line arguments. User settings and ambient MCP
@@ -82,6 +85,9 @@ func (o Options) Args() []string {
 	}
 	if o.JSONSchema != "" {
 		args = append(args, "--json-schema", o.JSONSchema)
+	}
+	if o.NoSessionPersistence {
+		args = append(args, "--no-session-persistence")
 	}
 	return args
 }

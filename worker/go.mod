@@ -10,6 +10,11 @@ require (
 )
 
 require (
+	github.com/mmcdole/gofeed v1.4.2 // indirect
+	github.com/mmcdole/goxpp/v2 v2.0.0 // indirect
+)
+
+require (
 	cel.dev/expr v0.25.2 // indirect
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
@@ -33,7 +38,7 @@ require (
 	github.com/go-playground/validator/v10 v10.30.5 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
-	github.com/google/cel-go v0.29.0 // indirect
+	github.com/google/cel-go v0.29.0
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.4 // indirect
@@ -98,7 +103,6 @@ require (
 	modernc.org/sqlite v1.60.1 // indirect
 	roamind.ai/memory v0.0.0
 )
-
 
 replace roamind.ai/agent => ../agent
 

@@ -34,22 +34,10 @@ func TestEnsureIsolatesProject(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mcp, err := c.MCPConfig("bm-u-sai-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var m struct {
-		MCPServers map[string]struct {
-			Args []string          `json:"args"`
-			Env  map[string]string `json:"env"`
-		} `json:"mcpServers"`
-	}
-	if err := json.Unmarshal([]byte(mcp), &m); err != nil {
-		t.Fatal(err)
-	}
-	srv := m.MCPServers[ServerName]
-	if srv.Env["BASIC_MEMORY_CONFIG_DIR"] != filepath.Join(c.Dir, "users", "bm-u-sai-1", "config") || srv.Args[2] != "bm-u-sai-1" {
-		t.Fatalf("mcp config = %s", mcp)
+	srv := c.MCPServer("bm-u-sai-1")
+	env, args := srv["env"].(map[string]string), srv["args"].([]string)
+	if env["BASIC_MEMORY_CONFIG_DIR"] != filepath.Join(c.Dir, "users", "bm-u-sai-1", "config") || args[2] != "bm-u-sai-1" {
+		t.Fatalf("mcp server = %v", srv)
 	}
 }
 

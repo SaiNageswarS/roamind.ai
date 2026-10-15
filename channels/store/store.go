@@ -1,70 +1,28 @@
 // Package store is the SQLite persistence for Slack: user identities,
-// thread → claude session mapping, goal channels and inbound event dedupe. Conversation
+// thread → claude session mapping, goal channels, exercises, news
+// interests, digests and their feedback, and inbound event dedupe. Conversation
 // content itself lives only in claude's session files.
 package store
 
 import (
 	"context"
 	"database/sql"
+	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
+	"sort"
 	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
-const schema = `
-CREATE TABLE IF NOT EXISTS users (
-	id               TEXT PRIMARY KEY, -- sha256(lowercase(trim(email)))
-	email            TEXT NOT NULL UNIQUE,
-	display_name     TEXT NOT NULL DEFAULT '',
-	slack_team_id    TEXT,
-	slack_user_id    TEXT,
-	memory_project   TEXT UNIQUE, -- Basic Memory project, bm-u-<name>-<idx>
-	created_at       INTEGER NOT NULL,
-	updated_at       INTEGER NOT NULL,
-	UNIQUE (slack_team_id, slack_user_id)
-);
-CREATE TABLE IF NOT EXISTS threads (
-	channel_id        TEXT NOT NULL,
-	thread_ts         TEXT NOT NULL,
-	user_id           TEXT NOT NULL REFERENCES users(id),
-	claude_session_id TEXT NOT NULL DEFAULT '',
-	created_at        INTEGER NOT NULL,
-	updated_at        INTEGER NOT NULL,
-	PRIMARY KEY (channel_id, thread_ts)
-);
--- One channel per goal, created by the harness; the agent never sees it.
--- Several users can share a channel, each linked to the goal in their own
--- memory.
-CREATE TABLE IF NOT EXISTS goal_channels (
-	user_id        TEXT NOT NULL REFERENCES users(id),
-	goal_permalink TEXT NOT NULL, -- Basic Memory permalink of the goal note
-	goal_title     TEXT NOT NULL,
-	channel_id     TEXT NOT NULL,
-	created_at     INTEGER NOT NULL,
-	PRIMARY KEY (user_id, goal_permalink),
-	UNIQUE (channel_id, user_id)
-);
--- Daily exercises posted for learning goals; a reply in the exercise's
--- thread answers it.
-CREATE TABLE IF NOT EXISTS exercises (
-	user_id        TEXT NOT NULL REFERENCES users(id),
-	goal_permalink TEXT NOT NULL,
-	channel_id     TEXT NOT NULL,
-	thread_ts      TEXT NOT NULL, -- the exercise message
-	note_permalink TEXT NOT NULL, -- the exercise note in the user's memory
-	posted_at      INTEGER NOT NULL,
-	answered_at    INTEGER, -- first reply in the thread; NULL until then
-	PRIMARY KEY (channel_id, thread_ts)
-);
-CREATE INDEX IF NOT EXISTS exercises_goal ON exercises (user_id, goal_permalink, posted_at);
-CREATE TABLE IF NOT EXISTS inbound_events (
-	event_id    TEXT PRIMARY KEY, -- Slack event_id
-	received_at INTEGER NOT NULL
-);
-`
+// schema holds the tables, one file per area, applied in file order on
+// every Open; each statement is CREATE ... IF NOT EXISTS.
+//
+//go:embed schema/*.sql
+var schema embed.FS
 
 // Store wraps the SQLite database.
 type Store struct{ db *sql.DB }
@@ -76,11 +34,30 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec(schema); err != nil {
+	if err := applySchema(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("apply schema: %w", err)
+		return nil, err
 	}
 	return &Store{db: db}, nil
+}
+
+// applySchema runs the schema files in name order.
+func applySchema(db *sql.DB) error {
+	names, err := fs.Glob(schema, "schema/*.sql")
+	if err != nil {
+		return err
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		b, err := schema.ReadFile(name)
+		if err != nil {
+			return err
+		}
+		if _, err := db.Exec(string(b)); err != nil {
+			return fmt.Errorf("apply %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }

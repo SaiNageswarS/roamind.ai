@@ -16,8 +16,10 @@ import (
 	slackapi "github.com/slack-go/slack"
 
 	"roamind.ai/agent"
+	"roamind.ai/channels/feeds"
 	"roamind.ai/channels/store"
 	"roamind.ai/memory"
+	"roamind.ai/worker/catalog"
 	"roamind.ai/worker/client"
 	"roamind.ai/worker/workflows"
 )
@@ -44,6 +46,15 @@ func run() error {
 	}
 	defer st.Close()
 
+	// The pre-built catalog of news interests.
+	cat, err := catalog.Interests()
+	if err != nil {
+		return err
+	}
+	if err := st.SyncCatalog(ctx, cat); err != nil {
+		return err
+	}
+
 	token := os.Getenv("SLACK_BOT_TOKEN")
 	if token == "" {
 		slog.Warn("SLACK_BOT_TOKEN is not set; Slack calls will fail")
@@ -63,6 +74,17 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	mcpBin, err := mcpBinary(os.Getenv("ROAMIND_MCP_BIN"))
+	if err != nil {
+		return err
+	}
+	var toolsServer []string
+	if mcpBin != "" {
+		// claude runs it in the user's workspace, so the paths are absolute.
+		toolsServer = []string{mcpBin, "--data", dataDir}
+	} else {
+		slog.Warn("bin/mcp not found (./build.sh mcp); chat turns run without Roamind's tools")
+	}
 	c, err := client.HatchetClient()
 	if err != nil {
 		return err
@@ -75,13 +97,17 @@ func run() error {
 			ClaudeBinary: os.Getenv("ROAMIND_CLAUDE_BIN"),
 			Model:        os.Getenv("ROAMIND_MODEL"),
 			Memory:       mem,
+			ToolsServer:  toolsServer,
 		},
 		Memory:   mem,
+		Feeds:    feeds.New(20 * time.Second),
 		Location: loc,
 	})
 	if mem != nil {
 		slog.Info("daily exercises", "tz", loc.String(),
-			"crons_utc", workflows.ExerciseCrons(loc, workflows.ExerciseHour))
+			"crons_utc", workflows.LocalCrons(loc, workflows.ExerciseHour))
+		slog.Info("news shorts", "tz", loc.String(),
+			"crons_utc", workflows.LocalCrons(loc, workflows.NewsHours...))
 	}
 
 	slots, _ := strconv.Atoi(envOr("ROAMIND_WORKER_SLOTS", "4"))
@@ -91,6 +117,27 @@ func run() error {
 	}
 	slog.Info("worker starting", "data_dir", dataDir, "slots", slots)
 	return w.StartBlocking(ctx)
+}
+
+// mcpBinary is the absolute path of the mcp command (./build.sh mcp):
+// bin, or by default mcp next to the worker's own binary; "" when there is
+// none.
+func mcpBinary(bin string) (string, error) {
+	if bin == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			return "", err
+		}
+		bin = filepath.Join(filepath.Dir(exe), "mcp")
+	}
+	bin, err := filepath.Abs(bin)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(bin); err != nil {
+		return "", nil
+	}
+	return bin, nil
 }
 
 // location loads the zone tz, or by default the server's zone under its

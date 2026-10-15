@@ -12,7 +12,8 @@
 #   funnel        expose only the Slack webhook path publicly via Tailscale Funnel
 #   caddy         build ./bin/caddy with the Tailscale plugin
 #   worker        build ./bin/worker
-#   all           build caddy and worker
+#   mcp           build ./bin/mcp, the MCP server claude starts per chat turn
+#   all           build caddy, worker and mcp
 #   vllm          install vLLM and download the GPU search models
 #   service       install + enable the roamind systemd user service, which runs
 #                 process-compose at boot (systemctl --user start|stop|status roamind)
@@ -26,7 +27,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 ENV_FILE=".env"
-MODULES=(agent channels worker memory)
+MODULES=(agent channels worker memory mcp)
 WITH_HATCHET="deploy/bin/with-hatchet.sh"
 
 HATCHET_VERSION="v0.110.22" # keep in step with the Go SDK in worker/go.mod
@@ -92,6 +93,11 @@ cmd_worker() {
   go build -o bin/worker ./worker/cmd/worker
 }
 
+cmd_mcp() {
+  log "building bin/mcp"
+  go build -o bin/mcp ./mcp/cmd/mcp
+}
+
 cmd_vllm() {
   log "installing vLLM $VLLM_VERSION"
   # A uv-managed Python ships the headers Triton compiles against.
@@ -134,6 +140,7 @@ UNIT
 cmd_all() {
   cmd_caddy
   cmd_worker
+  cmd_mcp
 }
 
 each_module() {
@@ -179,6 +186,7 @@ main() {
     funnel) cmd_funnel ;;
     caddy) cmd_caddy ;;
     worker) cmd_worker ;;
+    mcp) cmd_mcp ;;
     all) cmd_all ;;
     vllm) cmd_vllm ;;
     service) cmd_service ;;

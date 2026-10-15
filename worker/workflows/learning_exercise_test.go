@@ -13,7 +13,7 @@ import (
 	"roamind.ai/memory"
 )
 
-func TestExerciseCrons(t *testing.T) {
+func TestLocalCrons(t *testing.T) {
 	berlin, _ := time.LoadLocation("Europe/Berlin")
 	kolkata, _ := time.LoadLocation("Asia/Kolkata")
 	cases := []struct {
@@ -25,9 +25,13 @@ func TestExerciseCrons(t *testing.T) {
 		{kolkata, []string{"30 3 * * *"}},
 	}
 	for _, c := range cases {
-		if got := ExerciseCrons(c.loc, 9); !reflect.DeepEqual(got, c.want) {
+		if got := LocalCrons(c.loc, 9); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: %v, want %v", c.loc, got, c.want)
 		}
+	}
+	want := []string{"0 7 * * *", "0 6 * * *", "0 19 * * *", "0 18 * * *"}
+	if got := LocalCrons(berlin, 8, 20); !reflect.DeepEqual(got, want) {
+		t.Errorf("8 and 20 in Berlin: %v, want %v", got, want)
 	}
 }
 
@@ -117,7 +121,9 @@ func TestLearningExercise(t *testing.T) {
 		t.Fatalf("draft: %+v %v", dr, err)
 	}
 	args, _ := os.ReadFile(argsLog)
-	if !strings.Contains(string(args), "--json-schema") || strings.Contains(string(args), "--mcp-config") {
+	// The draft has the workspace tools and the user's memory.
+	if !strings.Contains(string(args), "--json-schema") || !strings.Contains(string(args), "--tools Bash,Read,Write,Edit") ||
+		!strings.Contains(string(args), `"--project","`+p+`"`) || strings.Contains(string(args), "--no-session-persistence") {
 		t.Fatalf("draft args: %s", args)
 	}
 	stdin, _ := os.ReadFile(filepath.Join(filepath.Dir(argsLog), "stdin.log"))

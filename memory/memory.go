@@ -213,18 +213,14 @@ func (c *Config) writeBMConfig(project string) error {
 	return err
 }
 
-// MCPConfig is the --mcp-config JSON giving claude bm pinned to project.
-func (c *Config) MCPConfig(project string) (string, error) {
-	b, err := json.Marshal(map[string]any{
-		"mcpServers": map[string]any{
-			ServerName: map[string]any{
-				"type":    "stdio",
-				"command": c.Binary,
-				"args":    []string{"mcp", "--project", project},
-				// The project's own config, and with it its own database.
-				"env": map[string]string{"BASIC_MEMORY_CONFIG_DIR": c.configDir(project)},
-			},
-		},
-	})
-	return string(b), err
+// MCPServer is the mcpServers entry, under ServerName, that gives claude bm
+// pinned to project.
+func (c *Config) MCPServer(project string) map[string]any {
+	return map[string]any{
+		"type":    "stdio",
+		"command": c.Binary,
+		"args":    []string{"mcp", "--project", project},
+		// The project's own config, and with it its own database.
+		"env": map[string]string{"BASIC_MEMORY_CONFIG_DIR": c.configDir(project)},
+	}
 }

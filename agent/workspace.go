@@ -51,6 +51,15 @@ var workspaceSettings = mustJSON(map[string]any{
 	},
 })
 
+// webTools are the tools of a ToolsWeb turn, and webSettings allows
+// WebFetch on any domain; there is no Bash, so no sandbox.
+var (
+	webTools    = []string{"WebSearch", "WebFetch"}
+	webSettings = mustJSON(map[string]any{
+		"permissions": map[string]any{"allow": []string{"WebFetch(domain:*)"}},
+	})
+)
+
 func mustJSON(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {

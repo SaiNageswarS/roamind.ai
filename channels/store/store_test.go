@@ -189,3 +189,19 @@ func TestExercises(t *testing.T) {
 		t.Fatalf("answered_at moved: %v", again.AnsweredAt)
 	}
 }
+
+// The schema files apply in order, and again on an existing database.
+func TestSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.db")
+	for i := 0; i < 2; i++ {
+		s, err := Open(path)
+		if err != nil {
+			t.Fatalf("open %d: %v", i, err)
+		}
+		var n int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'`).Scan(&n); err != nil || n != 13 {
+			t.Fatalf("open %d: %d tables, %v", i, n, err)
+		}
+		s.Close()
+	}
+}

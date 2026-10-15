@@ -27,6 +27,8 @@ type fakeSlack struct {
 	taken   map[string]bool // channel names in use
 	created []string
 	invites map[string]string
+	// failPosts makes PostMessageContext fail.
+	failPosts bool
 }
 
 func newFakeSlack() *fakeSlack {
@@ -39,6 +41,9 @@ func newFakeSlack() *fakeSlack {
 func (f *fakeSlack) PostMessageContext(_ context.Context, ch string, opts ...slackapi.MsgOption) (string, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failPosts {
+		return "", "", fmt.Errorf("slack is down")
+	}
 	ts := fmt.Sprintf("m%d", len(f.posts))
 	_, v, _ := slackapi.UnsafeApplyMsgOptions("", "", "", opts...)
 	f.posts = append(f.posts, ts)

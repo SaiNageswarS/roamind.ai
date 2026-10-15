@@ -41,25 +41,28 @@ func LearningExercises(c *hatchet.Client, d Deps, exercise *hatchet.Workflow) *h
 		return out, nil
 	},
 		hatchet.WithWorkflowDescription(fmt.Sprintf("Each day at %d:00 %s, start an exercise for every learning goal", ExerciseHour, d.Location)),
-		hatchet.WithWorkflowCron(ExerciseCrons(d.Location, ExerciseHour)...),
+		hatchet.WithWorkflowCron(LocalCrons(d.Location, ExerciseHour)...),
 		hatchet.WithRetries(1),
 		hatchet.WithExecutionTimeout(time.Minute),
 	)
 }
 
-// ExerciseCrons are UTC cron expressions for hour:00 in loc. Hatchet crons
-// run in UTC, so a zone with daylight saving time gets one for each offset,
-// and the run that is not at hour local time does nothing.
-func ExerciseCrons(loc *time.Location, hour int) []string {
+// LocalCrons are UTC cron expressions for each hour:00 in loc. Hatchet
+// crons run in UTC, so a zone with daylight saving time gets one for each
+// offset, and the run that is not at one of the hours local time does
+// nothing.
+func LocalCrons(loc *time.Location, hours ...int) []string {
 	var crons []string
 	seen := map[string]bool{}
 	year := time.Now().Year()
-	for _, m := range []time.Month{time.January, time.July} {
-		t := time.Date(year, m, 1, hour, 0, 0, 0, loc).UTC()
-		c := fmt.Sprintf("%d %d * * *", t.Minute(), t.Hour())
-		if !seen[c] {
-			seen[c] = true
-			crons = append(crons, c)
+	for _, hour := range hours {
+		for _, m := range []time.Month{time.January, time.July} {
+			t := time.Date(year, m, 1, hour, 0, 0, 0, loc).UTC()
+			c := fmt.Sprintf("%d %d * * *", t.Minute(), t.Hour())
+			if !seen[c] {
+				seen[c] = true
+				crons = append(crons, c)
+			}
 		}
 	}
 	return crons

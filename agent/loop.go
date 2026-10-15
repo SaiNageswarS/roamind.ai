@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -34,7 +35,16 @@ type Config struct {
 	Model        string
 	// Memory enables long-term memory for turns that name a project.
 	Memory *memory.Config
+	// ToolsServer, when set, is the command of Roamind's MCP server (bin/mcp),
+	// whose tools keep the user's data, such as their news interests; each
+	// turn appends --user <id>. Chat turns get it, structured-output turns
+	// don't.
+	ToolsServer []string
 }
+
+// ToolsServerName is Roamind's MCP server's key under mcpServers; claude
+// names its tools mcp__roamind__<tool>.
+const ToolsServerName = "roamind"
 
 // Emit receives packets as the turn progresses.
 type Emit func(protocol.Packet)
@@ -45,14 +55,29 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, emit Emit) 
 	if in.UserID == "" {
 		return protocol.TurnOutput{}, errors.New("agent: empty user id")
 	}
-	dir, err := WorkspaceDir(cfg, in.UserID)
-	if err != nil {
-		return protocol.TurnOutput{}, err
+	if in.Tools != protocol.ToolsWorkspace && in.Tools != protocol.ToolsWeb && in.Tools != protocol.ToolsNone {
+		return protocol.TurnOutput{}, fmt.Errorf("agent: unknown tool set %q", in.Tools)
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return protocol.TurnOutput{}, err
+	var dir string
+	var err error
+	if in.Tools == protocol.ToolsNone {
+		// A throwaway directory: the turn can't touch the workspace, and its
+		// session, which is not saved anyway, is not kept with the user's.
+		if dir, err = os.MkdirTemp("", "roamind-turn-"); err != nil {
+			return protocol.TurnOutput{}, err
+		}
+		defer os.RemoveAll(dir)
+	} else {
+		if dir, err = WorkspaceDir(cfg, in.UserID); err != nil {
+			return protocol.TurnOutput{}, err
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return protocol.TurnOutput{}, err
+		}
 	}
-	withMemory := cfg.Memory != nil && in.MemoryProject != ""
+	workspace := in.Tools == protocol.ToolsWorkspace
+	withMemory := workspace && cfg.Memory != nil && in.MemoryProject != ""
+	withTools := workspace && len(cfg.ToolsServer) > 0 && in.OutputSchema == ""
 	var sp bytes.Buffer
 	err = systemPrompt.Execute(&sp, map[string]any{
 		"UserName":  orDefault(in.UserName, "the user"),
@@ -62,6 +87,9 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, emit Emit) 
 		"Memory":    withMemory,
 		"Goal":      in.Goal,
 		"Exercise":  exercise(in),
+		"News":      in.News,
+		"Interests": withTools,
+		"Tools":     orDefault(in.Tools, "workspace"),
 	})
 	if err != nil {
 		return protocol.TurnOutput{}, err
@@ -72,20 +100,39 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, emit Emit) 
 		SessionID:    in.SessionID,
 		Model:        cfg.Model,
 		SystemPrompt: sp.String(),
-		Tools:        workspaceTools,
-		Settings:     workspaceSettings,
-		AllowedTools: allowedWorkspaceTools(dir),
 		JSONSchema:   in.OutputSchema,
 	}
+	switch in.Tools {
+	case protocol.ToolsWorkspace:
+		opts.Tools, opts.Settings, opts.AllowedTools = workspaceTools, workspaceSettings, allowedWorkspaceTools(dir)
+	case protocol.ToolsWeb:
+		opts.Tools, opts.Settings, opts.AllowedTools = webTools, webSettings, webTools
+	case protocol.ToolsNone:
+		opts.NoSessionPersistence = true
+	}
+	servers := map[string]any{}
 	if withMemory {
 		if err := cfg.Memory.Ensure(in.MemoryProject); err != nil {
 			return protocol.TurnOutput{}, err
 		}
-		if opts.MCPConfig, err = cfg.Memory.MCPConfig(in.MemoryProject); err != nil {
-			return protocol.TurnOutput{}, err
-		}
+		servers[memory.ServerName] = cfg.Memory.MCPServer(in.MemoryProject)
 		opts.AllowedTools = append(opts.AllowedTools, memory.AllowedTools...)
 		opts.DisallowedTools = memory.DisallowedTools
+	}
+	if withTools {
+		servers[ToolsServerName] = map[string]any{
+			"type":    "stdio",
+			"command": cfg.ToolsServer[0],
+			"args":    append(cfg.ToolsServer[1:len(cfg.ToolsServer):len(cfg.ToolsServer)], "--user", in.UserID),
+		}
+		opts.AllowedTools = append(opts.AllowedTools, "mcp__"+ToolsServerName)
+	}
+	if len(servers) > 0 {
+		b, err := json.Marshal(map[string]any{"mcpServers": servers})
+		if err != nil {
+			return protocol.TurnOutput{}, err
+		}
+		opts.MCPConfig = string(b)
 	}
 
 	out, err := runOnce(ctx, opts, in.Text, emit)

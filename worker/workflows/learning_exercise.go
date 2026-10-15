@@ -219,14 +219,17 @@ func (d Deps) draftExercise(ctx context.Context, in ExerciseInput, chk checkOutp
 	if err != nil {
 		return out, err
 	}
-	// The context is all the draft needs from memory, so the turn runs
-	// without memory tools; it keeps web search for material.
+	// The turn gets the workspace tools and the user's memory, so it can
+	// draw on their uploads and notes as well as the web. It runs in the
+	// workspace directory, so the exercise's thread can resume it.
 	turn, err := agent.RunTurn(ctx, d.Agent, protocol.TurnInput{
-		UserID:       u.ID,
-		Text:         prompt,
-		UserName:     u.DisplayName,
-		UserEmail:    u.Email,
-		OutputSchema: agent.DraftExerciseSchema,
+		UserID:        u.ID,
+		Text:          prompt,
+		UserName:      u.DisplayName,
+		UserEmail:     u.Email,
+		MemoryProject: u.MemoryProject,
+		Tools:         protocol.ToolsWorkspace,
+		OutputSchema:  agent.DraftExerciseSchema,
 	}, func(protocol.Packet) {})
 	out.SessionID, out.CostUSD = turn.SessionID, turn.CostUSD
 	if err != nil {

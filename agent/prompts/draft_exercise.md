@@ -23,7 +23,12 @@ This is {{.UserName}}'s first exercise for this goal: start at intro or easy,
 matching the level the goal note describes.
 {{- end}}
 
-Follow the exercise preferences in the goal note. Set one exercise that
+Follow the exercise preferences in the goal note. Draw on {{.UserName}}'s
+memory and on files in their workspace, such as uploaded course material,
+when they help pick or ground the exercise; the web is there for material
+too. The exercise is saved to memory as an exercise note when it is posted.
+
+Set one exercise that
 takes about ten minutes; it can have several numbered items or a longer
 passage, in whatever format best practises the topic. End it with how to
 reply, such as one numbered line per item. Write the exercise in light
