@@ -2,15 +2,30 @@
 
 A self-hosted, multi-user personal agent in Slack, organised around your goals.
 
+A personal open-source project, designed and built by [Sai Nageswar Satchidanand](https://github.com/SaiNageswarS) for personal use.
+
 ## Features
 
-- **A channel per goal.** Say you want to build, learn or achieve something, and Roamind opens a private channel for it. Everything said there is about that goal, with no @mention needed.
-- **Daily exercises.** Each learning goal gets one exercise every morning. Your answer is graded in its thread, and recent results set the next one's topic and difficulty.
-- **News shorts.** A daily digest from curated feeds of your interests, each item scored by that interest's rubric. Your reactions and replies shape the next digest.
-- **Memory you own.** Facts are typed, linked Markdown notes (Person, Goal, Task, …), each with its source and date. Read and edit them like any files.
-- **Claude Code is the agent.** Every turn is `claude -p`: web search, files, PDFs, images and a shell in your own workspace.
-- **Durable runs.** Every message and job is a [Hatchet](https://hatchet.run) run you can trace and replay.
-- **Local search.** Memory search uses Qwen3 embedding and re-ranking models on your own GPU.
+Novelty is rated against other self-hosted personal agents:
+- ★★★: not found in comparable projects;
+- ★★: a known idea with a distinct twist;
+- ★: a solid, common feature.
+
+| Feature | What it does | Novelty |
+|---|---|---|
+| **A channel per goal** | Say you want to build, learn or achieve something, and it becomes a Goal note in your memory. Roamind then opens a private Slack channel for it. Everything said there is about that goal, with no @mention needed. Invite someone to share the channel; each of you keeps the goal in your own memory. | ★★★ |
+| **Daily exercises that adapt** | Each learning goal gets one exercise every morning, drafted from the goal, your stated preferences and your recent exercises. Your answer is graded in its thread by the same Claude session that wrote the exercise, and the results set the next one's topic and difficulty. The next exercise waits until you've answered. | ★★★ |
+| **News ranked by a rubric per interest** | A daily digest from curated RSS/Atom feeds. Every interest has its own rubric in prose, for example positivity for living well or novelty for AI research. Claude judges each interest's items against it separately. A story already sent in the last 48 hours is left out, even from another source. | ★★★ |
+| **Feeds can't steer the agent** | The model that ranks third-party feed text runs with no tools, no memory and no saved session, in a throwaway folder. A prompt injection in a feed can only change a score. | ★★ |
+| **Interests the agent curates** | Ask in chat to follow, mute or add a news interest. Through Roamind's own MCP server, the agent adds new interests with feeds it has checked and a rubric it writes. Your 👍/👎 reactions and replies to a digest weigh its interests in later ones. | ★★ |
+| **Memory with evidence** | Facts are typed, linked Markdown notes: Person, Place, Preference, Event, Goal, Progress, Task and Exercise. Each fact records how it was learned (stated, inferred, observed or corrected), from where and when. Read and edit them like any files. | ★★ |
+| **Claude Code is the agent** | Every turn is `claude -p`, with web search, files, PDFs, images and a shell. A Slack thread is one resumable Claude session, and the conversation lives only in Claude's own session files. | ★★ |
+| **A sandboxed workspace per user** | Each user has a private, persistent folder where Claude can write files and run commands. Files you share in Slack land in it, and the shell runs in a bubblewrap sandbox. | ★★ |
+| **Slack is the whole interface** | Threads are conversations, channels are goals, and the workspace is the identity. There's no sign-up or app to install. | ★★ |
+| **Durable runs** | Every message, scheduled job and new-user setup is a [Hatchet](https://hatchet.run) workflow, with retries, per-user ordering, and runs you can trace and replay. | ★ |
+| **Local memory search** | Memory search uses Qwen3 embedding and re-ranking models on your own GPU, so notes never leave the machine for search. | ★ |
+| **Streamed answers with citations** | Replies stream into the thread as Claude writes them, with numbered sources. | ★ |
+| **One-machine deployment** | process-compose and a systemd unit run everything; `task init` prepares the database and memory, and Tailscale exposes only the Slack webhook. | ★ |
 
 ## Security
 
@@ -44,6 +59,49 @@ Slack ─▶ Tailscale Funnel ─▶ Hatchet ─▶ worker ─▶ claude -p ─�
 ```
 
 Details: [docs/architecture.md](docs/architecture.md).
+
+## Design principles of the code
+
+1. **Used the task runner [go-task](https://taskfile.dev) to separate application logic from environment setup.** `task init` creates the tables, loads the seed data and refreshes every user's Basic Memory config in plain shell (`sqlite3`, `jq`, `cp`), safe to repeat. The application code never initializes its environment.
+2. **Separated long-running services from one-shot tasks.** process-compose runs only the services (Caddy, the two model servers, the worker), after a one-shot `init`. Every build and setup command is a Taskfile task, and a systemd unit starts the stack at boot.
+3. **Used a layered design with one-way dependencies.** The layers are:
+   - `memory` is the data layer;
+   - `agent` drives Claude;
+   - `channels` speaks Slack and RSS;
+   - `worker` (Hatchet workflows) and `mcp` (the agent's tools) sit on top and orchestrate.
+
+   Each layer is its own Go module in a `go.work` workspace, and code shared by two binaries lives in a shared module, never inside one of them.
+4. **Kept all data access in one place, with one Go file per schema file.** `memory/store` pairs each `sql-schemas/0N_*.sql` with a Go file holding that file's table models and queries (`users.go`, `goals.go`, `interests.go`, …). `memory/store/notes` holds the users' notes on disk. Workflows and MCP tools hold only input checks and business rules, never SQL.
+5. **Kept data as data.**
+   - Table definitions, seed data (plain `INSERT` statements), note schemas and Basic Memory's settings are files in `memory/`.
+   - They are read from disk rather than embedded in binaries or hard-coded as Go structs.
+   - The rubrics stay Markdown files, read by the seed through `sqlite3`'s `readfile`.
+6. **Modelled per-user setup as an independent Hatchet workflow with explicit task dependencies.**
+   - `user-setup` runs `memory-project → bm-setup → news-channel`.
+   - It runs as a top-level run, so every setup can be monitored on its own.
+   - It is started asynchronously whenever a user isn't set up, and nothing waits on it, so no turn or worker slot is ever blocked.
+7. **Made every workflow task idempotent and serialized.**
+   - Each task is safe to retry, and repeating a finished task changes nothing.
+   - Concurrency keys serialize runs per user or thread, and a duplicate setup started mid-flight is cancelled.
+   - State is recorded before side effects, so a retry never creates a second channel or post.
+8. **Preferred upstream built-ins over wrappers.**
+   - `claude -p` owns the tool-calling loop, and Basic Memory serves its own MCP server pinned with `--project`.
+   - Hatchet provides scheduling, retries and concurrency.
+   - Roamind adds no wrapper services around them.
+9. **Applied least privilege per turn and physical isolation per user.**
+   - A turn gets only the tools its input warrants.
+   - Text from third-party feeds is ranked with no tools at all.
+   - Each user has their own sandboxed workspace, memory database and config.
+10. **Stored little, and stored derived values once.** Conversations live only in Claude's session files, and SQLite just maps threads to sessions. A user's memory project name is assigned once and stored, not computed per turn.
+11. **Wrote prompts that give data and say what to do.** When the model got something wrong, the fix was the right data or a positive instruction rather than a prohibition. Note schemas, not the system prompt, own the rules for each note type.
+12. **Tested against the real artifacts.**
+    - Tests create tables from the real schema files and run the real seed SQL through `sqlite3`.
+    - A drift test runs the Taskfile's `jq` filter and Go's project setup on the same config and requires identical output.
+    - The database is never mocked.
+13. **Handled errors by their codes.** A unique-constraint conflict is detected by SQLite's error code, not by matching error text, and retries loop rather than recurse.
+14. **Kept the code small and deletable.**
+    - Package names are short and say what they hold (`store`, `notes`), and every declaration has a doc comment.
+    - Unused code and one-time setup code are deleted rather than kept.
 
 ## Setup
 
