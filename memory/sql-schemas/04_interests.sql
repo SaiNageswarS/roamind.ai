@@ -1,6 +1,6 @@
 -- The catalog of news interests: each with its curated feeds and the
--- rubric its items are ranked by. The curated ones (owner '') are
--- pre-built from the worker's catalog file and seen by everyone; the agent
+-- rubric its items are ranked by. The curated ones (owner '') come from
+-- memory/seed/interests.sql and are seen by everyone; the agent
 -- adds a user's own, with feeds it has checked, seen only by that user.
 CREATE TABLE IF NOT EXISTS interests (
     id         INTEGER PRIMARY KEY,

@@ -4,11 +4,12 @@ How Roamind works inside. For an overview, see the [README](../README.md).
 
 ## How it works
 
-Slack sends events to Hatchet's Slack webhook. Each message becomes one `chat-turn` run, which drives `claude -p` and streams the reply into the Slack thread by editing a message. Claude talks to Basic Memory's own MCP server, pinned to the user's project. After each turn, the harness checks whether any active goal still needs a channel.
+Slack sends events to Hatchet's Slack webhook. Each message becomes one `chat-turn` run, which drives `claude -p` and streams the reply into the Slack thread by editing a message. A user who is not set up yet, a new one above all, gets a `user-setup` run instead of a turn, and a reply asking them to write again in a minute. Claude talks to Basic Memory's own MCP server, pinned to the user's project. After each turn, the harness checks whether any active goal still needs a channel.
 
 ```
 Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─event slack:chat─▶ worker: chat-turn
                                                                                          ├ identity (sha256(email))
+                                                                                         ├ not set up? ─▶ user-setup run (not waited for) + "setting things up" reply; the run ends
                                                                                          ├ thread → claude session (SQLite)
                                                                                          └ claude -p --resume … → throttled chat.update
                                                                                               └ stdio: bm mcp --project bm-u-<name>-<n>
@@ -20,11 +21,20 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
 
 | Module | What it holds |
 |---|---|
-| `agent` | `claude -p` runner and stream-json decoder; packet translation; Go port of onyx's citation processor; `cmd/turn` dev CLI. `agent/protocol` is the contract with the Slack layer: packet types (onyx-style), turn input/output and the snapshot accumulator. It's a separate package with no dependencies, so the Slack updater imports it without the agent runtime |
-| `channels` | SQLite store (tables in `store/schema/*.sql`, one file per area; users, threads, goal channels, exercises, the interest catalog and what users follow, news channels, digests, sent links and feedback, inbound events), RSS/Atom feed reader (`feeds`), email-hash identity, Slack event types, mrkdwn renderer, streaming updater |
-| `worker` | The Hatchet worker, laid out like Hatchet's Go quickstart: `cmd/worker`, `cmd/setup-webhook`, `client` (the Hatchet client) and `workflows`, one file per workflow with its tasks and wiring: `chat-turn`, `goal-channels`, `learning-exercises`, `learning-exercise`, `news-channels`, `news-shorts`, `news-digest`, `news-reaction` |
-| `memory` | Per-user Basic Memory projects: creates and seeds a project, builds claude's bm server entry and tool allow/deny lists, reads goal notes from disk |
+| `agent` | `claude -p` runner and stream-json decoder; packet translation; Go port of onyx's citation processor; `cmd/turn` dev CLI. `agent/protocol` is the contract with the Slack layer: packet types (onyx-style), turn input/output and the snapshot accumulator. It's a separate package with no dependencies, so the Slack updater imports it without the agent runtime. `mcp_servers.go` builds the turn's `--mcp-config` (Basic Memory's `bm mcp`, pinned to the user's project, and Roamind's `bin/mcp`) with the tools allowed and disallowed on them |
+| `channels` | RSS/Atom feed reader (`feeds`), email-hash identity, Slack event types, mrkdwn renderer, streaming updater |
+| `worker` | The Hatchet worker, laid out like Hatchet's Go quickstart: `cmd/worker`, `cmd/setup-webhook`, `client` (the Hatchet client) and `workflows`, one file per workflow with its tasks and wiring: `chat-turn`, `goal-channels`, `learning-exercises`, `learning-exercise`, `user-setup`, `news-shorts`, `news-digest`, `news-reaction` |
+| `memory` | Roamind's data: the files below, `store` (the Go code that reads and writes the SQLite database) and `store/notes` (users' Basic Memory notes) |
 | `mcp` | Roamind's MCP server, which claude starts per chat turn over stdio, pinned to the turn's user: `cmd/mcp` (`bin/mcp`) and `tools`, one file per domain (`interests.go`: following and adding news interests). Built on the official Go MCP SDK |
+
+`memory/` holds the data: its definitions, seed data and the Go code over it. The data files are read from disk, not embedded. `task init` (process-compose runs it before every worker start) applies them with the `sqlite3` CLI, `jq` and `cp`; each step is safe to repeat. The worker reads `basic-memory-config.json` and `basic-memory-schemas/`, at `ROAMIND_MEMORY_DIR` (default `./memory`), to set up new users' projects.
+
+- `sql-schemas/*.sql`: the SQLite store's tables, one file per area, applied in name order by `task init`. The worker and `bin/mcp` only open the database; the worker refuses to start when it has no tables.
+- `store/`: the models and queries of those tables, one Go file per schema file (`01_users.sql` → `users.go`, and so on), used by the worker and `bin/mcp`. Tests create the tables the way `task init` does (`store/storetest`).
+- `store/notes/`: the users' Basic Memory notes on disk: the project layout and names, creating a project (`Setup`: its folders, `config.json` and schema notes), reading goal and exercise notes, and writing notes through bm's CLI.
+- `seed/`: seed data as SQL. `interests.sql` inserts the curated news interests, each reading its rubric from `rubrics/*.md` with sqlite3's `readfile`.
+- `basic-memory-config.json`: the bm settings Roamind manages (search models), written into each project's `config.json` by the user-setup workflow for a new project and by `task init` for existing ones. bm's own keys are kept.
+- `basic-memory-schemas/*.md`: the Picoschema notes copied into each user's Basic Memory project, by user-setup for a new one and by `task init` for existing ones. Notes a project already has are left alone.
 
 ## Design rules
 - Conversation history lives only in claude's session files (`~/.claude/projects/<cwd>`). SQLite maps each thread to its session id and stores nothing else about the conversation.
@@ -42,13 +52,13 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
 
 ## Memory
 - Each user has one Basic Memory project, `bm-u-<slugified display name>-<n>`. The `-<n>` keeps names unique.
-  - The name is assigned when the user is created and stored in `users.memory_project`.
+  - The name is assigned by the user-setup workflow and stored in `users.memory_project`.
   - It's read back with the user row, so nothing is computed per turn, and it doesn't change if the user is renamed.
 - Every turn starts `bm mcp --project <that project>` over stdio through `--mcp-config`. As a second layer, bm enforces the pinning itself: it ignores `project` arguments and `search_all_projects`, and it refuses to create or delete projects.
 - The agent has full read/write access to its project: every bm tool is allowed (`--allowedTools mcp__memory`), including delete and move. Only project and workspace management (`list_memory_projects`, `create_memory_project`, `delete_project`, `list_workspaces`) is passed to `--disallowedTools`, since `--project` refuses those anyway.
 - **Search models on the GPU:** Basic Memory's hybrid search uses Qwen3-Embedding-0.6B (1024-dim) and re-ranks with Qwen3-Reranker-0.6B, both served by vLLM on the local GPU (`embed` on 127.0.0.1:8800 and `rerank` on 127.0.0.1:8801 in process-compose; `deploy/bin/run-vllm.sh`).
   - Each takes 35% of an 8 GB card, with a 4096-token context.
-  - bm reaches them through its `litellm` provider, configured by `memory.DefaultSearch`, which the harness writes into every user's `config.json` on each worker start.
+  - bm reaches them through its `litellm` provider, configured by `memory/basic-memory-config.json`, which user-setup writes into a new project's `config.json` and `task init` into existing ones.
   - Search queries get a Qwen3 instruction prefix, and the re-ranker's default instruction is set for our notes in `deploy/vllm/qwen3_reranker.jinja`.
   - Changing the embedding model makes bm re-embed existing notes.
 - **Each user has their own Basic Memory setup and database.** Under `data/memory/`, separate from any personal `~/.basic-memory`:
@@ -57,7 +67,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
   - `users/<project>/notes/` holds their Markdown notes.
 
   Each turn's bm gets only that user's `BASIC_MEMORY_CONFIG_DIR`, so it can't open another user's database. To delete a user's memory, remove `users/<project>`. Notes are plain Markdown, so you can browse and edit them directly.
-- New projects are seeded with the Picoschema notes in `memory/schemas/*.md` (person, place, preference, event, goal, progress, task, exercise), which are embedded in the binary. Add or edit a file there to change the schemas; existing projects keep their copies. The prompt tells the model which folder and `note_type` to use for each.
+- New projects are seeded with the Picoschema notes in `memory/basic-memory-schemas/*.md` (person, place, preference, event, goal, progress, task, exercise). Add a file there to give every project a new schema at the next `task init`; an edited file reaches only projects that lack it, since existing copies are kept. The prompt tells the model which folder and `note_type` to use for each.
 - **Preferences are atomic:** one note per preference in `preferences/<subject>/`, with exactly the schema fields `[preference]`, `[subject]` and `[evidence]`.
   - `subject` is an enum: food, travel, fitness, health, work, tech, communication, shopping, entertainment, home, finance, other.
   - `evidence` is an enum: stated, inferred, observed or corrected. The source and date go in its context, e.g. `- [evidence] stated (slack, 2026-10-11)`.
@@ -83,12 +93,31 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
 - **Evidence** says how a fact was learned (`stated`, `inferred`, `observed` or `corrected`), plus the source (`slack`) and date.
 - The agent decides what to save; the rules are in `agent/prompts/system.md`.
 
+## User setup
+`user-setup` (`worker/workflows/user_setup.go`) sets up one user, in three tasks, each needing the one before:
+
+```
+memory-project → bm-setup → news-channel
+```
+
+- **memory-project** assigns the user's Basic Memory project name (`users.memory_project`).
+- **bm-setup** creates that project with `notes.Setup`: its folders, its `config.json` from `memory/basic-memory-config.json` and the schema notes from `memory/basic-memory-schemas/`.
+- **news-channel** creates the user's news channel and has them follow the default interests (see News shorts).
+
+Every task is safe to repeat. A user has one run at a time: a run started while one is in flight is cancelled (`CancelNewest`), since that one does its work. Runs are top-level, not children of the run that started them, so every setup shows on its own in the dashboard. Nothing waits for it, so it never holds up a turn or a worker slot:
+
+- `chat-turn` starts it when the user's memory project isn't ready (a new user, a corrupt `config.json`, or a setup that failed or is still running): it replies that it is setting things up, asks them to write again in a minute, and ends the run. If the run can't even be started, it says so instead.
+- When only the news channel is missing, `chat-turn` starts it and still runs the turn.
+- `news-shorts` starts it for users without a news channel.
+
+The environment the projects share (the embedding cache, settings and schema notes of existing projects) is `task init`'s.
+
 ## Goal channels
 - **What gets a channel:** every Goal note (`goals/`) whose `status` is `active` gets a private Slack channel, `#goal-<slugified title>`. A goal saved without a status counts as active.
   - If the name is taken, the channel gets a suffix: `-2`, `-3`, …
   - A paused goal gets its channel when it becomes active again.
   - Achieved and dropped goals get none.
-- **When it's created:** after every chat turn, `goalchannels.Trigger` compares the user's goal notes on disk (`memory.Goals`) with the `goal_channels` table. This needs only file reads and SQLite, so most turns start nothing.
+- **When it's created:** after every chat turn, `goalChannelsTrigger` compares the user's goal notes on disk (`notes.Goals`) with the `goal_channels` table. This needs only file reads and SQLite, so most turns start nothing.
   - When an active goal has no channel, it starts a `goal-channels` run (`worker/workflows/goal_channels.go`).
   - That run creates the channel, records it, invites the owner and posts an intro.
   - Runs are serialized per user and retried up to 3 times. The row is saved right after the channel is created, so a retry never creates a second channel.
@@ -115,15 +144,15 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
 - **Exercise preferences** are `exercise_preference` lines on the goal note, saved by the agent when the user states them in the goal channel.
 
 ## News shorts
-- **The channel:** `news-channels` (`worker/workflows/news_channels.go`) creates the private `#news-shorts-<name>` channel (with a `-2` suffix if the name is taken), records it in `news_channels` first, invites the user, makes them follow the catalog's default interests and posts an intro. New users get theirs after their first chat turn (the `AfterTurn` hook); existing users get theirs from the next `news-shorts` run.
-- **The interest catalog** is the `interests` table: each interest with its curated RSS/Atom feeds (`sources`) and its `rubric` in prose: two to four separately judged criteria scored 0 to 10, with what each band of scores means, when an item is not to be included at all, and optionally the categories to file items under. The curated ones are pre-built in `worker/catalog/interests.json`, with each rubric in `worker/catalog/rubrics/*.md`; `"default": true` marks the ones every user follows. The worker writes them to the store at every start, and deletes curated interests no longer in the file, with their follows; edit those files to change them. Interests the agent adds belong to the user they were added for (`owner`): each user sees the curated interests and their own, never another user's. Users follow interests by id (`user_interests`, active or muted).
+- **The channel:** user-setup's `news-channel` task (`worker/workflows/user_setup.go`) creates the private `#news-shorts-<name>` channel (with a `-2` suffix if the name is taken), records it in `news_channels` first, invites the user (again on a retry, so a failed invite is made up), makes them follow the catalog's default interests and posts an intro. New users get theirs from user-setup when they first write; a user whose channel failed gets it at their next turn or from the next `news-shorts` run.
+- **The interest catalog** is the `interests` table: each interest with its curated RSS/Atom feeds (`sources`) and its `rubric` in prose: two to four separately judged criteria scored 0 to 10, with what each band of scores means, when an item is not to be included at all, and optionally the categories to file items under. The curated ones are the `INSERT` rows of `memory/seed/interests.sql` (name, `is_default` 1 for the ones every user follows, rubric, feeds), each rubric in `memory/seed/rubrics/*.md`. `task init` runs it: rows are added or updated, and curated interests no longer listed are deleted with their follows. Edit those files and restart the whole service (`systemctl --user restart roamind`, or `task init` then restart the worker) to change them; restarting only the worker doesn't rerun `init`. Interests the agent adds belong to the user they were added for (`owner`): each user sees the curated interests and their own, never another user's. Users follow interests by id (`user_interests`, active or muted).
 - **Roamind's MCP server** is how the agent changes what a user follows. Every chat turn gets it next to bm: claude starts `bin/mcp --data <dir> --user <id>` over stdio as the `roamind` server, pinned to the turn's user the way bm is pinned to a project (`mcp/cmd/mcp`, built on the official Go MCP SDK). The worker finds `bin/mcp` next to its own binary, or at `ROAMIND_MCP_BIN`. Its interest tools (`mcp/tools/interests.go`):
   - `list_interests`: the user's catalog, curated and their own, with feeds and rubrics, and what the user follows.
   - `follow_interest`: follow an interest of their catalog, or resume a muted one.
   - `add_interest`: add an interest of the user's own, with its feeds and a prose rubric in the same style, and follow it. Every feed is fetched and must parse as RSS or Atom.
   - `set_interest_status`: mute or resume.
   In the news channel, the owner's plain messages are news turns, and their prompt lists what the user follows.
-- **Scheduling:** the `news-shorts` cron runs once a day at 16:00 in the server's zone (`ROAMIND_TZ` overrides it; `NewsHours`, both DST offsets registered; add hours there for more digests a day). At a slot it starts one `news-digest` run per user with a channel, and a `news-channels` run for each user with memory but no channel yet.
+- **Scheduling:** the `news-shorts` cron runs once a day at 16:00 in the server's zone (`ROAMIND_TZ` overrides it; `NewsHours`, both DST offsets registered; add hours there for more digests a day). At a slot it starts one `news-digest` run per user with a channel, and a `user-setup` run for each user without a channel yet. A run that can't be started is logged and listed in its output; the others still start.
 - **The `news-digest` DAG** (`worker/workflows/news_digest.go`), serialized per user, with the same skip pattern as `learning-exercise`:
   1. **`check-skip`** skips users without a channel or active interests, and slots already posted (`digests` is unique per user and slot).
   2. **`gather`** fetches every feed of the user's active interests once, in parallel (`channels/feeds`, gofeed). Feed URLs can come from the agent and are fetched outside the sandbox, so the reader connects only to public addresses (loopback, private, CGNAT/tailnet, link-local and multicast are refused when dialled, which covers redirects and DNS) and reads at most 8 MB. It keeps items from the last 30 days (slow feeds such as Stoic writing post a few times a month), the newest 3 per feed, each link once, drops links already sent to the user (`sent_urls`), and keeps the newest 25 per interest, so the rubric does the filtering. A feed that fails is logged and skipped; if every feed fails, the task fails and is retried.

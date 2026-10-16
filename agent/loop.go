@@ -18,7 +18,7 @@ import (
 	"roamind.ai/agent/citation"
 	"roamind.ai/agent/claude"
 	"roamind.ai/agent/protocol"
-	"roamind.ai/memory"
+	"roamind.ai/memory/store/notes"
 )
 
 //go:embed prompts/system.md
@@ -34,17 +34,13 @@ type Config struct {
 	ClaudeBinary string
 	Model        string
 	// Memory enables long-term memory for turns that name a project.
-	Memory *memory.Config
+	Memory *notes.Notes
 	// ToolsServer, when set, is the command of Roamind's MCP server (bin/mcp),
 	// whose tools keep the user's data, such as their news interests; each
 	// turn appends --user <id>. Chat turns get it, structured-output turns
 	// don't.
 	ToolsServer []string
 }
-
-// ToolsServerName is Roamind's MCP server's key under mcpServers; claude
-// names its tools mcp__roamind__<tool>.
-const ToolsServerName = "roamind"
 
 // Emit receives packets as the turn progresses.
 type Emit func(protocol.Packet)
@@ -110,23 +106,12 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, emit Emit) 
 	case protocol.ToolsNone:
 		opts.NoSessionPersistence = true
 	}
-	servers := map[string]any{}
-	if withMemory {
-		if err := cfg.Memory.Ensure(in.MemoryProject); err != nil {
-			return protocol.TurnOutput{}, err
-		}
-		servers[memory.ServerName] = cfg.Memory.MCPServer(in.MemoryProject)
-		opts.AllowedTools = append(opts.AllowedTools, memory.AllowedTools...)
-		opts.DisallowedTools = memory.DisallowedTools
+	servers, allowed, disallowed, err := mcpServers(cfg, in, withMemory, withTools)
+	if err != nil {
+		return protocol.TurnOutput{}, err
 	}
-	if withTools {
-		servers[ToolsServerName] = map[string]any{
-			"type":    "stdio",
-			"command": cfg.ToolsServer[0],
-			"args":    append(cfg.ToolsServer[1:len(cfg.ToolsServer):len(cfg.ToolsServer)], "--user", in.UserID),
-		}
-		opts.AllowedTools = append(opts.AllowedTools, "mcp__"+ToolsServerName)
-	}
+	opts.AllowedTools = append(opts.AllowedTools, allowed...)
+	opts.DisallowedTools = disallowed
 	if len(servers) > 0 {
 		b, err := json.Marshal(map[string]any{"mcpServers": servers})
 		if err != nil {

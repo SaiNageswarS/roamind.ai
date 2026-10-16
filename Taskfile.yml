@@ -1,0 +1,197 @@
+# Roamind build and setup tasks (https://taskfile.dev). Long-running
+# processes live in process-compose.yaml (`process-compose up`); everything
+# one-shot lives here. `task` lists the tasks; pass arguments after `--`,
+# e.g. `task bm -- project info`.
+version: '3'
+
+dotenv: ['.env']
+set: [errexit, pipefail]
+
+vars:
+  MODULES: agent channels memory worker mcp
+  WITH_HATCHET: deploy/bin/with-hatchet.sh
+  HATCHET_VERSION: v0.110.22 # keep in step with the Go SDK in worker/go.mod
+  CADDY_VERSION: v2.11.7
+  CADDY_TAILSCALE: de41b249af4f
+  XCADDY_VERSION: v0.4.7
+  VLLM_VERSION: 0.30.0
+  SEARCH_MODELS: Qwen/Qwen3-Embedding-0.6B Qwen/Qwen3-Reranker-0.6B
+  # How init brings a project's bm config.json ($cfg) up to date: the
+  # settings in memory/basic-memory-config.json over it, keeping bm's own
+  # keys, and its paths. notes.Setup writes the same for a new project
+  # (TestSetupMatchesTaskInit). init pastes it inside single quotes, so it
+  # must not contain one.
+  BM_CONFIG: '.[0] * .[1] | .projects = {($p): {path: $notes, mode: "local"}} | .default_project = $p | .project_root = $notes | .semantic_embedding_cache_dir = $cache'
+
+tasks:
+  default:
+    cmds: [task --list]
+    silent: true
+
+  build:
+    desc: Build bin/worker and bin/mcp
+    deps: [worker, mcp]
+
+  all:
+    desc: Build bin/caddy, bin/worker and bin/mcp
+    deps: [build, caddy]
+
+  worker:
+    desc: Build bin/worker
+    sources: ['agent/**/*.go', 'channels/**/*.go', 'memory/**/*.go', 'worker/**/*.go', '**/go.mod', '**/go.sum']
+    generates: [bin/worker]
+    cmds: [go build -o bin/worker ./worker/cmd/worker]
+
+  mcp:
+    desc: Build bin/mcp, the MCP server claude starts per chat turn
+    sources: ['agent/**/*.go', 'channels/**/*.go', 'memory/**/*.go', 'mcp/**/*.go', '**/go.mod', '**/go.sum']
+    generates: [bin/mcp]
+    cmds: [go build -o bin/mcp ./mcp/cmd/mcp]
+
+  caddy:
+    desc: Build bin/caddy with the Tailscale plugin (rebuilt when its versions here change)
+    sources: [Taskfile.yml]
+    generates: [bin/caddy]
+    cmds:
+      - >-
+        go run github.com/caddyserver/xcaddy/cmd/xcaddy@{{.XCADDY_VERSION}} build {{.CADDY_VERSION}}
+        --with github.com/tailscale/caddy-tailscale@{{.CADDY_TAILSCALE}} --output bin/caddy
+
+  # Every step is safe to repeat; process-compose runs this before the
+  # worker. Needs the sqlite3 CLI (for readfile and JSON) and jq. New users'
+  # projects are created by the user-setup workflow; this brings existing
+  # ones up to date.
+  init:
+    desc: From memory/, create the store's tables, load the curated interests, and bring every Basic Memory project up to date
+    cmds:
+      - mkdir -p "${ROAMIND_DATA_DIR:-./data}/memory/fastembed_cache"
+      - cat memory/sql-schemas/*.sql | sqlite3 -bail "${ROAMIND_DATA_DIR:-./data}/roamind.db"
+      - sqlite3 -bail "${ROAMIND_DATA_DIR:-./data}/roamind.db" ".read memory/seed/interests.sql"
+      - |
+        # A project whose config.json jq can't merge into is skipped, with a
+        # warning, so one bad file doesn't keep the worker down.
+        mem="$(realpath "${ROAMIND_DATA_DIR:-./data}/memory")"
+        for project in "$mem"/users/*; do
+          cfg="$project/config/config.json"
+          [ -f "$cfg" ] || continue
+          if jq -s --arg p "${project##*/}" --arg notes "$project/notes" --arg cache "$mem/fastembed_cache" \
+              '{{.BM_CONFIG}}' "$cfg" memory/basic-memory-config.json > "$cfg.tmp"; then
+            mv "$cfg.tmp" "$cfg"
+          else
+            rm -f "$cfg.tmp"
+            echo "init: skipped $cfg: jq could not merge the settings into it" >&2
+          fi
+          mkdir -p "$project/notes/schemas"
+          cp --update=none memory/basic-memory-schemas/*.md "$project/notes/schemas/"
+        done
+
+  hatchet-env:
+    desc: Start the Hatchet server, register the Slack webhook, open the Funnel
+    cmds:
+      - task: hatchet
+      - task: webhook
+      - task: funnel
+
+  hatchet:
+    desc: Start the Hatchet server only (hatchet server start)
+    cmds:
+      - hatchet server start --tag {{.HATCHET_VERSION}} --pull-policy missing --profile "${HATCHET_PROFILE:-local}"
+      - "{{.WITH_HATCHET}} sh -c 'until curl -sf \"$HATCHET_CLIENT_SERVER_URL/api/ready\" >/dev/null; do sleep 2; done'"
+
+  webhook:
+    desc: Create or update the Hatchet Slack webhook
+    cmds:
+      - |
+        if [ -z "${SLACK_SIGNING_SECRET:-}" ]; then
+          echo "SLACK_SIGNING_SECRET not set; skipping Slack webhook"
+          exit 0
+        fi
+        {{.WITH_HATCHET}} go run ./worker/cmd/setup-webhook
+
+  funnel:
+    desc: Expose only the Slack webhook path publicly via Tailscale Funnel
+    cmds:
+      - |
+        {{.WITH_HATCHET}} bash -c '
+          set -euo pipefail
+          webhooks="/api/v1/stable/tenants/${HATCHET_CLIENT_TENANT_ID}/webhooks"
+          tailscale funnel --bg --https=443 --set-path "$webhooks" "http://${HATCHET_UPSTREAM}${webhooks}"
+          host="$(tailscale status --json | sed -n "s/.*\"DNSName\": *\"\([^\"]*\)\.\".*/\1/p" | head -1)"
+          echo "Slack Request URL: https://${host}${webhooks}/slack"
+          tailscale funnel status'
+
+  vllm:
+    desc: Install vLLM and download the GPU search models
+    cmds:
+      # A uv-managed Python ships the headers Triton compiles against.
+      - uv tool install "vllm=={{.VLLM_VERSION}}" --python 3.12 --managed-python
+      - for: {var: SEARCH_MODELS}
+        cmd: '"$(uv tool dir)/vllm/bin/hf" download {{.ITEM}} >/dev/null'
+
+  # process-compose runs in the foreground without its TUI; systemd is the
+  # daemon (Linger keeps the user manager up from boot). Attach to it with
+  # `process-compose attach`.
+  service:
+    desc: Install and enable the roamind systemd user service, which runs process-compose at boot
+    cmds:
+      - |
+        unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/roamind.service"
+        echo "writing $unit"
+        mkdir -p "$(dirname "$unit")"
+        cat >"$unit" <<UNIT
+        [Unit]
+        Description=Roamind (process-compose: caddy, embed, rerank, init, worker)
+        After=network-online.target
+
+        [Service]
+        Type=simple
+        WorkingDirectory={{.ROOT_DIR}}
+        Environment=PATH=$PATH
+        ExecStart=$(command -v process-compose) up --tui=false
+        Restart=on-failure
+        RestartSec=10
+
+        [Install]
+        WantedBy=default.target
+        UNIT
+      - systemctl --user daemon-reload
+      - systemctl --user enable roamind.service
+      - |
+        [ "$(loginctl show-user "$USER" -p Linger --value)" = yes ] ||
+          echo "enable boot start without login: sudo loginctl enable-linger $USER"
+
+  test:
+    desc: Run go test in every module
+    cmds:
+      - for: {var: MODULES}
+        cmd: cd {{.ITEM}} && go test ./...
+
+  vet:
+    desc: Run go vet in every module
+    cmds:
+      - for: {var: MODULES}
+        cmd: cd {{.ITEM}} && go vet ./...
+
+  bm:
+    desc: "Run Basic Memory's CLI against a user's project (default: the only one), e.g. task bm -- project info"
+    cmds:
+      - |
+        set -- {{.CLI_ARGS}}
+        users="${ROAMIND_DATA_DIR:-./data}/memory/users"
+        if [ $# -gt 0 ] && [ -d "$users/$1" ]; then
+          project="$1"; shift
+        else
+          all="$(ls "$users" 2>/dev/null || true)"
+          if [ -z "$all" ] || [ "$(echo "$all" | wc -l)" -ne 1 ]; then
+            echo "usage: task bm -- <project> <bm args>; projects:" $all >&2
+            exit 1
+          fi
+          project="$all"
+        fi
+        # Scoped to this command, so your own bm and MCP setups never see it.
+        BASIC_MEMORY_CONFIG_DIR="$(cd "$users/$project/config" && pwd)" bm "$@"
+
+  turn:
+    desc: 'Run one agent turn from the terminal, e.g. task turn -- "hello"'
+    cmds:
+      - go run ./agent/cmd/turn -data "${ROAMIND_DATA_DIR:-./data}" {{.CLI_ARGS}}

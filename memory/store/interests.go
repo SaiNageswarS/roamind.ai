@@ -16,17 +16,17 @@ import (
 // Interest is a catalog interest: a topic with its curated feeds and the
 // rubric its items are ranked by.
 type Interest struct {
-	ID      int64    `json:"-"`
-	Name    string   `json:"interest"`
-	Sources []string `json:"sources"` // RSS/Atom feed URLs
+	ID      int64
+	Name    string
+	Sources []string // RSS/Atom feed URLs
 	// Rubric is prose for the ranking: the criteria each item is scored on,
 	// 0 to 10, when an item is not to be included at all, and optionally
 	// the categories to file items under.
-	Rubric string `json:"rubric"`
+	Rubric string
 	// Default is set for curated interests every user follows.
-	Default bool `json:"default,omitempty"`
+	Default bool
 	// Owner is the user who added the interest; empty when it is curated.
-	Owner string `json:"-"`
+	Owner string
 }
 
 // Curated reports whether the interest is part of the pre-built catalog.
@@ -47,61 +47,6 @@ const (
 // ErrNoInterest is returned for an interest that is not in the user's
 // catalog.
 var ErrNoInterest = errors.New("no such interest in the catalog")
-
-// SyncCatalog makes the curated interests those given: they are added or
-// replaced, and curated interests no longer given are deleted, with their
-// follows. Users' own interests are left alone.
-func (s *Store) SyncCatalog(ctx context.Context, ins []Interest) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	now := time.Now().Unix()
-	keep := map[string]bool{}
-	for _, in := range ins {
-		sources, err := json.Marshal(in.Sources)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO interests (interest, owner, sources, rubric, is_default, created_at, updated_at)
-			VALUES (?, '', ?, ?, ?, ?, ?)
-			ON CONFLICT (owner, interest) DO UPDATE SET
-				interest = excluded.interest, sources = excluded.sources, rubric = excluded.rubric,
-				is_default = excluded.is_default, updated_at = excluded.updated_at`,
-			in.Name, string(sources), in.Rubric, in.Default, now, now); err != nil {
-			return err
-		}
-		keep[strings.ToLower(in.Name)] = true
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT id, interest FROM interests WHERE owner = ''`)
-	if err != nil {
-		return err
-	}
-	var gone []int64
-	for rows.Next() {
-		var id int64
-		var name string
-		if err := rows.Scan(&id, &name); err != nil {
-			rows.Close()
-			return err
-		}
-		if !keep[strings.ToLower(name)] {
-			gone = append(gone, id)
-		}
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, id := range gone {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM interests WHERE id = ?`, id); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
 
 // AddInterest adds an interest of the user's own to their catalog; it
 // fails when their catalog has one of the same name, ignoring case.
@@ -325,17 +270,6 @@ func (s *Store) SentStoriesSince(ctx context.Context, userID string, t time.Time
 	return out, rows.Err()
 }
 
-// MarkStoriesSent records the stories as sent to the user now; a story sent
-// before gets its new time and title.
-func (s *Store) MarkStoriesSent(ctx context.Context, userID string, stories []SentStory) error {
-	return markStoriesSent(ctx, s.db, userID, stories)
-}
-
-// execer is a database or a transaction.
-type execer interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-}
-
 func markStoriesSent(ctx context.Context, db execer, userID string, stories []SentStory) error {
 	now := time.Now().Unix()
 	for _, st := range stories {
@@ -350,11 +284,6 @@ func markStoriesSent(ctx context.Context, db execer, userID string, stories []Se
 		}
 	}
 	return nil
-}
-
-// MarkSent records the urls as sent to the user.
-func (s *Store) MarkSent(ctx context.Context, userID string, urls []string) error {
-	return markSent(ctx, s.db, userID, urls)
 }
 
 func markSent(ctx context.Context, db execer, userID string, urls []string) error {

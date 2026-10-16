@@ -7,26 +7,6 @@ import (
 	"time"
 )
 
-// Users returns every user with a Slack identity.
-func (s *Store) Users(ctx context.Context) ([]User, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, email, display_name, slack_team_id, slack_user_id, COALESCE(memory_project, '') FROM users
-		WHERE slack_user_id IS NOT NULL AND slack_user_id != '' ORDER BY created_at`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var us []User
-	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.Email, &u.DisplayName, &u.SlackTeamID, &u.SlackUserID, &u.MemoryProject); err != nil {
-			return nil, err
-		}
-		us = append(us, u)
-	}
-	return us, rows.Err()
-}
-
 // NewsChannelOf returns the user's news channel, or "".
 func (s *Store) NewsChannelOf(ctx context.Context, userID string) (string, error) {
 	var ch string

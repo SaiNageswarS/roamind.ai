@@ -1,4 +1,4 @@
-package memory
+package notes
 
 import (
 	"os"
@@ -7,8 +7,8 @@ import (
 )
 
 func TestGoals(t *testing.T) {
-	c := &Config{Dir: t.TempDir(), ready: map[string]bool{}}
-	dir := filepath.Join(c.notesDir("bm-u-sai-1"), "goals")
+	n := Notes{Dir: t.TempDir()}
+	dir := filepath.Join(n.NotesDir("bm-u-sai-1"), "goals")
 	notes := map[string]string{
 		"Learn JAX.md": "---\ntitle: Learn JAX\ntype: goal\npermalink: bm-u-sai-1/goals/learn-jax\n---\n\n" +
 			"- [status] active (stated, slack, 2026-10-11)\n- [kind] learn (inferred, slack, 2026-10-11)\n",
@@ -24,7 +24,7 @@ func TestGoals(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	goals, err := c.Goals("bm-u-sai-1")
+	goals, err := n.Goals("bm-u-sai-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestGoals(t *testing.T) {
 	}
 
 	// A project without goals yet.
-	if g, err := c.Goals("bm-u-new-1"); err != nil || len(g) != 0 {
+	if g, err := n.Goals("bm-u-new-1"); err != nil || len(g) != 0 {
 		t.Fatalf("empty project: %v %v", g, err)
 	}
 }

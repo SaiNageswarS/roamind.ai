@@ -19,9 +19,9 @@ import (
 	"roamind.ai/channels/feeds"
 	"roamind.ai/channels/identity"
 	"roamind.ai/channels/slack"
-	"roamind.ai/channels/store"
-	"roamind.ai/memory"
-	"roamind.ai/worker/catalog"
+	"roamind.ai/memory/store"
+	"roamind.ai/memory/store/notes"
+	"roamind.ai/memory/store/storetest"
 )
 
 func TestNewsChannelName(t *testing.T) {
@@ -86,7 +86,7 @@ func newsSetup(t *testing.T) (Deps, *fakeSlack, store.User) {
 	ctx := context.Background()
 	berlin, _ := time.LoadLocation("Europe/Berlin")
 	d, fs, _ := setup(t)
-	mem, err := memory.New(t.TempDir(), "true")
+	mem, err := notes.New(t.TempDir(), "../../memory", "true")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,18 +97,15 @@ func newsSetup(t *testing.T) (Deps, *fakeSlack, store.User) {
 	d.Agent.ToolsServer = []string{"/opt/mcp"}
 	slotTime := time.Date(2026, 10, 13, 16, 0, 3, 0, berlin)
 	d.Now = func() time.Time { return slotTime }
-	cat, err := catalog.Interests()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Store.SyncCatalog(ctx, cat); err != nil {
-		t.Fatal(err)
-	}
+	storetest.Seed(t, d.Store)
 	u := store.User{ID: "h1", Email: "a@x.com", DisplayName: "Sai", SlackTeamID: "T1", SlackUserID: "U1"}
 	if err := d.Store.UpsertSlackUser(ctx, u); err != nil {
 		t.Fatal(err)
 	}
 	if u.MemoryProject, err = d.Store.AssignMemoryProject(ctx, u.ID, "bm-u-sai"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.Setup(u.MemoryProject); err != nil {
 		t.Fatal(err)
 	}
 	return d, fs, u
@@ -187,26 +184,18 @@ func TestNewsDigest(t *testing.T) {
 	// The default interests read local feeds; Neuroscience shares Science's
 	// feed, so its items go to Science, which the user follows first.
 	srv := feedServer(t)
-	cat, _ := catalog.Interests()
 	paths := map[string]string{
 		"Positive living": "/positive", "Stoic principles": "/stoic", "Healthy eating": "/broken",
 		"Science": "/science", "Positive scientific developments across the world": "/empty",
 		"Neuroscience for better living": "/science",
 	}
-	for i, in := range cat {
-		if p, ok := paths[in.Name]; ok {
-			cat[i].Sources = []string{srv.URL + p}
-		}
-	}
-	if err := d.Store.SyncCatalog(ctx, cat); err != nil {
-		t.Fatal(err)
+	for name, p := range paths {
+		storetest.SetSources(t, d.Store, name, srv.URL+p)
 	}
 	if _, err := d.SyncNews(ctx, u.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.Store.MarkSent(ctx, u.ID, []string{"https://ex.org/sent"}); err != nil {
-		t.Fatal(err)
-	}
+	storetest.MarkSent(t, d.Store, u.ID, "https://ex.org/sent")
 	in := DigestInput{UserID: u.ID, Slot: "2026-10-13 16"}
 
 	// The dispatcher: at the news hours only; a user without a channel gets one.
@@ -215,7 +204,7 @@ func TestNewsDigest(t *testing.T) {
 	}
 	out, digests, missing, err := d.dueNews(ctx, d.now())
 	if err != nil || out.Slot != in.Slot || !reflect.DeepEqual(digests, []DigestInput{in}) ||
-		!reflect.DeepEqual(missing, []NewsChannelsInput{{UserID: other.ID}}) {
+		!reflect.DeepEqual(missing, []UserSetupInput{{UserID: other.ID}}) {
 		t.Fatalf("8:00: %+v %v %v %v", out, digests, missing, err)
 	}
 
@@ -366,11 +355,8 @@ func TestNewsDigest(t *testing.T) {
 	}
 
 	// When every feed is down, gather fails, to be retried.
-	for i := range cat {
-		cat[i].Sources = []string{srv.URL + "/broken"}
-	}
-	if err := d.Store.SyncCatalog(ctx, cat); err != nil {
-		t.Fatal(err)
+	for name := range paths {
+		storetest.SetSources(t, d.Store, name, srv.URL+"/broken")
 	}
 	if _, err := d.gatherDigest(ctx, in); err == nil || !strings.Contains(err.Error(), "no feed could be read") {
 		t.Fatalf("all feeds down: %v", err)
@@ -421,27 +407,22 @@ func TestPickItems(t *testing.T) {
 func TestProcessNewsChannel(t *testing.T) {
 	ctx := context.Background()
 	d, _, argsLog := setup(t)
-	mem, err := memory.New(t.TempDir(), "true")
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.Agent.Memory = mem
+	withMemory(t, &d)
 	d.Agent.ToolsServer = []string{"/opt/mcp", "--data", "/srv/data"}
 	if _, err := d.Process(ctx, "r0", mention("Ev0", "U1", "1.0", "")); err != nil {
 		t.Fatal(err)
 	}
 	owner := identity.UserID("owner@x.com")
-	if err := d.Store.SaveNewsChannel(ctx, owner, "G7"); err != nil {
-		t.Fatal(err)
+	// user-setup gave them their news channel at first contact.
+	ch, err := d.Store.NewsChannelOf(ctx, owner)
+	if err != nil || ch == "" {
+		t.Fatalf("news channel %q, %v", ch, err)
 	}
-	cat, _ := catalog.Interests()
-	if err := d.Store.SyncCatalog(ctx, cat); err != nil {
-		t.Fatal(err)
-	}
+	storetest.Seed(t, d.Store)
 	if err := d.Store.FollowInterest(ctx, owner, "Positive living"); err != nil {
 		t.Fatal(err)
 	}
-	dgID, _, err := d.Store.ReserveDigest(ctx, owner, "G7", "2026-10-13 08")
+	dgID, _, err := d.Store.ReserveDigest(ctx, owner, ch, "2026-10-13 08")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +432,7 @@ func TestProcessNewsChannel(t *testing.T) {
 	}
 	msg := func(id, user, ts, threadTS string) slack.Envelope {
 		return slack.Envelope{TeamID: "T1", EventID: id, Event: slack.Event{
-			Type: "message", ChannelType: "group", User: user, Text: "I'm into oscillatory neural networks", Channel: "G7", TS: ts, ThreadTS: threadTS,
+			Type: "message", ChannelType: "group", User: user, Text: "I'm into oscillatory neural networks", Channel: ch, TS: ts, ThreadTS: threadTS,
 		}}
 	}
 	prompt := func() string { b, _ := os.ReadFile(argsLog); return string(b) }
@@ -474,13 +455,13 @@ func TestProcessNewsChannel(t *testing.T) {
 		t.Fatalf("other user: %+v", out)
 	}
 	news := mention("Ev3", "U1", "6.2", "")
-	news.Event.Channel = "G7"
+	news.Event.Channel = ch
 	if out, _ := d.Process(ctx, "r3", news); !strings.Contains(out.Skipped, "handled as its message") {
 		t.Fatalf("owner mention: %+v", out)
 	}
 
 	// A reply in a digest's thread brings the digest and counts as liking it.
-	if err := d.Store.SaveThread(ctx, store.Thread{ChannelID: "G7", ThreadTS: "5.0", UserID: owner}); err != nil {
+	if err := d.Store.SaveThread(ctx, store.Thread{ChannelID: ch, ThreadTS: "5.0", UserID: owner}); err != nil {
 		t.Fatal(err)
 	}
 	os.Remove(argsLog)
@@ -493,5 +474,22 @@ func TestProcessNewsChannel(t *testing.T) {
 	sigs, err := d.Store.InterestSignals(ctx, owner, time.Now().Add(-time.Hour))
 	if err != nil || len(sigs) != 1 || sigs[0].Liked != 1 {
 		t.Fatalf("signals = %+v %v (digest %d)", sigs, err, dgID)
+	}
+}
+
+// A failed invite is retried with the channel already made: the user is
+// added, and no second channel is created.
+func TestSyncNewsRetriesInvite(t *testing.T) {
+	ctx := context.Background()
+	d, fs, u := newsSetup(t)
+	fs.failInvites = 1
+	if _, err := d.SyncNews(ctx, u.ID); err == nil {
+		t.Fatal("failed invite not reported")
+	}
+	if out, err := d.SyncNews(ctx, u.ID); err != nil || out.Created != "" {
+		t.Fatalf("retry: %+v %v", out, err)
+	}
+	if len(fs.created) != 1 || fs.invites["G1"] != "U1" {
+		t.Fatalf("created %v, invites %v", fs.created, fs.invites)
 	}
 }

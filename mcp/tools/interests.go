@@ -9,7 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"roamind.ai/channels/store"
+	"roamind.ai/memory/store"
 )
 
 // CatalogEntry is a catalog interest as list_interests shows it.

@@ -1,6 +1,6 @@
 # Create the Slack app from this manifest (api.slack.com/apps → Create New App
 # → From a manifest), then set the request URL printed by
-# `./build.sh hatchet-env` under Event Subscriptions.
+# `task hatchet-env` under Event Subscriptions.
 display_information:
   name: Roamind
   description: Personal assistant

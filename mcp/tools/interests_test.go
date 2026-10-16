@@ -5,14 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"roamind.ai/channels/feeds"
-	"roamind.ai/channels/store"
+	"roamind.ai/memory/store"
+	"roamind.ai/memory/store/storetest"
 )
 
 const feed = `<?xml version="1.0"?><rss version="2.0"><channel><title>RNN news</title>
@@ -28,23 +28,16 @@ func TestInterests(t *testing.T) {
 		w.Write([]byte("<html>a page</html>"))
 	}))
 	defer srv.Close()
-	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	st := storetest.Open(t)
 	for _, id := range []string{"h1", "h2"} {
 		if err := st.UpsertSlackUser(ctx, store.User{ID: id, Email: id + "@x.com", SlackTeamID: "T1", SlackUserID: "U" + id}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	rubric := "Score two separate judgements, 0-10.\n1. novelty -- is anything new here?\n2. rigor -- is it well supported?\nSet include false for tutorials and listicles."
-	if err := st.SyncCatalog(ctx, []store.Interest{
-		{Name: "Stoic principles", Sources: []string{"https://a.org/feed"}, Rubric: rubric},
-		{Name: "Healthy eating", Sources: []string{"https://b.org/feed"}, Rubric: rubric},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	storetest.Curate(t, st,
+		store.Interest{Name: "Stoic principles", Sources: []string{"https://a.org/feed"}, Rubric: rubric},
+		store.Interest{Name: "Healthy eating", Sources: []string{"https://b.org/feed"}, Rubric: rubric})
 	if err := st.FollowInterest(ctx, "h2", "Healthy eating"); err != nil {
 		t.Fatal(err)
 	}

@@ -11,8 +11,7 @@ import (
 	"roamind.ai/agent"
 	"roamind.ai/channels/identity"
 	"roamind.ai/channels/slack"
-	"roamind.ai/channels/store"
-	"roamind.ai/memory"
+	"roamind.ai/memory/store"
 )
 
 func mention(eventID, user, ts, threadTS string) slack.Envelope {
@@ -110,26 +109,25 @@ func TestProcessSavesSharedFiles(t *testing.T) {
 func TestProcessGoalChannel(t *testing.T) {
 	ctx := context.Background()
 	d, _, argsLog := setup(t)
-	mem, err := memory.New(t.TempDir(), "true")
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.Agent.Memory = mem
+	withMemory(t, &d)
 	var after []string
 	d.AfterTurn = func(_ context.Context, u *store.User) error {
 		after = append(after, u.MemoryProject)
 		return nil
 	}
 
-	// First contact creates the owner; then their goal gets channel G1.
-	if _, err := d.Process(ctx, "r0", mention("Ev0", "U1", "1.0", "")); err != nil {
-		t.Fatal(err)
+	// First contact creates and sets up the owner; their next message is a
+	// turn. Then their goal gets channel G1.
+	for _, ts := range []string{"0.5", "1.0"} {
+		if _, err := d.Process(ctx, "r0", mention("Ev"+ts, "U1", ts, "")); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if len(after) != 1 || after[0] == "" {
 		t.Fatalf("AfterTurn calls = %v", after)
 	}
 	owner := identity.UserID("owner@x.com")
-	err = d.Store.SaveGoalChannel(ctx, store.GoalChannel{
+	err := d.Store.SaveGoalChannel(ctx, store.GoalChannel{
 		UserID: owner, GoalPermalink: "bm-u-test-u1-1/goals/learn-jax", GoalTitle: "Learn JAX",
 		ChannelID: "G1",
 	})
@@ -189,11 +187,7 @@ func TestProcessGoalChannel(t *testing.T) {
 func TestProcessExerciseAnswer(t *testing.T) {
 	ctx := context.Background()
 	d, _, argsLog := setup(t)
-	mem, err := memory.New(t.TempDir(), "true")
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.Agent.Memory = mem
+	withMemory(t, &d)
 	if _, err := d.Process(ctx, "r0", mention("Ev0", "U1", "1.0", "")); err != nil {
 		t.Fatal(err)
 	}

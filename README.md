@@ -47,14 +47,14 @@ Details: [docs/architecture.md](docs/architecture.md).
 
 ## Setup
 
-Needs an NVIDIA GPU, Tailscale, the [Hatchet CLI](https://docs.hatchet.run/reference/cli.md), `bwrap`, `socat` and Basic Memory (`uv tool install basic-memory`).
+Needs an NVIDIA GPU, Tailscale, the [Hatchet CLI](https://docs.hatchet.run/reference/cli.md), [Task](https://taskfile.dev), `sqlite3`, `jq`, `bwrap`, `socat` and Basic Memory (`uv tool install basic-memory`).
 
 ```sh
 cp .env.example .env          # add TS_AUTHKEY, ROAMIND_DASHBOARD_USERS
 # create the Slack app from deploy/slack-app-manifest.yaml; add its tokens to .env
-./build.sh hatchet-env        # Hatchet server, Slack webhook, Funnel; prints the Slack Request URL
-./build.sh all && ./build.sh vllm
-process-compose up
+task hatchet-env              # Hatchet server, Slack webhook, Funnel; prints the Slack Request URL
+task all vllm
+process-compose up            # runs task init, then the worker
 ```
 
-Full steps, upgrades and running at boot: [docs/deployment.md](docs/deployment.md). Run `./build.sh help` for every command.
+Full steps, upgrades and running at boot: [docs/deployment.md](docs/deployment.md). Run `task` for every command.

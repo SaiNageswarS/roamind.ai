@@ -1,0 +1,61 @@
+package agent
+
+import (
+	"fmt"
+
+	"roamind.ai/agent/protocol"
+)
+
+// The MCP servers claude gets for a turn, by their key under mcpServers;
+// claude names their tools mcp__<key>__<tool>.
+const (
+	// MemoryServerName is Basic Memory's own server, `bm mcp --project`,
+	// pinned to the user's project. bm enforces the pinning itself: project
+	// arguments and search_all_projects are ignored, and project management
+	// is disabled.
+	MemoryServerName = "memory"
+	// ToolsServerName is Roamind's MCP server (bin/mcp), whose tools keep
+	// the user's data, such as their news interests.
+	ToolsServerName = "roamind"
+)
+
+// memoryDisallowedTools hides bm's project and workspace management.
+// --project already refuses them; hiding them keeps the model from trying.
+// Every other bm tool is allowed: the model has full read/write access to
+// its project.
+var memoryDisallowedTools = []string{
+	"mcp__" + MemoryServerName + "__list_memory_projects",
+	"mcp__" + MemoryServerName + "__create_memory_project",
+	"mcp__" + MemoryServerName + "__delete_project",
+	"mcp__" + MemoryServerName + "__list_workspaces",
+}
+
+// mcpServers returns the mcpServers entries for a turn, with the tools to
+// allow and disallow on them: Basic Memory with memory, Roamind's server
+// with tools.
+func mcpServers(cfg Config, in protocol.TurnInput, memory, tools bool) (servers map[string]any, allowed, disallowed []string, err error) {
+	servers = map[string]any{}
+	if memory {
+		if !cfg.Memory.Ready(in.MemoryProject) {
+			return nil, nil, nil, fmt.Errorf("memory project %s is not set up (user-setup workflow)", in.MemoryProject)
+		}
+		servers[MemoryServerName] = map[string]any{
+			"type":    "stdio",
+			"command": cfg.Memory.Binary,
+			"args":    []string{"mcp", "--project", in.MemoryProject},
+			// The project's own config, and with it its own database.
+			"env": map[string]string{"BASIC_MEMORY_CONFIG_DIR": cfg.Memory.ConfigDir(in.MemoryProject)},
+		}
+		allowed = append(allowed, "mcp__"+MemoryServerName)
+		disallowed = memoryDisallowedTools
+	}
+	if tools {
+		servers[ToolsServerName] = map[string]any{
+			"type":    "stdio",
+			"command": cfg.ToolsServer[0],
+			"args":    append(cfg.ToolsServer[1:len(cfg.ToolsServer):len(cfg.ToolsServer)], "--user", in.UserID),
+		}
+		allowed = append(allowed, "mcp__"+ToolsServerName)
+	}
+	return servers, allowed, disallowed, nil
+}

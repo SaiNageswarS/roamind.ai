@@ -7,6 +7,7 @@ require (
 	github.com/slack-go/slack v0.30.1
 	roamind.ai/agent v0.0.0
 	roamind.ai/channels v0.0.0
+	roamind.ai/memory v0.0.0
 )
 
 require (
@@ -101,7 +102,6 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 	modernc.org/sqlite v1.60.1 // indirect
-	roamind.ai/memory v0.0.0
 )
 
 replace roamind.ai/agent => ../agent

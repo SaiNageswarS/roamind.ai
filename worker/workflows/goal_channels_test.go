@@ -7,13 +7,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	"roamind.ai/channels/store"
-	"roamind.ai/memory"
+	"roamind.ai/memory/store"
+	"roamind.ai/memory/store/notes"
+	"roamind.ai/memory/store/storetest"
 )
 
 // writeGoal saves a goal note with status and any extra observation lines,
 // and returns its permalink.
-func writeGoal(t *testing.T, mem *memory.Config, project, title, slug, status string, extra ...string) string {
+func writeGoal(t *testing.T, mem *notes.Notes, project, title, slug, status string, extra ...string) string {
 	t.Helper()
 	dir := filepath.Join(mem.Dir, "users", project, "notes", "goals")
 	os.MkdirAll(dir, 0o700)
@@ -29,12 +30,8 @@ func writeGoal(t *testing.T, mem *memory.Config, project, title, slug, status st
 
 func TestSync(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	mem, err := memory.New(t.TempDir(), "true")
+	st := storetest.Open(t)
+	mem, err := notes.New(t.TempDir(), "../../memory", "true")
 	if err != nil {
 		t.Fatal(err)
 	}

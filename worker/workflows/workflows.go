@@ -6,8 +6,7 @@
 //   - learning-exercises: each morning, a learning-exercise run per
 //     learning goal.
 //   - learning-exercise: check-skip → build-context → draft-exercise → post.
-//   - news-channels: each user's private news-shorts channel, with the
-//     default interests.
+//   - user-setup: memory-project → bm-setup → news-channel, for a new user.
 //   - news-shorts: once a day, a news-digest run per user.
 //   - news-digest: check-skip → build-context → draft-digest → post.
 //   - news-reaction: reactions to digests, as feedback.
@@ -15,7 +14,6 @@ package workflows
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
@@ -24,8 +22,8 @@ import (
 	"roamind.ai/agent"
 	"roamind.ai/channels/feeds"
 	"roamind.ai/channels/slack"
-	"roamind.ai/channels/store"
-	"roamind.ai/memory"
+	"roamind.ai/memory/store"
+	"roamind.ai/memory/store/notes"
 )
 
 // SlackAPI is the Slack client surface the workflows need.
@@ -43,18 +41,22 @@ type Deps struct {
 	Slack SlackAPI
 	Agent agent.Config
 	// Memory is the users' long-term memory; without it, chat turns run
-	// without memory, goals get neither channels nor exercises, and there
-	// are no news shorts.
-	Memory *memory.Config
+	// without memory, users are not set up (so they get no news channel),
+	// goals get neither channels nor exercises, and there are no news
+	// shorts.
+	Memory *notes.Notes
 	// Feeds reads the feeds of news interests.
 	Feeds *feeds.Client
 	// Location is the timezone of the daily exercises and news shorts.
 	Location *time.Location
 	// Now defaults to time.Now.
 	Now func() time.Time
+	// SetupUser, when set, starts setting up a user, without waiting;
+	// chat-turn calls it for a user who is not set up. Register sets it to
+	// start a user-setup run.
+	SetupUser func(ctx context.Context, userID string) error
 	// AfterTurn, when set, runs after each chat turn with memory. Register
-	// sets it to give new goals their channels and new users their news
-	// channel. Its errors are logged.
+	// sets it to give new goals their channels. Its errors are logged.
 	AfterTurn func(ctx context.Context, u *store.User) error
 }
 
@@ -71,23 +73,24 @@ func Register(c *hatchet.Client, d Deps) []hatchet.WorkflowBase {
 	if d.Memory == nil {
 		return []hatchet.WorkflowBase{ChatTurn(c, d), goals}
 	}
-	newsChannels := NewsChannels(c, d)
-	d.AfterTurn = afterTurn(goalChannelsTrigger(goals, d), newsChannelsTrigger(newsChannels, d))
+	setup := UserSetup(c, d)
+	d.SetupUser = func(ctx context.Context, userID string) error {
+		_, err := setup.RunNoWait(topLevel(ctx), UserSetupInput{UserID: userID})
+		return err
+	}
+	d.AfterTurn = goalChannelsTrigger(goals, d)
 	exercise := LearningExercise(c, d)
 	digest := NewsDigest(c, d)
 	return []hatchet.WorkflowBase{
-		ChatTurn(c, d), goals, exercise, LearningExercises(c, d, exercise),
-		newsChannels, digest, NewsShorts(c, d, digest, newsChannels), NewsReaction(c, d),
+		ChatTurn(c, d), setup, goals, exercise, LearningExercises(c, d, exercise),
+		digest, NewsShorts(c, d, digest, setup), NewsReaction(c, d),
 	}
 }
 
-// afterTurn runs every hook, and joins their errors.
-func afterTurn(hooks ...func(ctx context.Context, u *store.User) error) func(ctx context.Context, u *store.User) error {
-	return func(ctx context.Context, u *store.User) error {
-		var errs []error
-		for _, h := range hooks {
-			errs = append(errs, h(ctx, u))
-		}
-		return errors.Join(errs...)
-	}
+// topLevel makes the runs started with ctx top-level runs rather than
+// children of the task ctx belongs to: given a task's hatchet.Context, the
+// SDK spawns a child run. So user-setup runs show on their own in the
+// dashboard, and outlive the run that started them.
+func topLevel(ctx context.Context) context.Context {
+	return context.WithoutCancel(ctx)
 }

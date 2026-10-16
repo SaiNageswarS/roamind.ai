@@ -1,8 +1,10 @@
-// Command worker runs the Roamind Hatchet worker.
+// Command worker runs the Roamind Hatchet worker. `task init` prepares its
+// store and memory projects first.
 package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -17,9 +19,8 @@ import (
 
 	"roamind.ai/agent"
 	"roamind.ai/channels/feeds"
-	"roamind.ai/channels/store"
-	"roamind.ai/memory"
-	"roamind.ai/worker/catalog"
+	"roamind.ai/memory/store"
+	"roamind.ai/memory/store/notes"
 	"roamind.ai/worker/client"
 	"roamind.ai/worker/workflows"
 )
@@ -35,24 +36,20 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	dataDir := envOr("ROAMIND_DATA_DIR", "./data")
+	dataDir, err := filepath.Abs(envOr("ROAMIND_DATA_DIR", "./data"))
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return err
 	}
-	dataDir, _ = filepath.Abs(dataDir)
 	st, err := store.Open(filepath.Join(dataDir, "roamind.db"))
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-
-	// The pre-built catalog of news interests.
-	cat, err := catalog.Interests()
-	if err != nil {
-		return err
-	}
-	if err := st.SyncCatalog(ctx, cat); err != nil {
-		return err
+	if err := st.Ready(ctx); err != nil {
+		return fmt.Errorf("%w: run `task init`", err)
 	}
 
 	token := os.Getenv("SLACK_BOT_TOKEN")
@@ -62,12 +59,11 @@ func run() error {
 
 	// Long-term memory needs Basic Memory's bm CLI; without it turns run
 	// without memory.
-	mem, err := memory.New(filepath.Join(dataDir, "memory"), os.Getenv("ROAMIND_BM_BIN"))
+	// New users' projects are set up from the repo's memory folder.
+	mem, err := notes.New(filepath.Join(dataDir, "memory"), envOr("ROAMIND_MEMORY_DIR", "./memory"), os.Getenv("ROAMIND_BM_BIN"))
 	if err != nil {
 		slog.Warn("memory disabled", "err", err)
 		mem = nil
-	} else {
-		mem.Search = memory.DefaultSearch
 	}
 
 	loc, err := location(os.Getenv("ROAMIND_TZ"))
@@ -83,7 +79,7 @@ func run() error {
 		// claude runs it in the user's workspace, so the paths are absolute.
 		toolsServer = []string{mcpBin, "--data", dataDir}
 	} else {
-		slog.Warn("bin/mcp not found (./build.sh mcp); chat turns run without Roamind's tools")
+		slog.Warn("bin/mcp not found (task mcp); chat turns run without Roamind's tools")
 	}
 	c, err := client.HatchetClient()
 	if err != nil {
@@ -119,7 +115,7 @@ func run() error {
 	return w.StartBlocking(ctx)
 }
 
-// mcpBinary is the absolute path of the mcp command (./build.sh mcp):
+// mcpBinary is the absolute path of the mcp command (task build):
 // bin, or by default mcp next to the worker's own binary; "" when there is
 // none.
 func mcpBinary(bin string) (string, error) {

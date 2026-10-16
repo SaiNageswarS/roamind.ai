@@ -13,7 +13,7 @@ hatchet server start (Hatchet CLI)        process-compose (`process-compose up`)
                                              worker → chat-turn, goal-channels, learning-exercise(s), news-*
 ```
 
-- **Hatchet is started by the Hatchet CLI** (`./build.sh hatchet`, i.e. `hatchet server start`, pinned to the SDK's version), outside process-compose.
+- **Hatchet is started by the Hatchet CLI** (`task hatchet`, i.e. `hatchet server start`, pinned to the SDK's version), outside process-compose.
   - It creates the `local` profile. `deploy/bin/with-hatchet.sh` loads that profile (`hatchet profile env`) for the worker, Caddy and the `webhook`/`funnel` commands, so no token goes in `.env`.
   - The ports come from the profile, so the auto-picked ports (8889/7078 here) are fine.
 - **Dashboards** are served by Caddy built with [caddy-tailscale](https://github.com/tailscale/caddy-tailscale).
@@ -28,27 +28,28 @@ hatchet server start (Hatchet CLI)        process-compose (`process-compose up`)
 
 ## Setup
 
-All one-shot steps are subcommands of `./build.sh` (run `./build.sh help` to list them). process-compose only runs the long-lived processes (caddy, embed, rerank, worker).
+All one-shot steps are tasks in `Taskfile.yml`, run with [Task](https://taskfile.dev) (`go install github.com/go-task/task/v3/cmd/task@v3.54.0`; `task` lists them). process-compose runs the long-lived processes (caddy, embed, rerank, worker), plus `init` once before the worker.
 
 1. **Config.** Copy `.env.example` to `.env`.
    - Set `TS_AUTHKEY` (needed only for Caddy's first run) and `ROAMIND_DASHBOARD_USERS` (comma-separated logins, e.g. `you@example.com`).
 2. **Slack app.** Create it from `deploy/slack-app-manifest.yaml` and install it. Put `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` in `.env`.
    - **Upgrading an app created from an older manifest:**
      - Add the bot scope `groups:write` under OAuth & Permissions, then reinstall the app.
-     - Re-run `./build.sh webhook` so the routing expression includes private-channel messages.
+     - Re-run `task webhook` so the routing expression includes private-channel messages.
      - Rebuild and restart the worker.
-3. **Hatchet environment.** `./build.sh hatchet-env` does three things:
+3. **Hatchet environment.** `task hatchet-env` does three things:
    - starts the Hatchet server;
    - registers the Slack webhook, with the routing expression `channels/slack.EventKeyExpression`;
    - opens Tailscale Funnel on the webhook path only. The tailnet policy must allow Funnel for this node.
 
    It prints the Slack Request URL; paste it into the Slack app under Event Subscriptions.
-4. **Build.** `./build.sh all` builds `bin/caddy`, `bin/worker` and `bin/mcp`. `./build.sh vllm` installs vLLM (pinned, on a uv-managed Python so Triton finds `Python.h`) and downloads the two search models. This needs an NVIDIA GPU. For memory, install Basic Memory's `bm` CLI on `PATH` with `uv tool install basic-memory` (tested with 0.23.2). Its first start downloads an embedding model.
-5. **Run.** `process-compose up` from the repo root. It reads `process-compose.yaml` and `.env`. Then log into `https://hatchet.<tailnet>.ts.net` as `admin@example.com` / `Admin123!!` and change the password.
+4. **Build.** Install the `sqlite3` CLI and `jq` (`sudo apt install sqlite3 jq`; `task init` uses them). `task all` builds `bin/caddy`, `bin/worker` and `bin/mcp`; Task skips a binary whose sources haven't changed. `task vllm` installs vLLM (pinned, on a uv-managed Python so Triton finds `Python.h`) and downloads the two search models. This needs an NVIDIA GPU. For memory, install Basic Memory's `bm` CLI on `PATH` with `uv tool install basic-memory` (tested with 0.23.2). Its first start downloads an embedding model.
+5. **Run.** `process-compose up` from the repo root. It reads `process-compose.yaml` and `.env`, and runs `task init` before the worker: with the `sqlite3` CLI it creates the store's tables from `memory/sql-schemas/` and loads the curated interests with `memory/seed/interests.sql`, then brings every user's Basic Memory project up to date: the settings in `memory/basic-memory-config.json` (search models) go into its `config.json`, and missing schema notes are copied from `memory/basic-memory-schemas/`. New users' projects are created by the `user-setup` workflow. Every step is safe to repeat, so editing a file in `memory/` takes effect on the next restart of the whole service (`systemctl --user restart roamind`); restarting only the worker in process-compose doesn't rerun `init`. The worker refuses to start on a store without tables. Then log into `https://hatchet.<tailnet>.ts.net` as `admin@example.com` / `Admin123!!` and change the password.
 
-   To start at boot instead, `./build.sh service` installs and enables a `roamind` systemd user service that runs `process-compose up --tui=false` from the repo root. Manage it with `systemctl --user start|stop|status roamind`, and attach with `process-compose attach`. It starts at boot without a login only when lingering is on (`sudo loginctl enable-linger $USER`).
+   To start at boot instead, `task service` installs and enables a `roamind` systemd user service that runs `process-compose up --tui=false` from the repo root. Manage it with `systemctl --user start|stop|status roamind`, and attach with `process-compose attach`. It starts at boot without a login only when lingering is on (`sudo loginctl enable-linger $USER`).
 
 Development commands:
-- `./build.sh test` and `./build.sh vet` run in every module.
-- `./build.sh bm [project] <args>` runs Basic Memory's CLI against a user's project (`./build.sh bm project info`, `./build.sh bm tool search-notes …`). It sets `BASIC_MEMORY_CONFIG_DIR` for that one command only, so your own `bm` and MCP setups keep using `~/.basic-memory`.
-- `./build.sh turn "hello"` runs one real `claude -p` turn from the terminal.
+- `task test` and `task vet` run in every module.
+- `task init` prepares the environment from `memory/` without starting the worker.
+- `task bm -- [project] <args>` runs Basic Memory's CLI against a user's project (`task bm -- project info`, `task bm -- tool search-notes …`). It sets `BASIC_MEMORY_CONFIG_DIR` for that one command only, so your own `bm` and MCP setups keep using `~/.basic-memory`.
+- `task turn -- "hello"` runs one real `claude -p` turn from the terminal.

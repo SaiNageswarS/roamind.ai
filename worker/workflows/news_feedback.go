@@ -8,7 +8,7 @@ import (
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
 	"roamind.ai/channels/slack"
-	"roamind.ai/channels/store"
+	"roamind.ai/memory/store"
 )
 
 // NewsReactionName is the task that records reactions to digests; replies

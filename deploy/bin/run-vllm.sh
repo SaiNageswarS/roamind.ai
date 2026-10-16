@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Serves one of Basic Memory's search models with vLLM on the local GPU, on
-# loopback only. Started by process-compose; install with ./build.sh vllm.
+# loopback only. Started by process-compose; install with task vllm.
 #
 #   deploy/bin/run-vllm.sh embed    Qwen3-Embedding-0.6B on :8800 (/v1/embeddings)
 #   deploy/bin/run-vllm.sh rerank   Qwen3-Reranker-0.6B  on :8801 (/v1/rerank)
@@ -8,7 +8,7 @@
 # Both fit an 8 GB GPU: each takes 35% of it, with a 4096-token context
 # (memory notes and rerank documents are short) and no CUDA graphs.
 # The model names, ports and embedding size are mirrored in
-# memory.DefaultSearch.
+# memory/basic-memory-config.json.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

@@ -5,6 +5,7 @@ go 1.26.7
 require (
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	roamind.ai/channels v0.0.0
+	roamind.ai/memory v0.0.0
 )
 
 require (

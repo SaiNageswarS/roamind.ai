@@ -1,8 +1,8 @@
 # Long-running Roamind processes: `process-compose up` (reads ./.env).
 #
-# Prerequisites (one-shot, see ./build.sh):
-#   ./build.sh hatchet-env   Hatchet server + Slack webhook + Funnel
-#   ./build.sh all           bin/caddy, bin/worker
+# Prerequisites (one-shot, see Taskfile.yml):
+#   task hatchet-env   Hatchet server + Slack webhook + Funnel
+#   task all           bin/caddy, bin/worker, bin/mcp
 #
 # Processes that talk to Hatchet run through deploy/bin/with-hatchet.sh, which
 # loads the Hatchet CLI profile created by `hatchet server start`.
@@ -57,10 +57,18 @@ processes:
       restart: on_failure
       backoff_seconds: 10
 
+  # Tables, curated interests and Basic Memory schema notes from memory/;
+  # safe to repeat, so it runs before every worker start.
+  init:
+    description: Prepare the store and memory projects from memory/
+    command: task init
+
   worker:
     description: Roamind Hatchet worker (chat-turn)
     command: deploy/bin/with-hatchet.sh ./bin/worker
     depends_on:
+      init:
+        condition: process_completed_successfully
       rerank:
         condition: process_healthy
     availability:

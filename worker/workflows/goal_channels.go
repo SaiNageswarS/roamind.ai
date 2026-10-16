@@ -12,8 +12,8 @@ import (
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 	slackapi "github.com/slack-go/slack"
 
-	"roamind.ai/channels/store"
-	"roamind.ai/memory"
+	"roamind.ai/memory/store"
+	"roamind.ai/memory/store/notes"
 )
 
 // GoalChannelsName is the goal-channels workflow, which gives each of a
@@ -67,7 +67,7 @@ func goalChannelsTrigger(task *hatchet.StandaloneTask, d Deps) func(ctx context.
 }
 
 // Missing returns the user's active goals that have no channel yet.
-func (d Deps) Missing(ctx context.Context, u *store.User) ([]memory.Goal, error) {
+func (d Deps) Missing(ctx context.Context, u *store.User) ([]notes.Goal, error) {
 	if d.Memory == nil || u.MemoryProject == "" || u.SlackUserID == "" {
 		return nil, nil
 	}
@@ -79,7 +79,7 @@ func (d Deps) Missing(ctx context.Context, u *store.User) ([]memory.Goal, error)
 	if err != nil {
 		return nil, err
 	}
-	var missing []memory.Goal
+	var missing []notes.Goal
 	for _, g := range goals {
 		if g.Active() && !have[g.Permalink] {
 			missing = append(missing, g)
@@ -110,7 +110,7 @@ func (d Deps) Sync(ctx context.Context, userID string) (GoalChannelsOutput, erro
 	return out, nil
 }
 
-func (d Deps) create(ctx context.Context, u *store.User, g memory.Goal) (*slackapi.Channel, error) {
+func (d Deps) create(ctx context.Context, u *store.User, g notes.Goal) (*slackapi.Channel, error) {
 	ch, err := d.createChannel(ctx, ChannelName(g.Title))
 	if err != nil {
 		return nil, err

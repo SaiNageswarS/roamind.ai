@@ -1,4 +1,4 @@
-package memory
+package notes
 
 import (
 	"bufio"
@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// Goal is a goal note as written by the agent (see schemas/Goal.md).
+// Goal is a goal note as written by the agent (see memory/basic-memory-schemas/Goal.md).
 type Goal struct {
 	Title     string
 	Permalink string
@@ -36,12 +36,12 @@ var (
 // Goals reads the goal notes in project's goals/ folder straight from disk.
 // Notes bm has not given a permalink yet are skipped; they appear once bm
 // writes it.
-func (c *Config) Goals(project string) ([]Goal, error) {
-	if !projectRe.MatchString(project) {
-		return nil, errors.New("invalid memory project " + project)
+func (n Notes) Goals(project string) ([]Goal, error) {
+	if err := ValidProject(project); err != nil {
+		return nil, err
 	}
 	var goals []Goal
-	err := filepath.WalkDir(filepath.Join(c.notesDir(project), "goals"), func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(filepath.Join(n.NotesDir(project), "goals"), func(path string, d fs.DirEntry, err error) error {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}

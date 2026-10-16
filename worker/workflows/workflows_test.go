@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,7 +13,7 @@ import (
 	slackapi "github.com/slack-go/slack"
 
 	"roamind.ai/agent"
-	"roamind.ai/channels/store"
+	"roamind.ai/memory/store/storetest"
 )
 
 // fakeSlack records what the workflows send to Slack.
@@ -29,6 +30,9 @@ type fakeSlack struct {
 	invites map[string]string
 	// failPosts makes PostMessageContext fail.
 	failPosts bool
+	// failInvites makes that many InviteUsersToConversationContext calls
+	// fail.
+	failInvites int
 }
 
 func newFakeSlack() *fakeSlack {
@@ -98,6 +102,10 @@ func (f *fakeSlack) CreateConversationContext(_ context.Context, p slackapi.Crea
 }
 
 func (f *fakeSlack) InviteUsersToConversationContext(_ context.Context, ch string, users ...string) (*slackapi.Channel, error) {
+	if f.failInvites > 0 {
+		f.failInvites--
+		return nil, errors.New("slack is down")
+	}
 	f.invites[ch] = users[0]
 	return nil, nil
 }
@@ -129,11 +137,7 @@ func fakeClaudeWith(t *testing.T, fixturePath string) (bin, argsLog string) {
 
 func setup(t *testing.T) (Deps, *fakeSlack, string) {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t)
 	bin, argsLog := fakeClaude(t)
 	fs := newFakeSlack()
 	return Deps{

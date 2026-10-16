@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -14,8 +15,7 @@ import (
 	"roamind.ai/agent/protocol"
 	"roamind.ai/channels/identity"
 	"roamind.ai/channels/slack"
-	"roamind.ai/channels/store"
-	"roamind.ai/memory"
+	"roamind.ai/memory/store"
 )
 
 // ChatTurnName is the chat-turn workflow: one agent turn for one Slack
@@ -96,6 +96,9 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 		return out, d.reply(ctx, ev, refusal)
 	}
 	out.UserID = user.ID
+	if out.Skipped, err = d.setUp(ctx, ev, user); err != nil || out.Skipped != "" {
+		return out, err
+	}
 
 	thread, err := d.Store.GetThread(ctx, ev.Channel, ev.RootTS())
 	if err != nil {
@@ -277,11 +280,42 @@ func (d Deps) resolveUser(ctx context.Context, env slack.Envelope) (*store.User,
 		if err := d.Store.UpsertSlackUser(ctx, *u); err != nil {
 			return nil, "", err
 		}
-		if u.MemoryProject, err = d.Store.AssignMemoryProject(ctx, u.ID, memory.ProjectBase(u.DisplayName)); err != nil {
-			return nil, "", err
-		}
 	}
 	return u, "", nil
+}
+
+// setupReply answers a user's messages while user-setup runs for them.
+const setupReply = "Hi! I'm setting things up for you: your memory and your news-shorts channel. " +
+	"Give me a minute, then send your message again."
+
+// setupFailedReply answers a message whose user-setup could not be started.
+const setupFailedReply = "Sorry, I couldn't start setting things up for you. Please try again in a minute."
+
+// setUp starts user-setup, without waiting, for a user who is not fully
+// set up. While their memory project is not ready (a new user above all),
+// it tells them so and returns why the turn is skipped; a user missing
+// only their news channel gets their turn.
+func (d Deps) setUp(ctx context.Context, ev slack.Event, u *store.User) (string, error) {
+	if d.SetupUser == nil || d.Memory == nil {
+		return "", nil
+	}
+	memory := u.MemoryProject != "" && d.Memory.Ready(u.MemoryProject)
+	if memory {
+		ch, err := d.Store.NewsChannelOf(ctx, u.ID)
+		if err != nil || ch != "" {
+			return "", err
+		}
+	}
+	if err := d.SetupUser(ctx, u.ID); err != nil {
+		if !memory {
+			err = errors.Join(err, d.reply(ctx, ev, setupFailedReply))
+		}
+		return "", fmt.Errorf("start user setup: %w", err)
+	}
+	if memory {
+		return "", nil
+	}
+	return "setting up user", d.reply(ctx, ev, setupReply)
 }
 
 func (d Deps) reply(ctx context.Context, ev slack.Event, text string) error {

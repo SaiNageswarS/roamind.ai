@@ -15,7 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"roamind.ai/channels/feeds"
-	"roamind.ai/channels/store"
+	"roamind.ai/memory/store"
 )
 
 // Deps are what the tools work with.

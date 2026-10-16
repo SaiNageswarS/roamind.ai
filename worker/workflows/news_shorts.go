@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -11,8 +12,8 @@ import (
 )
 
 // NewsShortsName is the cron workflow that, at each of NewsHours, starts a
-// news-digest run for every user with a news channel, and a news-channels
-// run for every user still without one.
+// news-digest run for every user with a news channel, and a user-setup run
+// for every user still without one.
 const NewsShortsName = "news-shorts"
 
 // NewsHours are the hours, in the server's zone (ROAMIND_TZ overrides it),
@@ -30,29 +31,38 @@ func newsTimes() string {
 
 // newsDispatchOutput lists the runs started.
 type newsDispatchOutput struct {
-	Skipped  string   `json:"skipped,omitempty"`
-	Slot     string   `json:"slot,omitempty"`
-	Digests  []string `json:"digests,omitempty"`  // user ids
-	Channels []string `json:"channels,omitempty"` // user ids
+	Skipped string   `json:"skipped,omitempty"`
+	Slot    string   `json:"slot,omitempty"`
+	Digests []string `json:"digests,omitempty"` // user ids
+	Setups  []string `json:"setups,omitempty"`  // user ids
+	// Failed are the runs that could not be started, logged; the others
+	// still start.
+	Failed []string `json:"failed,omitempty"`
 }
 
 // NewsShorts declares the cron task that starts digest runs, one per user,
-// as child runs.
-func NewsShorts(c *hatchet.Client, d Deps, digest *hatchet.Workflow, channels *hatchet.StandaloneTask) *hatchet.StandaloneTask {
+// as child runs, and user-setup runs, on their own (see topLevel), for
+// users without a news channel. A run that can't be started is logged and
+// listed; the others still start.
+func NewsShorts(c *hatchet.Client, d Deps, digest, setup *hatchet.Workflow) *hatchet.StandaloneTask {
 	return c.NewStandaloneTask(NewsShortsName, func(ctx hatchet.Context, _ struct{}) (newsDispatchOutput, error) {
 		out, digests, missing, err := d.dueNews(ctx, d.now())
 		if err != nil {
 			return out, err
 		}
 		for _, in := range missing {
-			if _, err := channels.RunNoWait(ctx, in); err != nil {
-				return out, fmt.Errorf("news channel for %s: %w", in.UserID, err)
+			if _, err := setup.RunNoWait(topLevel(ctx), in); err != nil {
+				slog.Error("user-setup not started", "user", in.UserID, "err", err)
+				out.Failed = append(out.Failed, "user-setup "+in.UserID)
+				continue
 			}
-			out.Channels = append(out.Channels, in.UserID)
+			out.Setups = append(out.Setups, in.UserID)
 		}
 		for _, in := range digests {
 			if _, err := digest.RunNoWait(ctx, in); err != nil {
-				return out, fmt.Errorf("digest for %s: %w", in.UserID, err)
+				slog.Error("news-digest not started", "user", in.UserID, "err", err)
+				out.Failed = append(out.Failed, "news-digest "+in.UserID)
+				continue
 			}
 			out.Digests = append(out.Digests, in.UserID)
 		}
@@ -71,9 +81,9 @@ func (d Deps) newsSlot(t time.Time) string {
 }
 
 // dueNews returns, at one of NewsHours local time, a digest input for each
-// user with a news channel, and a news-channels input for each user with
-// memory but no news channel.
-func (d Deps) dueNews(ctx context.Context, now time.Time) (newsDispatchOutput, []DigestInput, []NewsChannelsInput, error) {
+// user with a news channel, and a user-setup input for each user without
+// one.
+func (d Deps) dueNews(ctx context.Context, now time.Time) (newsDispatchOutput, []DigestInput, []UserSetupInput, error) {
 	var out newsDispatchOutput
 	local := now.In(d.Location)
 	if !slices.Contains(NewsHours, local.Hour()) {
@@ -86,17 +96,14 @@ func (d Deps) dueNews(ctx context.Context, now time.Time) (newsDispatchOutput, [
 		return out, nil, nil, err
 	}
 	var digests []DigestInput
-	var missing []NewsChannelsInput
+	var missing []UserSetupInput
 	for _, u := range users {
-		if u.MemoryProject == "" {
-			continue
-		}
 		ch, err := d.Store.NewsChannelOf(ctx, u.ID)
 		if err != nil {
 			return out, nil, nil, err
 		}
 		if ch == "" {
-			missing = append(missing, NewsChannelsInput{UserID: u.ID})
+			missing = append(missing, UserSetupInput{UserID: u.ID})
 			continue
 		}
 		digests = append(digests, DigestInput{UserID: u.ID, Slot: out.Slot})

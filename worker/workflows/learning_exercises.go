@@ -7,7 +7,7 @@ import (
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
-	"roamind.ai/memory"
+	"roamind.ai/memory/store/notes"
 )
 
 // LearningExercisesName is the cron workflow that each morning starts a
@@ -82,7 +82,7 @@ func (d Deps) dueGoals(ctx context.Context, now time.Time) (dispatchOutput, []Ex
 		return out, nil, err
 	}
 	var due []ExerciseInput
-	goals := map[string][]memory.Goal{} // by user
+	goals := map[string][]notes.Goal{} // by user
 	for _, gc := range gcs {
 		if _, ok := goals[gc.UserID]; !ok {
 			u, err := d.Store.UserByID(ctx, gc.UserID)

@@ -14,8 +14,8 @@ import (
 	"roamind.ai/agent"
 	"roamind.ai/agent/protocol"
 	"roamind.ai/channels/slack"
-	"roamind.ai/channels/store"
-	"roamind.ai/memory"
+	"roamind.ai/memory/store"
+	"roamind.ai/memory/store/notes"
 )
 
 // LearningExerciseName is the learning-exercise workflow, which posts
@@ -255,7 +255,7 @@ func (d Deps) postExercise(ctx context.Context, in ExerciseInput, chk checkOutpu
 	}
 	now := d.now()
 	date := now.In(d.Location).Format(time.DateOnly)
-	folder := memory.ExerciseFolder(in.GoalPermalink)
+	folder := notes.ExerciseFolder(in.GoalPermalink)
 	out.NotePermalink = u.MemoryProject + "/" + folder + "/" + date
 
 	chunks := slack.Split(slack.ToMrkdwn(dr.Exercise), slack.MaxChunk)
@@ -329,7 +329,7 @@ func (d Deps) goalChannel(ctx context.Context, in ExerciseInput) (*store.GoalCha
 }
 
 // goal reads the user's goal note, or nil when there is none.
-func (d Deps) goal(u *store.User, permalink string) (*memory.Goal, error) {
+func (d Deps) goal(u *store.User, permalink string) (*notes.Goal, error) {
 	if d.Memory == nil || u.MemoryProject == "" {
 		return nil, nil
 	}

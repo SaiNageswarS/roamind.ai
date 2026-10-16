@@ -18,7 +18,7 @@ import (
 	"roamind.ai/agent"
 	"roamind.ai/agent/protocol"
 	"roamind.ai/channels/feeds"
-	"roamind.ai/channels/store"
+	"roamind.ai/memory/store"
 )
 
 // NewsDigestName is the news-digest workflow, which posts one digest in a

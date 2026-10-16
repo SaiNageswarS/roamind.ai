@@ -11,19 +11,19 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
-
 	"path/filepath"
+	"strings"
 
 	"roamind.ai/agent"
 	"roamind.ai/agent/protocol"
-	"roamind.ai/memory"
+	"roamind.ai/memory/store/notes"
 )
 
 func main() {
 	user := flag.String("user", "dev", "user id")
 	session := flag.String("session", "", "claude session id to resume")
 	dataDir := flag.String("data", "./data", "data directory")
+	memDir := flag.String("memory", "./memory", "the repo's memory folder, which new Basic Memory projects are set up from")
 	model := flag.String("model", os.Getenv("ROAMIND_MODEL"), "claude model")
 	email := flag.String("email", "", "the user's email address")
 	project := flag.String("memory-project", "", "Basic Memory project (default bm-u-<user>-1); \"off\" disables memory")
@@ -33,15 +33,19 @@ func main() {
 	in := protocol.TurnInput{UserID: *user, UserName: *user, UserEmail: *email, SessionID: *session,
 		Text: strings.Join(flag.Args(), " "), Tools: protocol.ToolsWorkspace}
 	if *project != "off" {
-		mem, err := memory.New(filepath.Join(*dataDir, "memory"), os.Getenv("ROAMIND_BM_BIN"))
+		mem, err := notes.New(filepath.Join(*dataDir, "memory"), *memDir, os.Getenv("ROAMIND_BM_BIN"))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
-		mem.Search = memory.DefaultSearch
 		cfg.Memory, in.MemoryProject = mem, *project
 		if in.MemoryProject == "" {
-			in.MemoryProject = memory.ProjectBase(*user) + "-1"
+			in.MemoryProject = notes.ProjectBase(*user) + "-1"
+		}
+		// The terminal's stand-in for the user-setup workflow's bm-setup.
+		if err := mem.Setup(in.MemoryProject); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
 		}
 	}
 

@@ -19,8 +19,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"roamind.ai/channels/feeds"
-	"roamind.ai/channels/store"
 	"roamind.ai/mcp/tools"
+	"roamind.ai/memory/store"
 )
 
 func main() {

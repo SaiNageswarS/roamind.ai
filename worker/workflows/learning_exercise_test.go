@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"roamind.ai/channels/store"
-	"roamind.ai/memory"
+	"roamind.ai/memory/store"
+	"roamind.ai/memory/store/notes"
 )
 
 func TestLocalCrons(t *testing.T) {
@@ -60,7 +60,7 @@ func TestLearningExercise(t *testing.T) {
 	d, fs, _ := setup(t)
 	bin, argsLog := fakeClaudeWith(t, "testdata/draft_exercise.jsonl")
 	d.Agent.ClaudeBinary = bin
-	mem, err := memory.New(t.TempDir(), fakeBM(t))
+	mem, err := notes.New(t.TempDir(), "../../memory", fakeBM(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +76,9 @@ func TestLearningExercise(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := u.MemoryProject
+	if err := mem.Setup(p); err != nil {
+		t.Fatal(err)
+	}
 	german := writeGoal(t, mem, p, "Learn German", "learn-german", "active",
 		"- [kind] learn (inferred, slack, 2026-10-11)",
 		"- [exercise_preference] translations over fill-in-the-blanks (stated, slack, 2026-10-11)")

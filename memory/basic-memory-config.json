@@ -1,0 +1,15 @@
+{
+  "semantic_search_enabled": true,
+  "semantic_embedding_provider": "litellm",
+  "semantic_embedding_model": "hosted_vllm/qwen3-embedding-0.6b",
+  "semantic_embedding_api_base": "http://127.0.0.1:8800/v1",
+  "semantic_embedding_api_key": "EMPTY",
+  "semantic_embedding_dimensions": 1024,
+  "semantic_embedding_query_prefix": "Instruct: Given a question about the user's notes on people, goals, preferences and scientific work, retrieve notes that answer it\nQuery: ",
+  "semantic_embedding_batch_size": 32,
+  "reranker_enabled": true,
+  "reranker_provider": "litellm",
+  "reranker_model": "hosted_vllm/qwen3-reranker-0.6b",
+  "reranker_api_base": "http://127.0.0.1:8801",
+  "reranker_api_key": "EMPTY"
+}
