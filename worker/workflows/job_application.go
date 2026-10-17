@@ -23,9 +23,10 @@ import (
 //	check-skip → tailor → publish
 //
 // tailor has the agent write a CV, a cover letter and answers to the
-// application form's questions; publish puts them in the web app. When a
-// task fails for good, the posting is marked failed, so it doesn't keep
-// the user's next hunt waiting.
+// application form's questions; publish puts them in the web app, and
+// points the links the user added the posting with at it. When a task
+// fails for good, the posting is marked failed, so it doesn't keep the
+// user's next hunt waiting, and so are its links.
 const JobApplicationName = "job-application"
 
 // JobApplicationInput is a picked posting, with what its application is
@@ -39,6 +40,8 @@ type JobApplicationInput struct {
 	Score   int          `json:"score"`
 	Reasons []string     `json:"reasons,omitempty"`
 	Resume  string       `json:"resume"`
+	// LinkIDs are the links the user added the posting with, if any.
+	LinkIDs []string `json:"link_ids,omitempty"`
 }
 
 // applicationCheck is check-skip's result.
@@ -97,7 +100,10 @@ func JobApplication(c *hatchet.Client, d Deps) *hatchet.Workflow {
 		hatchet.WithExecutionTimeout(time.Minute),
 	)
 	wf.OnFailure(func(ctx hatchet.Context, in JobApplicationInput) (struct{}, error) {
-		return struct{}{}, d.Store.MarkFailed(ctx, in.UserID, in.URLHash)
+		if err := d.Store.MarkFailed(ctx, in.UserID, in.URLHash); err != nil {
+			return struct{}{}, err
+		}
+		return struct{}{}, d.failProcessingLinks(ctx, in.UID, in.LinkIDs, linkFailed)
 	})
 	return wf
 }
@@ -162,7 +168,8 @@ func (d Deps) tailorApplication(ctx context.Context, in JobApplicationInput) (ap
 }
 
 // publishApplication puts the application in the web app, under the
-// posting's url hash, then records the posting as published.
+// posting's url hash, points the posting's links at it, then records the
+// posting as published.
 func (d Deps) publishApplication(ctx context.Context, in JobApplicationInput, t applicationTailor) (applicationPublish, error) {
 	a := web.Application{
 		Title: in.Posting.Title, Company: in.Posting.Company, Location: in.Posting.Location,
@@ -171,10 +178,16 @@ func (d Deps) publishApplication(ctx context.Context, in JobApplicationInput, t 
 		CV: t.Application.CV, CoverLetter: t.Application.CoverLetter,
 		Status: web.StatusReady, CreatedAt: d.now(),
 	}
+	if len(in.LinkIDs) > 0 {
+		a.LinkID = in.LinkIDs[0]
+	}
 	for _, ans := range t.Application.Answers {
 		a.Answers = append(a.Answers, web.Answer{Question: ans.Question, Required: ans.Required, Answer: ans.Answer})
 	}
 	if err := d.Web.SaveApplication(ctx, in.UID, in.URLHash, a); err != nil {
+		return applicationPublish{}, err
+	}
+	if err := d.doneLinks(ctx, in.UID, in.LinkIDs, in.URLHash, ""); err != nil {
 		return applicationPublish{}, err
 	}
 	if err := d.Store.MarkPublished(ctx, in.UserID, in.URLHash); err != nil {

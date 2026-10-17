@@ -142,4 +142,24 @@ func TestJobPostings(t *testing.T) {
 	if pp, _ := s.JobPostingOf(ctx, "a", "nope"); pp != nil {
 		t.Fatalf("missing = %+v", pp)
 	}
+
+	// A user asking for a passed or failed posting gets it picked again;
+	// open and closed ones stay as they are.
+	if rp, ok, err := s.RepickPosting(ctx, passed); err != nil || !ok || rp.Status != PostingPicked {
+		t.Fatalf("repick passed = %+v %v %v", rp, ok, err)
+	}
+	if st := open("a"); !reflect.DeepEqual(st, []string{PostingPicked}) {
+		t.Fatalf("repicked open = %v", st)
+	}
+	if _, ok, _ := s.RepickPosting(ctx, passed); ok {
+		t.Fatal("repicked a picked posting")
+	}
+	p.UserID = "b"
+	if _, ok, _ := s.RepickPosting(ctx, p); !ok {
+		t.Fatal("b's failed posting not repicked")
+	}
+	p.UserID = "a"
+	if _, ok, _ := s.RepickPosting(ctx, p); ok {
+		t.Fatal("repicked a closed posting")
+	}
 }

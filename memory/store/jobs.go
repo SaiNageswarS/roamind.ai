@@ -178,6 +178,22 @@ func (s *Store) PickPosting(ctx context.Context, p JobPosting) (JobPosting, bool
 	return p, n == 1, err
 }
 
+// RepickPosting records as picked again a posting of p's user that was
+// judged not a fit or whose application failed, when the user asks for it
+// themselves; ok is false when the posting is neither.
+func (s *Store) RepickPosting(ctx context.Context, p JobPosting) (JobPosting, bool, error) {
+	p.URLHash, p.Status, p.FoundAt = URLHash(p.URL), PostingPicked, time.Unix(time.Now().Unix(), 0)
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE job_postings SET status = 'picked', found_at = ?, title = ?, company = ?, source = ?
+		WHERE user_id = ? AND url_hash = ? AND status IN ('passed', 'failed')`,
+		p.FoundAt.Unix(), p.Title, p.Company, p.Source, p.UserID, p.URLHash)
+	if err != nil {
+		return p, false, err
+	}
+	n, err := res.RowsAffected()
+	return p, n == 1, err
+}
+
 // PassPosting records p as judged not a fit for its user, so it is not
 // judged again; a posting found before is left as it is.
 func (s *Store) PassPosting(ctx context.Context, p JobPosting) error {

@@ -1,6 +1,6 @@
 # Web channel: the job assistant's data contract
 
-The job assistant's web app is a separate repo on Firebase. Users sign in with Google, upload a resume, and give their roles, regions and notes. This repo's worker finds postings and writes an application for each: a tailored CV, a cover letter and an answer sheet. Users review them in the web app and apply on their own.
+The job assistant's web app is a separate repo on Firebase. Users sign in with Google, upload a resume, and give their roles, regions and notes. This repo's worker finds postings and writes an application for each: a tailored CV, a cover letter and an answer sheet. Users can also paste links to postings they found, and get an application for each. Users review them in the web app and apply on their own.
 
 The two sides share no code. They share Firestore and Cloud Storage, laid out as below. The worker uses a service account (`GOOGLE_APPLICATION_CREDENTIALS`), which bypasses the security rules; the web app is held to them.
 
@@ -51,12 +51,33 @@ Written by the worker, one per posting; `{id}` is the hash of the posting's URL.
 | `answers` | array of maps | The answer sheet: `question`, `required`, `answer`, in the form's order. Answers the resume can't give (start date, salary, work authorization) read `[<name> to answer]`. |
 | `status` | string | `ready` when written; the user sets `applied` or `dismissed`. |
 | `created_at` | timestamp | When it was written. |
+| `link_id` | string | The link the user added the posting with, when they did; else absent. |
+
+### `profiles/{uid}/links/{id}`
+
+A posting the user linked to. The web app creates it, with only `url`, `status: "queued"` and `created_at` (server time), and may delete it unless it is `processing`. Only the worker updates it.
+
+| Field | Type | What |
+|---|---|---|
+| `url` | string | The posting's page, http(s), at most 2048 characters. |
+| `status` | string | `queued` (web app), then `processing`, `done` or `failed` (worker). |
+| `reason` | string | Worker: why it failed, or a note on a done one ("Already drafted."), for the user. |
+| `application_id` | string | Worker: the application for the posting, once `done`. |
+| `created_at` | timestamp | When the user added it. |
 
 ## How the daily search uses them
 
 - Every user gets a daily search time, between 08:00 and 22:00 server time, with users' times kept at least 90 minutes apart. Nothing runs at sign-up: a new profile waits for its time.
 - **Reviews gate new applications.** A search runs only when the user has no open applications: every `ready` one must be marked `applied` or `dismissed` first, unless its posting has disappeared from its site, which closes it. Until then, `search.status` is `skipped`, with a reason saying how many are waiting.
 - A search writes at most `ROAMIND_JOBS_PER_RUN` applications (default 5), for the postings that fit best. A posting is never shown twice.
+
+## How links are drafted
+
+- Every quarter-hour, the worker takes up to 20 of each user's `queued` links, oldest first, and marks them `processing`. It doesn't wait for the user's daily search time or reviews, and it drafts links even while the daily search is paused.
+- Links to the same posting are drafted once, and all of them point at its application. A posting that already has an application isn't drafted again: its links are `done` and point at that application, even when it was reviewed. A posting that was passed over or failed before is drafted again.
+- Every posting the user linked to gets an application, whatever its fit; the fit score and reasons are still shown.
+- A link fails, with a `reason`, when it isn't a web address, its site is a blocked domain, the posting can't be read (closed, or behind a login), the profile has no resume, or drafting fails.
+- A link's application counts like any other: while it is `ready`, the daily search waits for its review.
 
 ## Security rules
 
@@ -85,6 +106,19 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
           && request.resource.data.status in ['ready', 'applied', 'dismissed'];
         allow create, delete: if false;
+      }
+
+      match /links/{id} {
+        allow read: if request.auth.uid == uid;
+        allow create: if request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['url', 'status', 'created_at'])
+          && request.resource.data.url is string
+          && request.resource.data.url.size() <= 2048
+          && request.resource.data.url.matches('https?://.+')
+          && request.resource.data.status == 'queued'
+          && request.resource.data.created_at == request.time;
+        allow delete: if request.auth.uid == uid && resource.data.status != 'processing';
+        allow update: if false;
       }
     }
   }

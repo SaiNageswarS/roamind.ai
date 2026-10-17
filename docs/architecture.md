@@ -171,8 +171,9 @@ The job assistant serves the web app, a separate repo on Firebase: users sign in
 
 ```
 job-search (every 15 min) ─ Firestore profiles ─▶ users (channel web) + job_schedules
-   └ a user's time today ─▶ job-hunt: check-skip → resume, find → pick → spawn ─▶ job-application × n
-                                                                     check-skip → tailor → publish ─▶ Firestore applications
+   ├ a user's time today ─▶ job-hunt: check-skip → resume, find → pick → spawn ─▶ job-application × n
+   └ a user's queued links ─▶ job-links: check-skip → resume → pick → spawn ──────▶ job-application × n
+                                                                     check-skip → tailor → publish ─▶ Firestore applications (+ links done)
 ```
 
 - **Users:** every profile with an email becomes a `users` row keyed by the email's hash, with `channel = 'web'` unless the person is already a Slack user. Web users get the job assistant only: `Store.Users`, which feeds news shorts and user-setup, returns Slack users only. A web user who joins Slack becomes a Slack user.
@@ -189,6 +190,13 @@ job-search (every 15 min) ─ Firestore profiles ─▶ users (channel web) + jo
   2. **`tailor`** is a `ToolsNone` turn (`agent/prompts/tailor_application.md`) that writes `cv_md` (the resume's facts, led by what the posting asks for), `cover_letter_md` and `answers`: one per form question when the site publishes them (Greenhouse), else the common ones. Answers the resume can't give are left for the user to fill in. Retried once.
   3. **`publish`** creates the application in Firestore under the posting's URL hash (never overwriting, so a retry can't undo a review), then marks the posting `published`.
   - When a task fails for good, the posting is marked `failed`, so it doesn't hold up the user's next hunt.
+- **The `job-links` DAG** (`worker/workflows/job_links.go`) drafts the postings a user linked to in the web app (`profiles/{uid}/links`). Each quarter-hour, `job-search` claims up to 20 of each user's queued links, oldest first, by marking them `processing` before it starts the run, so no link is drafted twice; a run that can't be started gives its links back to the queue. Serialized per user, with the skip pattern:
+  1. **`check-skip`** needs a profile whose email is the user's, with a resume; otherwise the links fail with a reason. It doesn't need roles or regions, an unpaused search or reviewed applications: the user asked for these postings.
+  2. **`resume`** is job-hunt's.
+  3. **`pick`** resolves each link to its canonical URL (`jobs.Parse`), so links to the same posting are drafted once, and fails those that aren't web addresses or are on a blocked domain. A posting already found for the user keeps its application: picked, published or closed, its links are marked `done` with that application's id. Passed and failed ones are drafted again (`RepickPosting`). It reads the rest from their sites, failing those it can't read, and one `ToolsNone` turn (`rank_jobs.md`) scores their fit for the web app. Every one is recorded as `picked`, whatever its fit. No retries.
+  4. **`spawn`** starts a `job-application` run per posting, carrying its link ids.
+  - `job-application`'s `publish` sets the application's `link_id` and marks its links `done` with the application's id; when it fails for good, the links still processing are marked `failed`, as they are when a `job-links` task fails for good.
+  - A link's posting is a `job_postings` row like any other: while its application is open, the daily hunt waits for its review.
 - **`job_postings` statuses:** `picked` and `published` are open; `closed` (reviewed, or gone from its site), `failed` and `passed` are not. Every posting found for a user stays, so none is shown twice.
 - **Blocked domains:** `ROAMIND_JOBS_BLOCKED_DOMAINS` lists domains, with their subdomains, that the job search never reads: `pick` drops their postings before anything fetches or records them, the posting reader refuses them (`jobs.ErrBlocked`), and the `find` turn's WebFetch denies them.
 - **Setup:** `FIREBASE_PROJECT_ID`, `FIREBASE_STORAGE_BUCKET` and `GOOGLE_APPLICATION_CREDENTIALS` (a service account key); without a project the job workflows aren't registered.

@@ -11,8 +11,10 @@
 //   - news-digest: check-skip → build-context → draft-digest → post.
 //   - news-reaction: reactions to digests, as feedback.
 //   - job-search: every quarter-hour, a job-hunt run per web user whose
-//     daily time has come.
+//     daily time has come, and a job-links run per user with links queued.
 //   - job-hunt: check-skip → resume, find → pick → spawn.
+//   - job-links: check-skip → resume → pick → spawn, for the postings a
+//     user linked to.
 //   - job-application: check-skip → tailor → publish, per posting.
 package workflows
 
@@ -51,6 +53,9 @@ type WebAPI interface {
 	SaveApplication(ctx context.Context, uid, id string, a web.Application) error
 	ApplicationStatuses(ctx context.Context, uid string, ids []string) (map[string]string, error)
 	SetSearch(ctx context.Context, uid string, s web.Search) error
+	QueuedLinks(ctx context.Context, uid string, n int) ([]web.Link, error)
+	LinkStatus(ctx context.Context, uid, id string) (string, error)
+	SetLink(ctx context.Context, uid, id string, s web.LinkState) (bool, error)
 }
 
 // Deps are the long-lived dependencies of the workflows.
@@ -102,7 +107,8 @@ func Register(c *hatchet.Client, d Deps) []hatchet.WorkflowBase {
 	if d.Web != nil {
 		application := JobApplication(c, d)
 		hunt := JobHunt(c, d, application)
-		wfs = append(wfs, application, hunt, JobSearch(c, d, hunt))
+		links := JobLinks(c, d, application)
+		wfs = append(wfs, application, hunt, links, JobSearch(c, d, hunt, links))
 	}
 	goals := GoalChannels(c, d)
 	if d.Memory == nil {

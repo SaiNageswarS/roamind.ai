@@ -28,10 +28,17 @@ type fakeWeb struct {
 	resumes  map[string]string      // by path
 	apps     map[string]web.Application
 	searches map[string]web.Search // the latest, by uid
+	links    map[string]fakeLink   // by uid/id
+}
+
+// fakeLink is a link the user added, with what the worker made of it.
+type fakeLink struct {
+	web.Link
+	web.LinkState
 }
 
 func newFakeWeb() *fakeWeb {
-	return &fakeWeb{profiles: map[string]web.Profile{}, resumes: map[string]string{}, apps: map[string]web.Application{}, searches: map[string]web.Search{}}
+	return &fakeWeb{profiles: map[string]web.Profile{}, resumes: map[string]string{}, apps: map[string]web.Application{}, searches: map[string]web.Search{}, links: map[string]fakeLink{}}
 }
 
 func (f *fakeWeb) Profiles(context.Context) ([]web.Profile, error) {
@@ -92,6 +99,51 @@ func (f *fakeWeb) SetSearch(_ context.Context, uid string, s web.Search) error {
 	defer f.mu.Unlock()
 	f.searches[uid] = s
 	return nil
+}
+
+func (f *fakeWeb) QueuedLinks(_ context.Context, uid string, n int) ([]web.Link, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []web.Link
+	for key, l := range f.links {
+		if strings.HasPrefix(key, uid+"/") && l.LinkState.Status == web.LinkQueued {
+			out = append(out, l.Link)
+		}
+	}
+	slices.SortFunc(out, func(a, b web.Link) int { return a.CreatedAt.Compare(b.CreatedAt) })
+	return out[:min(n, len(out))], nil
+}
+
+func (f *fakeWeb) LinkStatus(_ context.Context, uid, id string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.links[uid+"/"+id].LinkState.Status, nil
+}
+
+func (f *fakeWeb) SetLink(_ context.Context, uid, id string, s web.LinkState) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	l, ok := f.links[uid+"/"+id]
+	if !ok {
+		return false, nil
+	}
+	l.LinkState = s
+	f.links[uid+"/"+id] = l
+	return true, nil
+}
+
+// addLink is the user adding a link in the web app.
+func (f *fakeWeb) addLink(uid, id, u string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.links[uid+"/"+id] = fakeLink{web.Link{ID: id, URL: u, CreatedAt: time.Now()}, web.LinkState{Status: web.LinkQueued}}
+}
+
+// link is the state of uid's link id.
+func (f *fakeWeb) link(uid, id string) web.LinkState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.links[uid+"/"+id].LinkState
 }
 
 // setStatus is the user reviewing an application in the web app.
@@ -209,7 +261,7 @@ func TestJobSearchDispatch(t *testing.T) {
 	fw.profiles["u3"] = web.Profile{Email: "new@x.com", Name: "New", Paused: true}
 	fw.profiles["u4"] = web.Profile{Name: "No email"}
 
-	out, _, err := d.dueHunts(ctx, d.now())
+	out, _, _, err := d.dueHunts(ctx, d.now())
 	if err != nil || out.Profiles != 4 || len(out.Scheduled) != 3 {
 		t.Fatalf("dispatch = %+v, %v", out, err)
 	}
@@ -226,13 +278,13 @@ func TestJobSearchDispatch(t *testing.T) {
 		}
 	}
 	// Again: everyone keeps their time.
-	if out, _, _ := d.dueHunts(ctx, d.now()); len(out.Scheduled) != 0 {
+	if out, _, _, _ := d.dueHunts(ctx, d.now()); len(out.Scheduled) != 0 {
 		t.Fatalf("rescheduled: %v", out.Scheduled)
 	}
 
 	// At 23:00 every unpaused user is due, once a day.
 	late := time.Date(2026, 10, 17, 23, 0, 0, 0, d.Location)
-	_, due, err := d.dueHunts(ctx, late)
+	_, due, _, err := d.dueHunts(ctx, late)
 	if err != nil || len(due) != 2 {
 		t.Fatalf("due = %+v, %v", due, err)
 	}
@@ -244,10 +296,10 @@ func TestJobSearchDispatch(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, due, _ := d.dueHunts(ctx, late); len(due) != 0 {
+	if _, due, _, _ := d.dueHunts(ctx, late); len(due) != 0 {
 		t.Fatalf("due again = %+v", due)
 	}
-	if _, due, _ := d.dueHunts(ctx, late.Add(24*time.Hour)); len(due) != 2 {
+	if _, due, _, _ := d.dueHunts(ctx, late.Add(24*time.Hour)); len(due) != 2 {
 		t.Fatalf("due tomorrow = %+v", due)
 	}
 }
