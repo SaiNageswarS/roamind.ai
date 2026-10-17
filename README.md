@@ -126,3 +126,7 @@ process-compose up            # runs task init, then the worker
 For the job assistant, also `pdftotext` (poppler-utils), then follow [docs/web.md](docs/web.md#setting-up-the-workers-side).
 
 Full steps, upgrades and running at boot: [docs/deployment.md](docs/deployment.md). Run `task` for every command.
+
+## License
+
+[MIT](LICENSE).
