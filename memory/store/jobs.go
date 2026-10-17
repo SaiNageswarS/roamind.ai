@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sort"
 	"time"
 
 	"modernc.org/sqlite"
@@ -237,4 +238,96 @@ func (s *Store) ClosePostings(ctx context.Context, userID string, hashes []strin
 		}
 	}
 	return tx.Commit()
+}
+
+// SaveWebProfile records uid as the user's web app profile.
+func (s *Store) SaveWebProfile(ctx context.Context, userID, uid string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO web_profiles (user_id, uid) VALUES (?, ?)
+		ON CONFLICT (user_id) DO UPDATE SET uid = excluded.uid`, userID, uid)
+	return err
+}
+
+// WebProfileOf returns the uid of the user's web app profile, or "" when
+// they have not signed in to it.
+func (s *Store) WebProfileOf(ctx context.Context, userID string) (string, error) {
+	var uid string
+	err := s.db.QueryRowContext(ctx, `SELECT uid FROM web_profiles WHERE user_id = ?`, userID).Scan(&uid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return uid, err
+}
+
+// AddLinkRequests records posting links the user asked for; a link asked
+// for again is kept once.
+func (s *Store) AddLinkRequests(ctx context.Context, userID string, urls []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	for _, u := range urls {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO job_link_requests (user_id, url, requested_at) VALUES (?, ?, ?)
+			ON CONFLICT (user_id, url) DO NOTHING`, userID, u, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// TakeLinkRequests removes and returns the user's link requests, oldest
+// first.
+func (s *Store) TakeLinkRequests(ctx context.Context, userID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		DELETE FROM job_link_requests WHERE user_id = ? RETURNING url, requested_at`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type req struct {
+		url string
+		at  int64
+	}
+	var reqs []req
+	for rows.Next() {
+		var r req
+		if err := rows.Scan(&r.url, &r.at); err != nil {
+			return nil, err
+		}
+		reqs = append(reqs, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(reqs, func(i, j int) bool { return reqs[i].at < reqs[j].at })
+	out := make([]string, len(reqs))
+	for i, r := range reqs {
+		out[i] = r.url
+	}
+	return out, nil
+}
+
+// StartResumeImport records that the user's resume of the given Storage
+// generation is being written into their memory; ok is false when it was
+// already.
+func (s *Store) StartResumeImport(ctx context.Context, userID, generation string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO resume_imports (user_id, generation, started_at) VALUES (?, ?, ?)
+		ON CONFLICT (user_id) DO UPDATE SET generation = excluded.generation, started_at = excluded.started_at
+		WHERE resume_imports.generation != excluded.generation`, userID, generation, time.Now().Unix())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// ForgetResumeImport undoes StartResumeImport for a run that could not be
+// started, so the upload is imported later.
+func (s *Store) ForgetResumeImport(ctx context.Context, userID, generation string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM resume_imports WHERE user_id = ? AND generation = ?`, userID, generation)
+	return err
 }

@@ -1,8 +1,9 @@
 // Package web is Roamind's web channel: the job assistant's web app on
 // Firebase, which the worker reaches through Firestore and Cloud Storage
-// with a service account. The web app writes users' profiles and resumes;
-// the worker writes their applications and search status, and drafts the
-// postings users link to. The data contract is in docs/web.md.
+// with a service account. The web app writes users' profiles, resumes and
+// links to postings; the worker writes the resumes into users' memory, and
+// writes their applications and the state of its work. The data contract
+// is in docs/web.md.
 package web
 
 import (
@@ -25,15 +26,18 @@ const MaxResume = 10 << 20
 
 // Profile is a user's job-search profile, from profiles/{uid}.
 type Profile struct {
-	UID        string    `firestore:"-"`
-	Email      string    `firestore:"email"`
-	Name       string    `firestore:"name"`
-	ResumePath string    `firestore:"resume_path"` // in the bucket
-	Notes      string    `firestore:"notes"`
-	Roles      []string  `firestore:"roles"`
-	Regions    []string  `firestore:"regions"`
-	Paused     bool      `firestore:"paused"`
-	UpdatedAt  time.Time `firestore:"updated_at"`
+	UID        string `firestore:"-"`
+	Email      string `firestore:"email"`
+	Name       string `firestore:"name"`
+	ResumePath string `firestore:"resume_path"` // in the bucket
+	// ResumeGeneration is the Storage generation of the upload, set by the
+	// web app with it; it changes with every upload.
+	ResumeGeneration string    `firestore:"resume_generation"`
+	Notes            string    `firestore:"notes"`
+	Roles            []string  `firestore:"roles"`
+	Regions          []string  `firestore:"regions"`
+	Paused           bool      `firestore:"paused"`
+	UpdatedAt        time.Time `firestore:"updated_at"`
 }
 
 // Application is the job assistant's work for one posting, in
@@ -47,7 +51,6 @@ type Application struct {
 	Source      string    `firestore:"source"`
 	PostedAt    string    `firestore:"posted_at"` // ISO date, or ""
 	Fit         Fit       `firestore:"fit"`
-	CV          string    `firestore:"cv_md"`
 	CoverLetter string    `firestore:"cover_letter_md"`
 	Answers     []Answer  `firestore:"answers"`
 	Status      string    `firestore:"status"`
@@ -84,6 +87,24 @@ type Link struct {
 	URL       string    `firestore:"url" json:"url"`
 	Status    string    `firestore:"status" json:"-"`
 	CreatedAt time.Time `firestore:"created_at" json:"-"`
+	// ClaimedAt is when the worker took it up.
+	ClaimedAt time.Time `firestore:"claimed_at,omitempty" json:"-"`
+}
+
+// Sources of a Link: added in the web app, or asked for in Slack, which
+// the worker adds for the user.
+const (
+	SourceWeb   = "web"
+	SourceSlack = "slack"
+)
+
+// ResumeImport is the state of writing the user's latest resume upload
+// into their memory, shown in the web app.
+type ResumeImport struct {
+	Status     string    `firestore:"status"` // running, done or failed
+	Reason     string    `firestore:"reason"`
+	Generation string    `firestore:"generation"`
+	At         time.Time `firestore:"at"`
 }
 
 // Statuses of a Link. The web app writes LinkQueued; the worker the
@@ -251,26 +272,151 @@ func (c *Client) links(uid string) *firestore.CollectionRef {
 	return c.fs.Collection("profiles").Doc(uid).Collection("links")
 }
 
-// QueuedLinks returns up to n of uid's links waiting for the worker,
-// oldest first.
-func (c *Client) QueuedLinks(ctx context.Context, uid string, n int) ([]Link, error) {
-	// Sorted here: ordering the query by created_at would need a
-	// composite index.
-	docs, err := c.links(uid).Where("status", "==", LinkQueued).Documents(ctx).GetAll()
-	if err != nil {
-		return nil, err
+// queuedLinks are the links of every user waiting for the worker.
+func (c *Client) queuedLinks() firestore.Query {
+	return c.fs.CollectionGroup("links").Where("status", "==", LinkQueued)
+}
+
+// ListenLinks calls fn, one call at a time, with each user's newly queued
+// links, oldest first: those queued already when it starts, then each one
+// as it is added. It returns when ctx is done or the listener fails.
+func (c *Client) ListenLinks(ctx context.Context, fn func(uid string, links []Link)) error {
+	it := c.queuedLinks().Snapshots(ctx)
+	defer it.Stop()
+	for {
+		snap, err := it.Next()
+		if err != nil {
+			return err
+		}
+		byUser := map[string][]Link{}
+		var uids []string
+		for _, ch := range snap.Changes {
+			if ch.Kind != firestore.DocumentAdded {
+				continue
+			}
+			uid := ch.Doc.Ref.Parent.Parent.ID
+			if byUser[uid] == nil {
+				uids = append(uids, uid)
+			}
+			var l Link
+			if err := ch.Doc.DataTo(&l); err != nil {
+				return fmt.Errorf("link %s/%s: %w", uid, ch.Doc.Ref.ID, err)
+			}
+			l.ID = ch.Doc.Ref.ID
+			byUser[uid] = append(byUser[uid], l)
+		}
+		for _, uid := range uids {
+			links := byUser[uid]
+			slices.SortFunc(links, func(a, b Link) int { return a.CreatedAt.Compare(b.CreatedAt) })
+			fn(uid, links)
+		}
 	}
-	out := make([]Link, 0, len(docs))
+}
+
+// ListenProfiles calls fn, one call at a time, with each profile: every
+// one when it starts, then each one as it changes. It returns when ctx is
+// done or the listener fails.
+func (c *Client) ListenProfiles(ctx context.Context, fn func(Profile)) error {
+	it := c.fs.Collection("profiles").Snapshots(ctx)
+	defer it.Stop()
+	for {
+		snap, err := it.Next()
+		if err != nil {
+			return err
+		}
+		for _, ch := range snap.Changes {
+			if ch.Kind == firestore.DocumentRemoved {
+				continue
+			}
+			var p Profile
+			if err := ch.Doc.DataTo(&p); err != nil {
+				return fmt.Errorf("profile %s: %w", ch.Doc.Ref.ID, err)
+			}
+			p.UID = ch.Doc.Ref.ID
+			fn(p)
+		}
+	}
+}
+
+// ClaimLinks marks those of uid's links still queued as processing, in one
+// transaction, so no link is taken up twice, and returns them.
+func (c *Client) ClaimLinks(ctx context.Context, uid string, links []Link) ([]Link, error) {
+	var claimed []Link
+	err := c.fs.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		claimed = nil
+		refs := make([]*firestore.DocumentRef, len(links))
+		for i, l := range links {
+			refs[i] = c.links(uid).Doc(l.ID)
+		}
+		docs, err := tx.GetAll(refs)
+		if err != nil {
+			return err
+		}
+		now := time.Now()
+		for i, doc := range docs {
+			if !doc.Exists() {
+				continue
+			}
+			if s, _ := doc.Data()["status"].(string); s != LinkQueued {
+				continue
+			}
+			if err := tx.Update(doc.Ref, []firestore.Update{
+				{Path: "status", Value: LinkProcessing}, {Path: "claimed_at", Value: now},
+			}); err != nil {
+				return err
+			}
+			claimed = append(claimed, links[i])
+		}
+		return nil
+	})
+	return claimed, err
+}
+
+// RequeueStaleLinks queues again uid's links that have been processing
+// since before: a worker that stopped between claiming them and starting
+// their run left them behind. It returns how many.
+func (c *Client) RequeueStaleLinks(ctx context.Context, uid string, before time.Time) (int, error) {
+	docs, err := c.links(uid).Where("status", "==", LinkProcessing).Documents(ctx).GetAll()
+	if err != nil {
+		return 0, err
+	}
+	n := 0
 	for _, doc := range docs {
 		var l Link
 		if err := doc.DataTo(&l); err != nil {
-			return nil, fmt.Errorf("link %s/%s: %w", uid, doc.Ref.ID, err)
+			return n, fmt.Errorf("link %s/%s: %w", uid, doc.Ref.ID, err)
 		}
-		l.ID = doc.Ref.ID
-		out = append(out, l)
+		if l.ClaimedAt.After(before) {
+			continue
+		}
+		if _, err := doc.Ref.Update(ctx, []firestore.Update{{Path: "status", Value: LinkQueued}}); err != nil {
+			return n, err
+		}
+		n++
 	}
-	slices.SortFunc(out, func(a, b Link) int { return a.CreatedAt.Compare(b.CreatedAt) })
-	return out[:min(n, len(out))], nil
+	return n, nil
+}
+
+// AddLinks queues links to postings for uid, as the web app does, from
+// source.
+func (c *Client) AddLinks(ctx context.Context, uid, source string, urls []string) error {
+	now := time.Now()
+	return c.fs.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		for _, u := range urls {
+			if err := tx.Create(c.links(uid).NewDoc(), map[string]any{
+				"url": u, "status": LinkQueued, "source": source, "created_at": now,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// SetResumeImport records how writing uid's resume into their memory went.
+func (c *Client) SetResumeImport(ctx context.Context, uid string, r ResumeImport) error {
+	_, err := c.fs.Collection("profiles").Doc(uid).Set(ctx, map[string]any{"resume_import": r}, firestore.Merge([]string{"resume_import"}))
+	return err
 }
 
 // LinkStatus returns the status of uid's link id, or "" when the user has

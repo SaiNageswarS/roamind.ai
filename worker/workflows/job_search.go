@@ -18,7 +18,7 @@ import (
 // JobSearchName is the cron workflow of the job assistant: every
 // quarter-hour it brings in the web app's profiles, gives each new user a
 // daily search time, starts a job-hunt run for each user whose time has
-// come today, and a job-links run for each user with links queued.
+// come today, and queues again the links a stopped worker left processing.
 const JobSearchName = "job-search"
 
 const (
@@ -31,6 +31,9 @@ const (
 	// from.
 	jobGap  = 90
 	jobStep = 15
+	// staleClaim is how long a link may stay processing before it counts as
+	// left behind: a job-links run marks it done or failed well within.
+	staleClaim = time.Hour
 )
 
 // jobSearchOutput lists what a dispatch did.
@@ -38,17 +41,16 @@ type jobSearchOutput struct {
 	Profiles  int      `json:"profiles"`
 	Scheduled []string `json:"scheduled,omitempty"` // new users given a time, "user hh:mm"
 	Hunts     []string `json:"hunts,omitempty"`     // user ids
-	Links     []string `json:"links,omitempty"`     // user ids, of job-links runs
+	Requeued  int      `json:"requeued,omitempty"`  // links left processing, queued again
 	// Failed are the users whose run could not be started, logged; the
 	// others still start.
 	Failed []string `json:"failed,omitempty"`
 }
 
-// JobSearch declares the cron task that starts job-hunt and job-links
-// runs, as child runs. A run that can't be started is logged and listed;
-// the user is due again at the next quarter-hour, and its links are queued
-// again.
-func JobSearch(c *hatchet.Client, d Deps, hunt, links *hatchet.Workflow) *hatchet.StandaloneTask {
+// JobSearch declares the cron task that starts job-hunt runs, as child
+// runs. A run that can't be started is logged and listed; the user is due
+// again at the next quarter-hour.
+func JobSearch(c *hatchet.Client, d Deps, hunt *hatchet.Workflow) *hatchet.StandaloneTask {
 	return c.NewStandaloneTask(JobSearchName, func(ctx hatchet.Context, _ struct{}) (jobSearchOutput, error) {
 		out, due, users, err := d.dueHunts(ctx, d.now())
 		if err != nil {
@@ -65,19 +67,15 @@ func JobSearch(c *hatchet.Client, d Deps, hunt, links *hatchet.Workflow) *hatche
 			}
 			out.Hunts = append(out.Hunts, in.UserID)
 		}
-		claimed, err := d.claimLinks(ctx, users, d.now().In(d.Location).Format(time.DateOnly))
-		for _, in := range claimed {
-			if _, err := links.RunNoWait(ctx, in); err != nil {
-				slog.Error("job-links not started", "user", in.UserID, "err", err)
-				out.Failed = append(out.Failed, in.UserID)
-				if err := d.unclaimLinks(ctx, in); err != nil {
-					return out, err
-				}
-				continue
+		// Queued again, the web app's listener takes them up.
+		for _, p := range users {
+			n, err := d.Web.RequeueStaleLinks(ctx, p.UID, d.now().Add(-staleClaim))
+			if err != nil {
+				return out, err
 			}
-			out.Links = append(out.Links, in.UserID)
+			out.Requeued += n
 		}
-		return out, err
+		return out, nil
 	},
 		hatchet.WithWorkflowDescription("Every quarter-hour, start each job-assistant user's daily job hunt at their time"),
 		hatchet.WithWorkflowCron("*/15 * * * *"),
@@ -104,7 +102,7 @@ func (d Deps) dueHunts(ctx context.Context, now time.Time) (jobSearchOutput, []J
 			continue
 		}
 		id := identity.UserID(email)
-		if err := d.Store.UpsertWebUser(ctx, store.User{ID: id, Email: email, DisplayName: p.Name}); err != nil {
+		if err := d.bringIn(ctx, id, email, p); err != nil {
 			return out, nil, nil, err
 		}
 		minute, created, err := d.assignSchedule(ctx, id)
@@ -129,6 +127,15 @@ func (d Deps) dueHunts(ctx context.Context, now time.Time) (jobSearchOutput, []J
 		}
 	}
 	return out, hunts, byUser, nil
+}
+
+// bringIn makes the profile's owner a user, as a web user unless they are
+// one already, and records the profile as theirs.
+func (d Deps) bringIn(ctx context.Context, userID, email string, p web.Profile) error {
+	if err := d.Store.UpsertWebUser(ctx, store.User{ID: userID, Email: email, DisplayName: p.Name}); err != nil {
+		return err
+	}
+	return d.Store.SaveWebProfile(ctx, userID, p.UID)
 }
 
 // assignSchedule gives the user a daily search time unless they have one,

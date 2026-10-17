@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -18,26 +19,25 @@ import (
 )
 
 // JobLinksName is the job-links workflow, which drafts applications for
-// the postings a user linked to in the web app:
+// the postings a user linked to, in the web app or in Slack:
 //
 //	resume → pick → spawn
 //
-// resume reads the user's resume as text; pick reads the postings from
-// their sites, has the agent judge their fit and records them; spawn
-// starts a job-application run for each. Whenever a user has links, it
-// runs: unlike a job hunt, it has no check-skip, doesn't wait for the
-// user's reviews and keeps every posting whatever its fit, since the user
-// asked for these. job-search claims the links, marking them processing,
-// before it starts the run.
+// resume reads the user's resume from their memory; pick reads the
+// postings from their sites, has the agent judge their fit and records
+// them; spawn starts a job-application run for each. Whenever a user has
+// links, it runs: unlike a job hunt, it has no check-skip, doesn't wait for
+// the user's reviews and keeps every posting whatever its fit, since the
+// user asked for these. The web app's listener claims the links, marking
+// them processing, as they are queued, and starts the run.
 const JobLinksName = "job-links"
 
-// maxLinks is how many links a run takes at most; the rest wait for the
-// next quarter-hour.
+// maxLinks is how many links a run takes at most; more make more runs.
 const maxLinks = 20
 
 // Reasons a link failed, for the user.
 const (
-	linkNoResume  = "Upload your resume in your profile first."
+	linkNoResume  = "Upload your resume in your profile, or tell Roamind about your work in Slack, first."
 	linkNotURL    = "This doesn't look like a link to a job posting."
 	linkBlocked   = "Postings on this site aren't read."
 	linkUnread    = "Couldn't read this posting: it may have closed, or its page needs a login."
@@ -53,12 +53,6 @@ type JobLinksInput struct {
 	UID    string     `json:"uid"`
 	Date   string     `json:"date"`
 	Links  []web.Link `json:"links"`
-}
-
-// hunt is the job hunt input for the same user, for the steps the two
-// workflows share.
-func (in JobLinksInput) hunt() JobHuntInput {
-	return JobHuntInput{UserID: in.UserID, UID: in.UID, Date: in.Date}
 }
 
 // linksPick is pick's result: the applications to write.
@@ -86,7 +80,7 @@ func JobLinks(c *hatchet.Client, d Deps, application *hatchet.Workflow) *hatchet
 		}),
 	)
 	resume := wf.NewTask("resume", func(ctx hatchet.Context, in JobLinksInput) (huntResume, error) {
-		return d.readResume(ctx, in.hunt())
+		return d.memoryResume(ctx, in.UserID)
 	},
 		hatchet.WithRetries(2),
 		hatchet.WithExecutionTimeout(2*time.Minute),
@@ -124,51 +118,13 @@ func JobLinks(c *hatchet.Client, d Deps, application *hatchet.Workflow) *hatchet
 }
 
 // linksFailed marks failed the run's links still processing: they can't
-// be drafted without a resume, else drafting failed.
+// be drafted without a resume in memory, else drafting failed.
 func (d Deps) linksFailed(ctx context.Context, in JobLinksInput) error {
 	reason := linkFailed
-	if p, err := d.Web.Profile(ctx, in.UID); err == nil && (p == nil || p.ResumePath == "") {
+	if u, err := d.Store.UserByID(ctx, in.UserID); err == nil && (u == nil || !d.hasResume(u)) {
 		reason = linkNoResume
 	}
 	return d.failProcessingLinks(ctx, in.UID, linkIDs(in.Links), reason)
-}
-
-// claimLinks takes up to maxLinks of each user's queued links, marking
-// them processing, and returns a job-links input for each user with any.
-// users maps user ids to their profiles.
-func (d Deps) claimLinks(ctx context.Context, users map[string]web.Profile, date string) ([]JobLinksInput, error) {
-	var out []JobLinksInput
-	for id, p := range users {
-		queued, err := d.Web.QueuedLinks(ctx, p.UID, maxLinks)
-		if err != nil {
-			return out, fmt.Errorf("links of %s: %w", p.UID, err)
-		}
-		in := JobLinksInput{UserID: id, UID: p.UID, Date: date}
-		for _, l := range queued {
-			ok, err := d.Web.SetLink(ctx, p.UID, l.ID, web.LinkState{Status: web.LinkProcessing})
-			if err != nil {
-				return out, err
-			}
-			if ok {
-				in.Links = append(in.Links, l)
-			}
-		}
-		if len(in.Links) > 0 {
-			out = append(out, in)
-		}
-	}
-	return out, nil
-}
-
-// unclaimLinks gives back links whose run could not be started, for the
-// next quarter-hour.
-func (d Deps) unclaimLinks(ctx context.Context, in JobLinksInput) error {
-	for _, l := range in.Links {
-		if _, err := d.Web.SetLink(ctx, in.UID, l.ID, web.LinkState{Status: web.LinkQueued}); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // pickLinks reads the linked postings from their sites, has the agent
@@ -353,4 +309,46 @@ func linkIDs(links []web.Link) []string {
 		ids[i] = l.ID
 	}
 	return ids
+}
+
+// typedURL finds the web addresses in a Slack message, plain or as Slack
+// writes links: <https://…> or <https://…|label>.
+var typedURL = regexp.MustCompile(`https?://[^\s<>|]+`)
+
+// queueSlackLinks queues in the web app the job links the user asked for in
+// this chat turn (the submit_job_links tool), for the listener to take up.
+// Only links in the user's own message are queued: a page the turn read
+// can't make it apply anywhere.
+func (d Deps) queueSlackLinks(ctx context.Context, u *store.User, text string) error {
+	asked, err := d.Store.TakeLinkRequests(ctx, u.ID)
+	if err != nil || len(asked) == 0 {
+		return err
+	}
+	typed := map[string]bool{}
+	for _, raw := range typedURL.FindAllString(text, -1) {
+		if ref, err := jobs.Parse(raw); err == nil {
+			typed[ref.URL] = true
+		}
+	}
+	var urls []string
+	for _, raw := range asked {
+		ref, err := jobs.Parse(raw)
+		if err != nil || !typed[ref.URL] {
+			slog.Warn("job link not in the user's message; dropped", "user", u.ID, "url", raw)
+			continue
+		}
+		urls = append(urls, ref.URL)
+	}
+	if len(urls) == 0 {
+		return nil
+	}
+	uid, err := d.Store.WebProfileOf(ctx, u.ID)
+	if err != nil {
+		return err
+	}
+	if uid == "" {
+		// The tool told the user to sign in to the web app first.
+		return fmt.Errorf("user %s has no web app profile for %d job links", u.ID, len(urls))
+	}
+	return d.Web.AddLinks(ctx, uid, web.SourceSlack, urls)
 }

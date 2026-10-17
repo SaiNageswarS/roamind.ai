@@ -10,6 +10,10 @@ schema:
   experience?(array): 'string, one role per line: <role>, <organization>, <YYYY-MM> to <YYYY-MM or present>, optionally followed by a colon and highlights'
   education?(array): 'string, one per line: <qualification>, <institution>, <YYYY> to <YYYY>'
   interest?(array): string, topics they work on or care about
+  location?(array): string, where they live
+  skill?(array): string, skills and tools, grouped as on a resume
+  project?(array): 'string, one per line: <name>: <what it is and what came of it>'
+  publication?(array): 'string, one per line: <title>, <venue> <YYYY>'
 settings:
   validation: warn
 ---
@@ -17,7 +21,9 @@ settings:
 Someone in the user's life, including the user themself (relationship self,
 exactly one such note). Save in folder people/ with note_type person.
 
-Experience, education and interest capture someone's career and research.
+Experience, education, skill, project, publication and interest capture
+someone's career and research; on the user's own note they are their
+resume, which the job assistant writes applications from.
 Each role or degree is one line in the format given by its field, so its
 parts stay together; the current role ends with "to present".
 

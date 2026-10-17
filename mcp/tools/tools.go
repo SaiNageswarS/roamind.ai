@@ -5,6 +5,8 @@
 //
 //   - interests.go: the news interests the user follows from the catalog,
 //     and new catalog interests.
+//   - jobs.go: asking the job assistant to draft applications for job
+//     links, when it is set up.
 package tools
 
 import (
@@ -25,11 +27,16 @@ type Deps struct {
 	Feeds *feeds.Client
 	// UserID is the user the server is pinned to.
 	UserID string
+	// Jobs adds the job assistant's tools.
+	Jobs bool
 }
 
 // Register adds every tool to the server.
 func Register(s *mcp.Server, d Deps) {
 	interests(s, d)
+	if d.Jobs {
+		jobs(s, d)
+	}
 }
 
 func oneOf(field, v string, allowed ...string) error {

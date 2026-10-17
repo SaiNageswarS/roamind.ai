@@ -22,8 +22,8 @@ import (
 //
 //	check-skip → tailor → publish
 //
-// tailor has the agent write a CV, a cover letter and answers to the
-// application form's questions; publish puts them in the web app, and
+// tailor has the agent write a cover letter and answers to the
+// application form's questions, from the user's resume in memory; publish puts them in the web app, and
 // points the links the user added the posting with at it. When a task
 // fails for good, the posting is marked failed, so it doesn't keep the
 // user's next hunt waiting, and so are its links.
@@ -65,7 +65,7 @@ func JobApplication(c *hatchet.Client, d Deps) *hatchet.Workflow {
 	maxRuns := int32(1)
 	strategy := hatchet.GroupRoundRobin
 	wf := c.NewWorkflow(JobApplicationName,
-		hatchet.WithWorkflowDescription("Write a CV, cover letter and form answers for one job posting"),
+		hatchet.WithWorkflowDescription("Write a cover letter and form answers for one job posting"),
 		hatchet.WithWorkflowConcurrency(hatchet.Concurrency{
 			Expression:    "input.user_id",
 			MaxRuns:       &maxRuns,
@@ -161,8 +161,8 @@ func (d Deps) tailorApplication(ctx context.Context, in JobApplicationInput) (ap
 	if err := json.Unmarshal(turn.Structured, &out.Application); err != nil {
 		return out, fmt.Errorf("application: %w", err)
 	}
-	if strings.TrimSpace(out.Application.CV) == "" || strings.TrimSpace(out.Application.CoverLetter) == "" {
-		return out, fmt.Errorf("the application has no CV or cover letter")
+	if strings.TrimSpace(out.Application.CoverLetter) == "" {
+		return out, fmt.Errorf("the application has no cover letter")
 	}
 	return out, nil
 }
@@ -175,8 +175,8 @@ func (d Deps) publishApplication(ctx context.Context, in JobApplicationInput, t 
 		Title: in.Posting.Title, Company: in.Posting.Company, Location: in.Posting.Location,
 		URL: in.Posting.URL, ApplyURL: orDefault(in.Posting.ApplyURL, in.Posting.URL), Source: in.Posting.Source,
 		PostedAt: in.Posting.Posted, Fit: web.Fit{Score: in.Score, Reasons: in.Reasons},
-		CV: t.Application.CV, CoverLetter: t.Application.CoverLetter,
-		Status: web.StatusReady, CreatedAt: d.now(),
+		CoverLetter: t.Application.CoverLetter,
+		Status:      web.StatusReady, CreatedAt: d.now(),
 	}
 	if len(in.LinkIDs) > 0 {
 		a.LinkID = in.LinkIDs[0]

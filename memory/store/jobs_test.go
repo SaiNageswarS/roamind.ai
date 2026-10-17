@@ -163,3 +163,53 @@ func TestJobPostings(t *testing.T) {
 		t.Fatal("repicked a closed posting")
 	}
 }
+
+func TestWebProfilesAndRequests(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	jobsUsers(t, s, "a", "b")
+	if uid, err := s.WebProfileOf(ctx, "a"); uid != "" || err != nil {
+		t.Fatalf("no profile = %q %v", uid, err)
+	}
+	if err := s.SaveWebProfile(ctx, "a", "uid-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveWebProfile(ctx, "a", "uid-a2"); err != nil {
+		t.Fatal(err)
+	}
+	if uid, _ := s.WebProfileOf(ctx, "a"); uid != "uid-a2" {
+		t.Fatalf("profile = %q", uid)
+	}
+
+	if err := s.AddLinkRequests(ctx, "a", []string{"https://x/1", "https://x/2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddLinkRequests(ctx, "a", []string{"https://x/1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.TakeLinkRequests(ctx, "a"); err != nil || len(got) != 2 {
+		t.Fatalf("take = %v %v", got, err)
+	}
+	if got, _ := s.TakeLinkRequests(ctx, "a"); len(got) != 0 {
+		t.Fatalf("taken twice = %v", got)
+	}
+	if got, _ := s.TakeLinkRequests(ctx, "b"); len(got) != 0 {
+		t.Fatalf("b's = %v", got)
+	}
+
+	// An upload is imported once; a new one again.
+	for _, c := range []struct {
+		gen  string
+		want bool
+	}{{"1", true}, {"1", false}, {"2", true}, {"2", false}} {
+		if ok, err := s.StartResumeImport(ctx, "a", c.gen); err != nil || ok != c.want {
+			t.Fatalf("start %s = %v %v", c.gen, ok, err)
+		}
+	}
+	if err := s.ForgetResumeImport(ctx, "a", "2"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := s.StartResumeImport(ctx, "a", "2"); !ok {
+		t.Fatal("forgotten import not started again")
+	}
+}

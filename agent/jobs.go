@@ -13,10 +13,13 @@ var (
 	rankJobsTmpl string
 	//go:embed prompts/tailor_application.md
 	tailorApplicationTmpl string
+	//go:embed prompts/extract_resume.md
+	extractResumeTmpl string
 
 	findJobsPrompt          = template.Must(template.New("find_jobs").Parse(findJobsTmpl))
 	rankJobsPrompt          = template.Must(template.New("rank_jobs").Parse(rankJobsTmpl))
 	tailorApplicationPrompt = template.Must(template.New("tailor_application").Parse(tailorApplicationTmpl))
+	extractResumePrompt     = template.Must(template.New("extract_resume").Parse(extractResumeTmpl))
 )
 
 // JobSearch is what the agent is given to find job postings for a user.
@@ -83,7 +86,7 @@ type JobRanking struct {
 	Roles    []string
 	Regions  []string
 	Notes    string
-	// Resume is the text of the user's resume.
+	// Resume is the user's resume: their own Person note.
 	Resume     string
 	Candidates []JobCandidate
 }
@@ -159,8 +162,8 @@ type FormQuestion struct {
 	Options  []string
 }
 
-// TailorApplicationPrompt is the turn text that has the agent write a CV,
-// cover letter and form answers for a posting; run it with ToolsNone and
+// TailorApplicationPrompt is the turn text that has the agent write a cover
+// letter and form answers for a posting; run it with ToolsNone and
 // OutputSchema TailorApplicationSchema.
 func TailorApplicationPrompt(t Tailoring) (string, error) {
 	return execute(tailorApplicationPrompt, t)
@@ -170,7 +173,6 @@ func TailorApplicationPrompt(t Tailoring) (string, error) {
 const TailorApplicationSchema = `{
   "type": "object",
   "properties": {
-    "cv_md": {"type": "string", "description": "The tailored CV, in Markdown"},
     "cover_letter_md": {"type": "string", "description": "The cover letter, in Markdown"},
     "answers": {
       "type": "array",
@@ -186,13 +188,12 @@ const TailorApplicationSchema = `{
       }
     }
   },
-  "required": ["cv_md", "cover_letter_md", "answers"],
+  "required": ["cover_letter_md", "answers"],
   "additionalProperties": false
 }`
 
 // TailoredApplication is the structured output of TailorApplicationSchema.
 type TailoredApplication struct {
-	CV          string       `json:"cv_md"`
 	CoverLetter string       `json:"cover_letter_md"`
 	Answers     []FormAnswer `json:"answers"`
 }
@@ -202,6 +203,49 @@ type FormAnswer struct {
 	Question string `json:"question"`
 	Required bool   `json:"required"`
 	Answer   string `json:"answer"`
+}
+
+// ResumeReading is what the agent is given to read a resume.
+type ResumeReading struct {
+	UserName string
+	Date     string // ISO date
+	// Resume is the resume's text, from its PDF.
+	Resume string
+}
+
+// ExtractResumePrompt is the turn text that has the agent list the facts
+// of a resume for the user's Person note; run it with ToolsNone and
+// OutputSchema ExtractResumeSchema.
+func ExtractResumePrompt(r ResumeReading) (string, error) {
+	return execute(extractResumePrompt, r)
+}
+
+// ExtractResumeSchema is the structured output of reading a resume: its
+// facts, one Person observation each.
+const ExtractResumeSchema = `{
+  "type": "object",
+  "properties": {
+    "contact": {"type": "array", "items": {"type": "string"}},
+    "location": {"type": "array", "items": {"type": "string"}},
+    "experience": {"type": "array", "items": {"type": "string"}},
+    "education": {"type": "array", "items": {"type": "string"}},
+    "skill": {"type": "array", "items": {"type": "string"}},
+    "project": {"type": "array", "items": {"type": "string"}},
+    "publication": {"type": "array", "items": {"type": "string"}}
+  },
+  "required": ["contact", "location", "experience", "education", "skill", "project", "publication"],
+  "additionalProperties": false
+}`
+
+// ExtractedResume is the structured output of ExtractResumeSchema.
+type ExtractedResume struct {
+	Contact     []string `json:"contact"`
+	Location    []string `json:"location"`
+	Experience  []string `json:"experience"`
+	Education   []string `json:"education"`
+	Skill       []string `json:"skill"`
+	Project     []string `json:"project"`
+	Publication []string `json:"publication"`
 }
 
 func execute(t *template.Template, data any) (string, error) {

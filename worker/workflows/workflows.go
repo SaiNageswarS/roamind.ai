@@ -11,15 +11,19 @@
 //   - news-digest: check-skip → build-context → draft-digest → post.
 //   - news-reaction: reactions to digests, as feedback.
 //   - job-search: every quarter-hour, a job-hunt run per web user whose
-//     daily time has come, and a job-links run per user with links queued.
+//     daily time has come.
 //   - job-hunt: check-skip → resume, find → pick → spawn.
-//   - job-links: check-skip → resume → pick → spawn, for the postings a
-//     user linked to.
+//   - job-links: resume → pick → spawn, for the postings a user linked to,
+//     started by the web app's listener (web_listen.go).
+//   - resume-import: memory → read → extract → write, writing a resume
+//     uploaded in the web app into the user's memory, also started by the
+//     listener.
 //   - job-application: check-skip → tailor → publish, per posting.
 package workflows
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 
@@ -53,9 +57,14 @@ type WebAPI interface {
 	SaveApplication(ctx context.Context, uid, id string, a web.Application) error
 	ApplicationStatuses(ctx context.Context, uid string, ids []string) (map[string]string, error)
 	SetSearch(ctx context.Context, uid string, s web.Search) error
-	QueuedLinks(ctx context.Context, uid string, n int) ([]web.Link, error)
+	SetResumeImport(ctx context.Context, uid string, r web.ResumeImport) error
+	ClaimLinks(ctx context.Context, uid string, links []web.Link) ([]web.Link, error)
 	LinkStatus(ctx context.Context, uid, id string) (string, error)
 	SetLink(ctx context.Context, uid, id string, s web.LinkState) (bool, error)
+	RequeueStaleLinks(ctx context.Context, uid string, before time.Time) (int, error)
+	AddLinks(ctx context.Context, uid, source string, urls []string) error
+	ListenProfiles(ctx context.Context, fn func(web.Profile)) error
+	ListenLinks(ctx context.Context, fn func(uid string, links []web.Link)) error
 }
 
 // Deps are the long-lived dependencies of the workflows.
@@ -70,15 +79,15 @@ type Deps struct {
 	Memory *notes.Notes
 	// Feeds reads the feeds of news interests.
 	Feeds *feeds.Client
-	// Web is the job assistant's web app; without it there is no job
-	// assistant.
+	// Web is the job assistant's web app; without it, or without Memory,
+	// which holds users' resumes, there is no job assistant.
 	Web WebAPI
 	// Jobs reads job postings from their sites.
 	Jobs *jobs.Client
 	// JobsPerRun caps the postings a job hunt picks; 0 means JobsPerRun.
 	JobsPerRun int
-	// PDFToText is the pdftotext command that reads resumes; empty means
-	// pdftotext on the PATH.
+	// PDFToText is the pdftotext command that reads uploaded resumes;
+	// empty means pdftotext on the PATH.
 	PDFToText string
 	// Location is the timezone of the daily exercises, news shorts and job
 	// searches.
@@ -89,9 +98,10 @@ type Deps struct {
 	// chat-turn calls it for a user who is not set up. Register sets it to
 	// start a user-setup run.
 	SetupUser func(ctx context.Context, userID string) error
-	// AfterTurn, when set, runs after each chat turn with memory. Register
-	// sets it to give new goals their channels. Its errors are logged.
-	AfterTurn func(ctx context.Context, u *store.User) error
+	// AfterTurn, when set, runs after each chat turn with memory, with the
+	// user's message. Register sets it to give new goals their channels and
+	// to queue the job links the user asked for. Its errors are logged.
+	AfterTurn func(ctx context.Context, u *store.User, text string) error
 }
 
 func (d Deps) now() time.Time {
@@ -101,31 +111,45 @@ func (d Deps) now() time.Time {
 	return time.Now()
 }
 
-// Register declares every workflow on the client, for the worker.
-func Register(c *hatchet.Client, d Deps) []hatchet.WorkflowBase {
-	var wfs []hatchet.WorkflowBase
-	if d.Web != nil {
+// Register declares every workflow on the client, for the worker. listen,
+// when there is a job assistant, listens to the web app and starts its
+// runs until ctx is done; the worker runs it alongside.
+func Register(c *hatchet.Client, d Deps) (wfs []hatchet.WorkflowBase, listen func(ctx context.Context) error) {
+	jobs := d.Web != nil && d.Memory != nil
+	if jobs {
 		application := JobApplication(c, d)
 		hunt := JobHunt(c, d, application)
 		links := JobLinks(c, d, application)
-		wfs = append(wfs, application, hunt, links, JobSearch(c, d, hunt, links))
+		resume := ResumeImport(c, d)
+		wfs = append(wfs, application, hunt, links, resume, JobSearch(c, d, hunt))
+		listen = func(ctx context.Context) error { return d.listenWeb(ctx, links, resume) }
 	}
 	goals := GoalChannels(c, d)
 	if d.Memory == nil {
-		return append(wfs, ChatTurn(c, d), goals)
+		return append(wfs, ChatTurn(c, d), goals), listen
 	}
 	setup := UserSetup(c, d)
 	d.SetupUser = func(ctx context.Context, userID string) error {
 		_, err := setup.RunNoWait(topLevel(ctx), UserSetupInput{UserID: userID})
 		return err
 	}
-	d.AfterTurn = goalChannelsTrigger(goals, d)
+	hooks := []func(context.Context, *store.User, string) error{goalChannelsTrigger(goals, d)}
+	if jobs {
+		hooks = append(hooks, d.queueSlackLinks)
+	}
+	d.AfterTurn = func(ctx context.Context, u *store.User, text string) error {
+		var errs []error
+		for _, h := range hooks {
+			errs = append(errs, h(ctx, u, text))
+		}
+		return errors.Join(errs...)
+	}
 	exercise := LearningExercise(c, d)
 	digest := NewsDigest(c, d)
 	return append(wfs,
 		ChatTurn(c, d), setup, goals, exercise, LearningExercises(c, d, exercise),
 		digest, NewsShorts(c, d, digest, setup), NewsReaction(c, d),
-	)
+	), listen
 }
 
 // topLevel makes the runs started with ctx top-level runs rather than

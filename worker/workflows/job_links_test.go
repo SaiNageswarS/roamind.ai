@@ -2,10 +2,14 @@ package workflows
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"roamind.ai/channels/web"
 	"roamind.ai/memory/store"
@@ -24,25 +28,21 @@ func TestJobLinks(t *testing.T) {
 	fw.addLink("u1", "l6", lever)
 	d.Agent.BlockedDomains, d.Jobs.Blocked = []string{"jobs.example.org"}, []string{"jobs.example.org"}
 
-	// job-search claims every queued link, whatever the user's search time.
-	_, _, users, err := d.dueHunts(ctx, d.now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	claimed, err := d.claimLinks(ctx, users, hunt.Date)
-	if err != nil || len(claimed) != 1 || len(claimed[0].Links) != 6 || claimed[0].UserID != hunt.UserID {
-		t.Fatalf("claimed = %+v %v", claimed, err)
+	// The listener claims the queued links and starts a run for them.
+	claimed := listenLinks(t, d, fw, "u1")
+	if len(claimed) != 1 || len(claimed[0].Links) != 6 || claimed[0].UserID != hunt.UserID || claimed[0].Date != hunt.Date {
+		t.Fatalf("claimed = %+v", claimed)
 	}
 	in := claimed[0]
 	if fw.link("u1", "l6").Status != web.LinkProcessing {
 		t.Fatalf("l6 = %+v", fw.link("u1", "l6"))
 	}
 	// Claimed links aren't claimed again.
-	if again, _ := d.claimLinks(ctx, users, hunt.Date); len(again) != 0 {
+	if again := listenLinks(t, d, fw, "u1"); len(again) != 0 {
 		t.Fatalf("claimed again = %+v", again)
 	}
 
-	r, err := d.readResume(ctx, in.hunt())
+	r, err := d.memoryResume(ctx, in.UserID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestJobLinks(t *testing.T) {
 	}
 	fw.addLink("u1", "l7", gh)
 	fw.addLink("u1", "l8", lever)
-	claimed, _ = d.claimLinks(ctx, users, hunt.Date)
+	claimed = listenLinks(t, d, fw, "u1")
 	bin, _ = fakeClaudeWith(t, "testdata/rank_jobs.jsonl")
 	d.Agent.ClaudeBinary = bin
 	again, err := d.pickLinks(ctx, claimed[0], r)
@@ -126,26 +126,173 @@ func TestJobLinks(t *testing.T) {
 	}
 }
 
-// Without a resume, reading it fails, and the links fail with a reason
-// the user can act on.
+// Without a resume in memory, reading it fails, and the links fail with a
+// reason the user can act on.
 func TestJobLinksNoResume(t *testing.T) {
 	ctx := context.Background()
 	d, fw, hunt := jobsSetup(t)
-	p := fw.profiles["u1"]
-	p.ResumePath = ""
-	fw.profiles["u1"] = p
+	u, _ := d.Store.UserByID(ctx, hunt.UserID)
+	os.Remove(filepath.Join(d.Memory.NotesDir(u.MemoryProject), "people", "Sai Test.md"))
 	fw.addLink("u1", "l1", "https://jobs.lever.co/palantir/6ed76ce8-4156-4b60-b120-403538bd66cd")
-	claimed, err := d.claimLinks(ctx, map[string]web.Profile{hunt.UserID: {UID: "u1"}}, hunt.Date)
-	if err != nil || len(claimed) != 1 {
-		t.Fatalf("claimed = %+v %v", claimed, err)
+	claimed := listenLinks(t, d, fw, "u1")
+	if len(claimed) != 1 {
+		t.Fatalf("claimed = %+v", claimed)
 	}
-	if _, err := d.readResume(ctx, claimed[0].hunt()); err == nil {
-		t.Fatal("read a resume that isn't there")
+	if _, err := d.memoryResume(ctx, hunt.UserID); !errors.Is(err, errNoResume) {
+		t.Fatalf("resume = %v", err)
 	}
 	if err := d.linksFailed(ctx, claimed[0]); err != nil {
 		t.Fatal(err)
 	}
 	if s := fw.link("u1", "l1"); s != (web.LinkState{Status: web.LinkFailed, Reason: linkNoResume}) {
 		t.Fatalf("l1 = %+v", s)
+	}
+}
+
+// Links whose run can't be started stay processing until job-search queues
+// them again, for the listener to take up.
+func TestJobLinksNotStarted(t *testing.T) {
+	ctx := context.Background()
+	d, fw, _ := jobsSetup(t)
+	fw.addLink("u1", "l1", "https://jobs.lever.co/palantir/6ed76ce8-4156-4b60-b120-403538bd66cd")
+	d.onLinks(ctx, "u1", fw.queued("u1"), func(JobLinksInput) error { return errors.New("hatchet is down") })
+	if s := fw.link("u1", "l1"); s.Status != web.LinkProcessing {
+		t.Fatalf("l1 = %+v", s)
+	}
+	if n, _ := fw.RequeueStaleLinks(ctx, "u1", time.Now().Add(-staleClaim)); n != 0 {
+		t.Fatal("a fresh claim was requeued")
+	}
+	if n, _ := fw.RequeueStaleLinks(ctx, "u1", time.Now().Add(time.Minute)); n != 1 || len(listenLinks(t, d, fw, "u1")) != 1 {
+		t.Fatalf("stale claim requeued %d", n)
+	}
+}
+
+// listenLinks hands the user's queued links to the links listener's
+// handler, and returns the runs it started.
+func listenLinks(t *testing.T, d Deps, fw *fakeWeb, uid string) []JobLinksInput {
+	t.Helper()
+	var started []JobLinksInput
+	queued := fw.queued(uid)
+	if len(queued) == 0 {
+		return nil
+	}
+	d.onLinks(context.Background(), uid, queued, func(in JobLinksInput) error {
+		started = append(started, in)
+		return nil
+	})
+	return started
+}
+
+// Slack users' links are queued in the web app when they are in the user's
+// own message.
+func TestQueueSlackLinks(t *testing.T) {
+	ctx := context.Background()
+	d, fw, hunt := jobsSetup(t)
+	u, _ := d.Store.UserByID(ctx, hunt.UserID)
+	const lever = "https://jobs.lever.co/palantir/6ed76ce8-4156-4b60-b120-403538bd66cd"
+	if err := d.Store.AddLinkRequests(ctx, u.ID, []string{lever + "?utm_source=slack", "https://evil.example/apply"}); err != nil {
+		t.Fatal(err)
+	}
+	text := "Can you apply to <" + lever + "|this one> for me?"
+	if err := d.queueSlackLinks(ctx, u, text); err != nil {
+		t.Fatal(err)
+	}
+	q := fw.queued("u1")
+	if len(q) != 1 || q[0].URL != lever {
+		t.Fatalf("queued = %+v", q)
+	}
+	// Requests are taken once.
+	if err := d.queueSlackLinks(ctx, u, text); err != nil || len(fw.queued("u1")) != 1 {
+		t.Fatalf("again: %v %+v", err, fw.queued("u1"))
+	}
+}
+
+// A resume upload is imported into memory once, merged into the user's own
+// note.
+func TestResumeImport(t *testing.T) {
+	ctx := context.Background()
+	d, fw, hunt := jobsSetup(t)
+	p := fw.profiles["u1"]
+	p.ResumeGeneration = "7"
+	var started []ResumeImportInput
+	start := func(in ResumeImportInput) error {
+		started = append(started, in)
+		return nil
+	}
+	d.onProfile(ctx, web.Profile{Name: "No email"}, start)
+	p.UID = "u1"
+	d.onProfile(ctx, p, start)
+	// The run's own status writes change the profile again: no second run.
+	d.onProfile(ctx, p, start)
+	if len(started) != 1 || started[0] != (ResumeImportInput{UserID: hunt.UserID, UID: "u1", Generation: "7"}) {
+		t.Fatalf("started = %+v", started)
+	}
+	in := started[0]
+
+	mp, err := d.importMemory(ctx, in)
+	if err != nil || fw.imports["u1"].Status != "running" {
+		t.Fatalf("memory = %+v %v %+v", mp, err, fw.imports["u1"])
+	}
+	text, err := d.readResume(ctx, in.UserID, p.ResumePath, 7)
+	if err != nil || !strings.HasPrefix(text, "Sai Test") {
+		t.Fatalf("read = %q %v", text, err)
+	}
+	// Read once per upload.
+	os.Remove(d.PDFToText)
+	if again, err := d.readResume(ctx, in.UserID, p.ResumePath, 7); err != nil || again != text {
+		t.Fatalf("cached read = %v", err)
+	}
+
+	bin, argsLog := fakeClaudeWith(t, "testdata/extract_resume.jsonl")
+	d.Agent.ClaudeBinary = bin
+	ex, err := d.extractResume(ctx, in, importRead{Text: text})
+	if err != nil || len(ex.Resume.Experience) != 2 {
+		t.Fatalf("extract = %+v %v", ex, err)
+	}
+	if args, _ := os.ReadFile(argsLog); !strings.Contains(string(args), "--tools  ") {
+		t.Fatalf("extract args: %s", args)
+	}
+	if _, err := d.writeResume(ctx, in, mp, ex); err != nil {
+		t.Fatal(err)
+	}
+	self, err := d.Memory.Self(mp.Project)
+	if err != nil || self == nil {
+		t.Fatalf("self = %+v %v", self, err)
+	}
+	for _, want := range []string{
+		"- [contact] sai@x.com (stated, slack, 2026-10-11)",
+		"- [contact] +49 151 0000 (stated, resume, 2026-10-17)",
+		"- [experience] ML Engineer, Acme, 2020-01 to present: ML systems in Go and JAX (stated, resume, 2026-10-17)",
+	} {
+		if !strings.Contains(self.Body, want) {
+			t.Fatalf("self note lacks %q:\n%s", want, self.Body)
+		}
+	}
+	// The resume's roles replace the note's; its permalink stays.
+	if strings.Contains(self.Body, "built and shipped") || self.Permalink != "people/sai-test" {
+		t.Fatalf("self note =\n%s", self.Body)
+	}
+	if fw.imports["u1"] != (web.ResumeImport{Status: "done", Generation: "7", At: d.now()}) {
+		t.Fatalf("import = %+v", fw.imports["u1"])
+	}
+
+	// A web-only user gets a memory project and a note of their own.
+	fw.profiles["u2"] = web.Profile{Email: "new@x.com", Name: "New Person", ResumePath: "resumes/u2/resume.pdf", ResumeGeneration: "1"}
+	newUser := fw.profiles["u2"]
+	newUser.UID = "u2"
+	started = nil
+	d.onProfile(ctx, newUser, start)
+	if len(started) != 1 {
+		t.Fatalf("new user started = %+v", started)
+	}
+	mp2, err := d.importMemory(ctx, started[0])
+	if err != nil || mp2.Project == "" || mp2.Project == mp.Project {
+		t.Fatalf("new user memory = %+v %v", mp2, err)
+	}
+	if _, err := d.writeResume(ctx, started[0], mp2, ex); err != nil {
+		t.Fatal(err)
+	}
+	if self, _ := d.Memory.Self(mp2.Project); self == nil || !strings.Contains(self.Body, "ML Engineer, Acme") {
+		t.Fatalf("new user's note = %+v", self)
 	}
 }
