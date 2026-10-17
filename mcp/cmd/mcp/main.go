@@ -2,7 +2,7 @@
 // over stdio. claude starts it for each chat turn, pinned to the turn's
 // user (see agent.Config.ToolsServer):
 //
-//	mcp --data DIR --user ID
+//	mcp --data DIR [--jobs] --user ID
 package main
 
 import (
@@ -34,6 +34,7 @@ func run(args []string) error {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	dataDir := fs.String("data", "./data", "data directory holding roamind.db")
 	user := fs.String("user", "", "the user the tools serve")
+	withJobs := fs.Bool("jobs", false, "add the job assistant's tools")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -48,6 +49,6 @@ func run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	s := mcp.NewServer(&mcp.Implementation{Name: "roamind", Version: "v1"}, nil)
-	tools.Register(s, tools.Deps{Store: st, Feeds: feeds.New(15 * time.Second), UserID: *user})
+	tools.Register(s, tools.Deps{Store: st, Feeds: feeds.New(15 * time.Second), UserID: *user, Jobs: *withJobs})
 	return s.Run(ctx, &mcp.StdioTransport{})
 }

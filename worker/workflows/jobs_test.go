@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"roamind.ai/channels/web"
 	"roamind.ai/connectors/jobs"
 	"roamind.ai/memory/store"
+	"roamind.ai/memory/store/notes"
 )
 
 // fakeWeb is the web app's data, in memory.
@@ -28,10 +30,18 @@ type fakeWeb struct {
 	resumes  map[string]string      // by path
 	apps     map[string]web.Application
 	searches map[string]web.Search // the latest, by uid
+	links    map[string]fakeLink   // by uid/id
+	imports  map[string]web.ResumeImport
+}
+
+// fakeLink is a link the user added, with what the worker made of it.
+type fakeLink struct {
+	web.Link
+	web.LinkState
 }
 
 func newFakeWeb() *fakeWeb {
-	return &fakeWeb{profiles: map[string]web.Profile{}, resumes: map[string]string{}, apps: map[string]web.Application{}, searches: map[string]web.Search{}}
+	return &fakeWeb{profiles: map[string]web.Profile{}, resumes: map[string]string{}, apps: map[string]web.Application{}, searches: map[string]web.Search{}, links: map[string]fakeLink{}, imports: map[string]web.ResumeImport{}}
 }
 
 func (f *fakeWeb) Profiles(context.Context) ([]web.Profile, error) {
@@ -94,6 +104,126 @@ func (f *fakeWeb) SetSearch(_ context.Context, uid string, s web.Search) error {
 	return nil
 }
 
+func (f *fakeWeb) ClaimLinks(_ context.Context, uid string, links []web.Link) ([]web.Link, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []web.Link
+	for _, l := range links {
+		fl, ok := f.links[uid+"/"+l.ID]
+		if !ok || fl.LinkState.Status != web.LinkQueued {
+			continue
+		}
+		fl.LinkState.Status, fl.Link.ClaimedAt = web.LinkProcessing, time.Now()
+		f.links[uid+"/"+l.ID] = fl
+		out = append(out, l)
+	}
+	return out, nil
+}
+
+func (f *fakeWeb) RequeueStaleLinks(_ context.Context, uid string, before time.Time) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for key, l := range f.links {
+		if strings.HasPrefix(key, uid+"/") && l.LinkState.Status == web.LinkProcessing && !l.ClaimedAt.After(before) {
+			l.LinkState.Status = web.LinkQueued
+			f.links[key] = l
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (f *fakeWeb) AddLinks(_ context.Context, uid, source string, urls []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, u := range urls {
+		id := source + strconv.Itoa(len(f.links)+1)
+		f.links[uid+"/"+id] = fakeLink{web.Link{ID: id, URL: u, CreatedAt: time.Now()}, web.LinkState{Status: web.LinkQueued}}
+	}
+	return nil
+}
+
+func (f *fakeWeb) SetResumeImport(_ context.Context, uid string, r web.ResumeImport) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.imports[uid] = r
+	p := f.profiles[uid]
+	p.ResumeImport = &r
+	f.profiles[uid] = p
+	return nil
+}
+
+// The fake's generation of a resume is its length, as ResumeVersion says.
+func (f *fakeWeb) DeleteResume(_ context.Context, path string, generation int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.resumes[path]
+	if !ok || int64(len(r)) != generation {
+		return false, nil
+	}
+	delete(f.resumes, path)
+	return true, nil
+}
+
+// The listeners aren't exercised here: tests call their handlers.
+func (f *fakeWeb) ListenProfiles(ctx context.Context, _ func(web.Profile)) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (f *fakeWeb) ListenLinks(ctx context.Context, _ func(string, []web.Link)) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// queued is uid's queued links, oldest first, as the links listener gives
+// them.
+func (f *fakeWeb) queued(uid string) []web.Link {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []web.Link
+	for key, l := range f.links {
+		if strings.HasPrefix(key, uid+"/") && l.LinkState.Status == web.LinkQueued {
+			out = append(out, l.Link)
+		}
+	}
+	slices.SortFunc(out, func(a, b web.Link) int { return a.CreatedAt.Compare(b.CreatedAt) })
+	return out
+}
+
+func (f *fakeWeb) LinkStatus(_ context.Context, uid, id string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.links[uid+"/"+id].LinkState.Status, nil
+}
+
+func (f *fakeWeb) SetLink(_ context.Context, uid, id string, s web.LinkState) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	l, ok := f.links[uid+"/"+id]
+	if !ok {
+		return false, nil
+	}
+	l.LinkState = s
+	f.links[uid+"/"+id] = l
+	return true, nil
+}
+
+// addLink is the user adding a link in the web app.
+func (f *fakeWeb) addLink(uid, id, u string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.links[uid+"/"+id] = fakeLink{web.Link{ID: id, URL: u, CreatedAt: time.Now()}, web.LinkState{Status: web.LinkQueued}}
+}
+
+// link is the state of uid's link id.
+func (f *fakeWeb) link(uid, id string) web.LinkState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.links[uid+"/"+id].LinkState
+}
+
 // setStatus is the user reviewing an application in the web app.
 func (f *fakeWeb) setStatus(uid, id, status string) {
 	f.mu.Lock()
@@ -138,8 +268,20 @@ func (ts toServer) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r)
 }
 
-// jobsSetup is a job-assistant user with a profile and resume, at 10:00 in
-// Berlin.
+// selfNote is the jobsSetup user's own Person note: their resume.
+const selfNote = `---
+title: Sai Test
+type: person
+permalink: people/sai-test
+---
+
+- [relationship] self (stated, slack, 2026-10-11)
+- [contact] sai@x.com (stated, slack, 2026-10-11)
+- [experience] ML Engineer, Acme, 2020-01 to present: built and shipped ML systems in Go and JAX (stated, slack, 2026-10-11)
+`
+
+// jobsSetup is a job-assistant user with a profile, a resume upload and a
+// resume in memory, at 10:00 in Berlin.
 func jobsSetup(t *testing.T) (Deps, *fakeWeb, JobHuntInput) {
 	t.Helper()
 	d, _, _ := setup(t)
@@ -147,20 +289,44 @@ func jobsSetup(t *testing.T) (Deps, *fakeWeb, JobHuntInput) {
 	berlin, _ := time.LoadLocation("Europe/Berlin")
 	now := time.Date(2026, 10, 17, 10, 0, 0, 0, berlin)
 	d.Web, d.Jobs, d.Location, d.Now = fw, atsServer(t), berlin, func() time.Time { return now }
-	// pdftotext prints the "PDF" as it is.
-	dir := t.TempDir()
-	d.PDFToText = filepath.Join(dir, "pdftotext")
-	if err := os.WriteFile(d.PDFToText, []byte("#!/bin/sh\ncat \"$4\"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	fw.resumes["resumes/u1/resume.pdf"] = "Sai Test, sai@x.com. " + strings.Repeat("Built and shipped ML systems in Go and JAX. ", 10)
 	fw.profiles["u1"] = web.Profile{Email: "Sai@X.com", Name: "Sai", ResumePath: "resumes/u1/resume.pdf",
 		Roles: []string{"ML Engineer", "Account Executive"}, Regions: []string{"Berlin", "New York"}}
+	ctx := context.Background()
 	id := identity.UserID("sai@x.com")
-	if err := d.Store.UpsertWebUser(context.Background(), store.User{ID: id, Email: "sai@x.com", DisplayName: "Sai"}); err != nil {
+	if err := d.Store.UpsertWebUser(ctx, store.User{ID: id, Email: "sai@x.com", DisplayName: "Sai"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := d.Store.SaveWebProfile(ctx, id, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	mem, err := notes.New(t.TempDir(), "../../memory", fakeBM(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Memory, d.Agent.Memory = mem, mem
+	p, err := d.assignProject(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.setUpMemory(p); err != nil {
+		t.Fatal(err)
+	}
+	writeSelf(t, d, p.Project, selfNote)
 	return d, fw, JobHuntInput{UserID: id, UID: "u1", Date: "2026-10-17"}
+}
+
+// writeSelf writes the user's own Person note to project, as the agent
+// would.
+func writeSelf(t *testing.T, d Deps, project, note string) {
+	t.Helper()
+	dir := filepath.Join(d.Memory.NotesDir(project), "people")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Sai Test.md"), []byte(note), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPickMinute(t *testing.T) {
@@ -209,7 +375,7 @@ func TestJobSearchDispatch(t *testing.T) {
 	fw.profiles["u3"] = web.Profile{Email: "new@x.com", Name: "New", Paused: true}
 	fw.profiles["u4"] = web.Profile{Name: "No email"}
 
-	out, _, err := d.dueHunts(ctx, d.now())
+	out, _, _, err := d.dueHunts(ctx, d.now())
 	if err != nil || out.Profiles != 4 || len(out.Scheduled) != 3 {
 		t.Fatalf("dispatch = %+v, %v", out, err)
 	}
@@ -226,13 +392,13 @@ func TestJobSearchDispatch(t *testing.T) {
 		}
 	}
 	// Again: everyone keeps their time.
-	if out, _, _ := d.dueHunts(ctx, d.now()); len(out.Scheduled) != 0 {
+	if out, _, _, _ := d.dueHunts(ctx, d.now()); len(out.Scheduled) != 0 {
 		t.Fatalf("rescheduled: %v", out.Scheduled)
 	}
 
 	// At 23:00 every unpaused user is due, once a day.
 	late := time.Date(2026, 10, 17, 23, 0, 0, 0, d.Location)
-	_, due, err := d.dueHunts(ctx, late)
+	_, due, _, err := d.dueHunts(ctx, late)
 	if err != nil || len(due) != 2 {
 		t.Fatalf("due = %+v, %v", due, err)
 	}
@@ -244,10 +410,10 @@ func TestJobSearchDispatch(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, due, _ := d.dueHunts(ctx, late); len(due) != 0 {
+	if _, due, _, _ := d.dueHunts(ctx, late); len(due) != 0 {
 		t.Fatalf("due again = %+v", due)
 	}
-	if _, due, _ := d.dueHunts(ctx, late.Add(24*time.Hour)); len(due) != 2 {
+	if _, due, _, _ := d.dueHunts(ctx, late.Add(24*time.Hour)); len(due) != 2 {
 		t.Fatalf("due tomorrow = %+v", due)
 	}
 }
@@ -256,15 +422,15 @@ func TestJobHunt(t *testing.T) {
 	ctx := context.Background()
 	d, fw, in := jobsSetup(t)
 
-	// Without a resume the hunt is skipped, and the web app says why.
-	p := fw.profiles["u1"]
-	p.ResumePath = ""
-	fw.profiles["u1"] = p
-	if chk, err := d.checkHunt(ctx, in); err != nil || chk.Skip != "no resume uploaded yet" || fw.searches["u1"].Status != "skipped" {
+	// Without a resume in memory the hunt is skipped, and the web app says
+	// why.
+	u, _ := d.Store.UserByID(ctx, in.UserID)
+	selfPath := filepath.Join(d.Memory.NotesDir(u.MemoryProject), "people", "Sai Test.md")
+	os.Rename(selfPath, selfPath+".away")
+	if chk, err := d.checkHunt(ctx, in); err != nil || chk.Skip != "no resume in memory yet" || fw.searches["u1"].Status != "skipped" {
 		t.Fatalf("no resume: %+v %v %+v", chk, err, fw.searches["u1"])
 	}
-	p.ResumePath = "resumes/u1/resume.pdf"
-	fw.profiles["u1"] = p
+	os.Rename(selfPath+".away", selfPath)
 	// A profile whose email is another user's doesn't run as this one.
 	if chk, _ := d.checkHunt(ctx, JobHuntInput{UserID: identity.UserID("other@x.com"), UID: "u1"}); chk.Skip == "" {
 		t.Fatal("mismatched profile ran")
@@ -274,14 +440,9 @@ func TestJobHunt(t *testing.T) {
 		t.Fatalf("check = %+v %v", chk, err)
 	}
 
-	r, err := d.readResume(ctx, in)
-	if err != nil || !strings.HasPrefix(r.Text, "Sai Test") {
+	r, err := d.memoryResume(ctx, in.UserID)
+	if err != nil || !strings.HasPrefix(r.Text, "# Sai Test\n\n- [relationship] self") || !strings.Contains(r.Text, "ML Engineer, Acme") {
 		t.Fatalf("resume = %+v %v", r, err)
-	}
-	// Read once per upload.
-	os.Remove(d.PDFToText)
-	if again, err := d.readResume(ctx, in); err != nil || again.Text != r.Text {
-		t.Fatalf("cached resume = %v", err)
 	}
 
 	// A blocked domain is neither fetched by the search nor read after.
@@ -362,7 +523,7 @@ func TestJobHunt(t *testing.T) {
 		t.Fatalf("tailor prompt: %s", stdin)
 	}
 	app := fw.apps["u1/"+gh.URLHash]
-	if app.Status != web.StatusReady || !strings.HasPrefix(app.CV, "# Sai Test") || len(app.Answers) != 2 ||
+	if app.Status != web.StatusReady || !strings.HasPrefix(app.CoverLetter, "Dear") || len(app.Answers) != 2 ||
 		app.ApplyURL != "https://job-boards.greenhouse.io/anthropic/jobs/4461450008" || app.Fit.Score != 8 || app.Source != jobs.Greenhouse {
 		t.Fatalf("application = %+v", app)
 	}

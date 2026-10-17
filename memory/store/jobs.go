@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sort"
 	"time"
 
 	"modernc.org/sqlite"
@@ -178,6 +179,22 @@ func (s *Store) PickPosting(ctx context.Context, p JobPosting) (JobPosting, bool
 	return p, n == 1, err
 }
 
+// RepickPosting records as picked again a posting of p's user that was
+// judged not a fit or whose application failed, when the user asks for it
+// themselves; ok is false when the posting is neither.
+func (s *Store) RepickPosting(ctx context.Context, p JobPosting) (JobPosting, bool, error) {
+	p.URLHash, p.Status, p.FoundAt = URLHash(p.URL), PostingPicked, time.Unix(time.Now().Unix(), 0)
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE job_postings SET status = 'picked', found_at = ?, title = ?, company = ?, source = ?
+		WHERE user_id = ? AND url_hash = ? AND status IN ('passed', 'failed')`,
+		p.FoundAt.Unix(), p.Title, p.Company, p.Source, p.UserID, p.URLHash)
+	if err != nil {
+		return p, false, err
+	}
+	n, err := res.RowsAffected()
+	return p, n == 1, err
+}
+
 // PassPosting records p as judged not a fit for its user, so it is not
 // judged again; a posting found before is left as it is.
 func (s *Store) PassPosting(ctx context.Context, p JobPosting) error {
@@ -221,4 +238,74 @@ func (s *Store) ClosePostings(ctx context.Context, userID string, hashes []strin
 		}
 	}
 	return tx.Commit()
+}
+
+// SaveWebProfile records uid as the user's web app profile.
+func (s *Store) SaveWebProfile(ctx context.Context, userID, uid string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO web_profiles (user_id, uid) VALUES (?, ?)
+		ON CONFLICT (user_id) DO UPDATE SET uid = excluded.uid`, userID, uid)
+	return err
+}
+
+// WebProfileOf returns the uid of the user's web app profile, or "" when
+// they have not signed in to it.
+func (s *Store) WebProfileOf(ctx context.Context, userID string) (string, error) {
+	var uid string
+	err := s.db.QueryRowContext(ctx, `SELECT uid FROM web_profiles WHERE user_id = ?`, userID).Scan(&uid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return uid, err
+}
+
+// AddLinkRequests records posting links the user asked for; a link asked
+// for again is kept once.
+func (s *Store) AddLinkRequests(ctx context.Context, userID string, urls []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	for _, u := range urls {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO job_link_requests (user_id, url, requested_at) VALUES (?, ?, ?)
+			ON CONFLICT (user_id, url) DO NOTHING`, userID, u, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// TakeLinkRequests removes and returns the user's link requests, oldest
+// first.
+func (s *Store) TakeLinkRequests(ctx context.Context, userID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		DELETE FROM job_link_requests WHERE user_id = ? RETURNING url, requested_at`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type req struct {
+		url string
+		at  int64
+	}
+	var reqs []req
+	for rows.Next() {
+		var r req
+		if err := rows.Scan(&r.url, &r.at); err != nil {
+			return nil, err
+		}
+		reqs = append(reqs, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(reqs, func(i, j int) bool { return reqs[i].at < reqs[j].at })
+	out := make([]string, len(reqs))
+	for i, r := range reqs {
+		out[i] = r.url
+	}
+	return out, nil
 }

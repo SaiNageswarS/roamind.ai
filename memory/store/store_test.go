@@ -50,7 +50,7 @@ func TestSchema(t *testing.T) {
 		}
 		applySchema(t, s)
 		var n int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'`).Scan(&n); err != nil || n != 15 {
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'`).Scan(&n); err != nil || n != 17 {
 			t.Fatalf("open %d: %d tables, %v", i, n, err)
 		}
 		s.Close()

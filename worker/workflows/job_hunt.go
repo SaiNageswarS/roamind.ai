@@ -1,15 +1,11 @@
 package workflows
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -31,7 +27,8 @@ import (
 //	check-skip → resume, find → pick → spawn
 //
 // check-skip closes the postings the user is done with and skips the hunt
-// while any are still open; resume reads their resume as text; find
+// while any are still open; resume reads their resume, their own Person
+// note in memory; find
 // searches the web for postings on applicant tracking sites; pick reads the
 // new postings from their sites, has the agent judge their fit and keeps
 // the best; spawn starts a job-application run for each. Sites on the
@@ -47,7 +44,7 @@ const (
 	// maxCandidates how many new ones are read and judged.
 	maxFound      = 15
 	maxCandidates = 20
-	// maxResume is how much of a resume's text is kept.
+	// maxResume is how much of a resume note is given to a turn.
 	maxResume = 30000
 	// stalePick is how long a picked posting may wait for its application
 	// before it counts as failed.
@@ -70,7 +67,7 @@ type huntCheck struct {
 	Expired []string `json:"expired,omitempty"` // stale picks marked failed
 }
 
-// huntResume is the user's resume as text.
+// huntResume is the user's resume: their own Person note.
 type huntResume struct {
 	Text string `json:"text"`
 }
@@ -118,7 +115,7 @@ func JobHunt(c *hatchet.Client, d Deps, application *hatchet.Workflow) *hatchet.
 		hatchet.WithExecutionTimeout(2*time.Minute),
 	)
 	resume := wf.NewTask("resume", func(ctx hatchet.Context, in JobHuntInput) (huntResume, error) {
-		return d.readResume(ctx, in)
+		return d.memoryResume(ctx, in.UserID)
 	},
 		hatchet.WithParents(check),
 		hatchet.WithSkipIf(hatchet.ParentCondition(check, skipped)),
@@ -171,8 +168,8 @@ func JobHunt(c *hatchet.Client, d Deps, application *hatchet.Workflow) *hatchet.
 	return wf
 }
 
-// checkHunt decides whether the user's hunt runs: they need a profile with
-// a resume, roles and regions, and no open postings. It first closes the
+// checkHunt decides whether the user's hunt runs: they need a resume in
+// memory, a profile with roles and regions, and no open postings. It first closes the
 // postings they marked applied or dismissed, and those their sites no
 // longer have.
 func (d Deps) checkHunt(ctx context.Context, in JobHuntInput) (huntCheck, error) {
@@ -192,8 +189,8 @@ func (d Deps) checkHunt(ctx context.Context, in JobHuntInput) (huntCheck, error)
 		out.Skip = "the profile's email is not the user's"
 	case p.Paused:
 		out.Skip = "the search is paused"
-	case p.ResumePath == "":
-		out.Skip = "no resume uploaded yet"
+	case !d.hasResume(u):
+		out.Skip = "no resume in memory yet"
 	case len(p.Roles) == 0 || len(p.Regions) == 0:
 		out.Skip = "no roles or regions yet"
 	}
@@ -255,49 +252,37 @@ func (d Deps) setSearch(ctx context.Context, uid, status, reason string, found i
 	return d.Web.SetSearch(ctx, uid, web.Search{Status: status, Reason: reason, Found: found, LastRunAt: d.now()})
 }
 
-// readResume returns the text of the user's resume, read with pdftotext
-// once per upload and kept in their jobs folder, apart from the chat
-// workspace.
-func (d Deps) readResume(ctx context.Context, in JobHuntInput) (huntResume, error) {
-	p, err := d.Web.Profile(ctx, in.UID)
-	if err != nil || p == nil {
-		return huntResume{}, fmt.Errorf("profile %s: %v", in.UID, err)
+// errNoResume is memoryResume's error for a user whose memory holds no
+// resume yet.
+var errNoResume = errors.New("no resume in memory: no Person note with relationship self")
+
+// memoryResume returns the user's resume: their own Person note, which a
+// resume upload in the web app writes and chat turns keep up to date.
+func (d Deps) memoryResume(ctx context.Context, userID string) (huntResume, error) {
+	u, err := d.Store.UserByID(ctx, userID)
+	if err != nil || u == nil {
+		return huntResume{}, fmt.Errorf("user %s: %v", userID, err)
 	}
-	gen, err := d.Web.ResumeVersion(ctx, p.ResumePath)
+	if u.MemoryProject == "" {
+		return huntResume{}, errNoResume
+	}
+	self, err := d.Memory.Self(u.MemoryProject)
 	if err != nil {
 		return huntResume{}, err
 	}
-	dir := filepath.Join(d.Agent.DataDir, "users", in.UserID, "jobs")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return huntResume{}, err
+	if self == nil {
+		return huntResume{}, errNoResume
 	}
-	txt := filepath.Join(dir, "resume-"+strconv.FormatInt(gen, 10)+".txt")
-	if b, err := os.ReadFile(txt); err == nil {
-		return huntResume{Text: string(b)}, nil
+	return huntResume{Text: cutText("# "+self.Title+"\n\n"+self.Body, maxResume)}, nil
+}
+
+// hasResume reports whether the user's memory holds their resume.
+func (d Deps) hasResume(u *store.User) bool {
+	if u.MemoryProject == "" {
+		return false
 	}
-	pdf, err := os.CreateTemp(dir, "resume-*.pdf")
-	if err != nil {
-		return huntResume{}, err
-	}
-	defer os.Remove(pdf.Name())
-	err = d.Web.DownloadResume(ctx, p.ResumePath, gen, pdf)
-	if cerr := pdf.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return huntResume{}, err
-	}
-	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, orDefault(d.PDFToText, "pdftotext"), "-layout", "-enc", "UTF-8", pdf.Name(), "-")
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		return huntResume{}, fmt.Errorf("pdftotext: %v: %s", err, stderr.String())
-	}
-	text := cutText(stdout.String(), maxResume)
-	if len(text) < 200 {
-		return huntResume{}, fmt.Errorf("the resume has almost no text (%d bytes); it may be a scan", len(text))
-	}
-	return huntResume{Text: text}, os.WriteFile(txt, []byte(text), 0o600)
+	self, err := d.Memory.Self(u.MemoryProject)
+	return err == nil && self != nil
 }
 
 func orDefault(s, d string) string {

@@ -1,0 +1,2 @@
+{"type": "system", "subtype": "init", "cwd": "/tmp/workspace", "session_id": "import-resume-session", "tools": ["Read", "mcp__memory__edit_note"], "mcp_servers": [{"name": "memory", "status": "connected"}], "model": "claude-sonnet-5-5", "permissionMode": "dontAsk"}
+{"type": "result", "subtype": "success", "is_error": false, "session_id": "import-resume-session", "total_cost_usd": 0.05, "num_turns": 4, "result": "Updated your note: two roles and your education from the resume."}

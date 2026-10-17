@@ -142,4 +142,59 @@ func TestJobPostings(t *testing.T) {
 	if pp, _ := s.JobPostingOf(ctx, "a", "nope"); pp != nil {
 		t.Fatalf("missing = %+v", pp)
 	}
+
+	// A user asking for a passed or failed posting gets it picked again;
+	// open and closed ones stay as they are.
+	if rp, ok, err := s.RepickPosting(ctx, passed); err != nil || !ok || rp.Status != PostingPicked {
+		t.Fatalf("repick passed = %+v %v %v", rp, ok, err)
+	}
+	if st := open("a"); !reflect.DeepEqual(st, []string{PostingPicked}) {
+		t.Fatalf("repicked open = %v", st)
+	}
+	if _, ok, _ := s.RepickPosting(ctx, passed); ok {
+		t.Fatal("repicked a picked posting")
+	}
+	p.UserID = "b"
+	if _, ok, _ := s.RepickPosting(ctx, p); !ok {
+		t.Fatal("b's failed posting not repicked")
+	}
+	p.UserID = "a"
+	if _, ok, _ := s.RepickPosting(ctx, p); ok {
+		t.Fatal("repicked a closed posting")
+	}
+}
+
+func TestWebProfilesAndRequests(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	jobsUsers(t, s, "a", "b")
+	if uid, err := s.WebProfileOf(ctx, "a"); uid != "" || err != nil {
+		t.Fatalf("no profile = %q %v", uid, err)
+	}
+	if err := s.SaveWebProfile(ctx, "a", "uid-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveWebProfile(ctx, "a", "uid-a2"); err != nil {
+		t.Fatal(err)
+	}
+	if uid, _ := s.WebProfileOf(ctx, "a"); uid != "uid-a2" {
+		t.Fatalf("profile = %q", uid)
+	}
+
+	if err := s.AddLinkRequests(ctx, "a", []string{"https://x/1", "https://x/2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddLinkRequests(ctx, "a", []string{"https://x/1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.TakeLinkRequests(ctx, "a"); err != nil || len(got) != 2 {
+		t.Fatalf("take = %v %v", got, err)
+	}
+	if got, _ := s.TakeLinkRequests(ctx, "a"); len(got) != 0 {
+		t.Fatalf("taken twice = %v", got)
+	}
+	if got, _ := s.TakeLinkRequests(ctx, "b"); len(got) != 0 {
+		t.Fatalf("b's = %v", got)
+	}
+
 }

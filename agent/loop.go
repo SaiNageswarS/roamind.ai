@@ -89,6 +89,7 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, emit Emit) 
 		"News":      in.News,
 		"Interests": withTools,
 		"Tools":     orDefault(in.Tools, "workspace"),
+		"Channel":   orDefault(in.Channel, "slack"),
 	})
 	if err != nil {
 		return protocol.TurnOutput{}, err
