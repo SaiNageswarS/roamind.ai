@@ -12,7 +12,6 @@ import (
 
 	"roamind.ai/agent"
 	"roamind.ai/agent/protocol"
-	"roamind.ai/channels/identity"
 	"roamind.ai/channels/web"
 	"roamind.ai/connectors/jobs"
 	"roamind.ai/memory/store"
@@ -21,14 +20,15 @@ import (
 // JobLinksName is the job-links workflow, which drafts applications for
 // the postings a user linked to in the web app:
 //
-//	check-skip → resume → pick → spawn
+//	resume → pick → spawn
 //
-// check-skip needs a profile with a resume; resume reads it as text; pick
-// reads the postings from their sites, has the agent judge their fit and
-// records them; spawn starts a job-application run for each. Unlike a
-// job hunt, it doesn't wait for the user's reviews and keeps every posting
-// whatever its fit: the user asked for these. job-search claims the links,
-// marking them processing, before it starts the run.
+// resume reads the user's resume as text; pick reads the postings from
+// their sites, has the agent judge their fit and records them; spawn
+// starts a job-application run for each. Whenever a user has links, it
+// runs: unlike a job hunt, it has no check-skip, doesn't wait for the
+// user's reviews and keeps every posting whatever its fit, since the user
+// asked for these. job-search claims the links, marking them processing,
+// before it starts the run.
 const JobLinksName = "job-links"
 
 // maxLinks is how many links a run takes at most; the rest wait for the
@@ -71,9 +71,9 @@ type linksPick struct {
 	CostUSD float64           `json:"cost_usd,omitempty"`
 }
 
-// JobLinks declares the job-links workflow. Runs are serialized per user,
-// and every task after check-skip is skipped when it gives a reason. When
-// a task fails for good, the links still processing are marked failed.
+// JobLinks declares the job-links workflow. Runs are serialized per user.
+// When a task fails for good, the links still processing are marked
+// failed.
 func JobLinks(c *hatchet.Client, d Deps, application *hatchet.Workflow) *hatchet.Workflow {
 	maxRuns := int32(1)
 	strategy := hatchet.GroupRoundRobin
@@ -85,17 +85,9 @@ func JobLinks(c *hatchet.Client, d Deps, application *hatchet.Workflow) *hatchet
 			LimitStrategy: &strategy,
 		}),
 	)
-	check := wf.NewTask("check-skip", func(ctx hatchet.Context, in JobLinksInput) (applicationCheck, error) {
-		return d.checkLinks(ctx, in)
-	},
-		hatchet.WithRetries(2),
-		hatchet.WithExecutionTimeout(time.Minute),
-	)
 	resume := wf.NewTask("resume", func(ctx hatchet.Context, in JobLinksInput) (huntResume, error) {
 		return d.readResume(ctx, in.hunt())
 	},
-		hatchet.WithParents(check),
-		hatchet.WithSkipIf(hatchet.ParentCondition(check, skipped)),
 		hatchet.WithRetries(2),
 		hatchet.WithExecutionTimeout(2*time.Minute),
 	)
@@ -106,8 +98,7 @@ func JobLinks(c *hatchet.Client, d Deps, application *hatchet.Workflow) *hatchet
 		}
 		return d.pickLinks(ctx, in, r)
 	},
-		hatchet.WithParents(check, resume),
-		hatchet.WithSkipIf(hatchet.ParentCondition(check, skipped)),
+		hatchet.WithParents(resume),
 		// Picking records the postings before it returns them.
 		hatchet.WithRetries(0),
 		hatchet.WithExecutionTimeout(15*time.Minute),
@@ -122,15 +113,24 @@ func JobLinks(c *hatchet.Client, d Deps, application *hatchet.Workflow) *hatchet
 			return err
 		})
 	},
-		hatchet.WithParents(check, pick),
-		hatchet.WithSkipIf(hatchet.ParentCondition(check, skipped)),
+		hatchet.WithParents(pick),
 		hatchet.WithRetries(0),
 		hatchet.WithExecutionTimeout(time.Minute),
 	)
 	wf.OnFailure(func(ctx hatchet.Context, in JobLinksInput) (struct{}, error) {
-		return struct{}{}, d.failProcessingLinks(ctx, in.UID, linkIDs(in.Links), linkFailed)
+		return struct{}{}, d.linksFailed(ctx, in)
 	})
 	return wf
+}
+
+// linksFailed marks failed the run's links still processing: they can't
+// be drafted without a resume, else drafting failed.
+func (d Deps) linksFailed(ctx context.Context, in JobLinksInput) error {
+	reason := linkFailed
+	if p, err := d.Web.Profile(ctx, in.UID); err == nil && (p == nil || p.ResumePath == "") {
+		reason = linkNoResume
+	}
+	return d.failProcessingLinks(ctx, in.UID, linkIDs(in.Links), reason)
 }
 
 // claimLinks takes up to maxLinks of each user's queued links, marking
@@ -169,33 +169,6 @@ func (d Deps) unclaimLinks(ctx context.Context, in JobLinksInput) error {
 		}
 	}
 	return nil
-}
-
-// checkLinks needs a profile whose email is the user's, with a resume;
-// otherwise the links fail with a reason the user can act on.
-func (d Deps) checkLinks(ctx context.Context, in JobLinksInput) (applicationCheck, error) {
-	var out applicationCheck
-	u, err := d.Store.UserByID(ctx, in.UserID)
-	if err != nil {
-		return out, err
-	}
-	p, err := d.Web.Profile(ctx, in.UID)
-	if err != nil {
-		return out, err
-	}
-	reason := linkFailed
-	switch {
-	case u == nil || p == nil:
-		out.Skip = "no such user or profile"
-	case identity.UserID(p.Email) != u.ID:
-		out.Skip = "the profile's email is not the user's"
-	case p.ResumePath == "":
-		out.Skip, reason = "no resume uploaded yet", linkNoResume
-	}
-	if out.Skip != "" {
-		return out, d.failProcessingLinks(ctx, in.UID, linkIDs(in.Links), reason)
-	}
-	return out, nil
 }
 
 // pickLinks reads the linked postings from their sites, has the agent

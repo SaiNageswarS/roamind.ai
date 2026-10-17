@@ -42,9 +42,6 @@ func TestJobLinks(t *testing.T) {
 		t.Fatalf("claimed again = %+v", again)
 	}
 
-	if chk, err := d.checkLinks(ctx, in); err != nil || chk.Skip != "" {
-		t.Fatalf("check = %+v %v", chk, err)
-	}
 	r, err := d.readResume(ctx, in.hunt())
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +126,8 @@ func TestJobLinks(t *testing.T) {
 	}
 }
 
-// Without a resume, links fail with a reason the user can act on.
+// Without a resume, reading it fails, and the links fail with a reason
+// the user can act on.
 func TestJobLinksNoResume(t *testing.T) {
 	ctx := context.Background()
 	d, fw, hunt := jobsSetup(t)
@@ -141,8 +139,11 @@ func TestJobLinksNoResume(t *testing.T) {
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("claimed = %+v %v", claimed, err)
 	}
-	if chk, err := d.checkLinks(ctx, claimed[0]); err != nil || chk.Skip == "" {
-		t.Fatalf("check = %+v %v", chk, err)
+	if _, err := d.readResume(ctx, claimed[0].hunt()); err == nil {
+		t.Fatal("read a resume that isn't there")
+	}
+	if err := d.linksFailed(ctx, claimed[0]); err != nil {
+		t.Fatal(err)
 	}
 	if s := fw.link("u1", "l1"); s != (web.LinkState{Status: web.LinkFailed, Reason: linkNoResume}) {
 		t.Fatalf("l1 = %+v", s)
