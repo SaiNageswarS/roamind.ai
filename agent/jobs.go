@@ -13,13 +13,13 @@ var (
 	rankJobsTmpl string
 	//go:embed prompts/tailor_application.md
 	tailorApplicationTmpl string
-	//go:embed prompts/extract_resume.md
-	extractResumeTmpl string
+	//go:embed prompts/import_resume.md
+	importResumeTmpl string
 
 	findJobsPrompt          = template.Must(template.New("find_jobs").Parse(findJobsTmpl))
 	rankJobsPrompt          = template.Must(template.New("rank_jobs").Parse(rankJobsTmpl))
 	tailorApplicationPrompt = template.Must(template.New("tailor_application").Parse(tailorApplicationTmpl))
-	extractResumePrompt     = template.Must(template.New("extract_resume").Parse(extractResumeTmpl))
+	importResumePrompt      = template.Must(template.New("import_resume").Parse(importResumeTmpl))
 )
 
 // JobSearch is what the agent is given to find job postings for a user.
@@ -205,47 +205,20 @@ type FormAnswer struct {
 	Answer   string `json:"answer"`
 }
 
-// ResumeReading is what the agent is given to read a resume.
-type ResumeReading struct {
+// ResumeImport is what the agent is given to write an uploaded resume
+// into the user's memory.
+type ResumeImport struct {
 	UserName string
 	Date     string // ISO date
-	// Resume is the resume's text, from its PDF.
-	Resume string
+	// Path is the resume's PDF, relative to the user's workspace.
+	Path string
 }
 
-// ExtractResumePrompt is the turn text that has the agent list the facts
-// of a resume for the user's Person note; run it with ToolsNone and
-// OutputSchema ExtractResumeSchema.
-func ExtractResumePrompt(r ResumeReading) (string, error) {
-	return execute(extractResumePrompt, r)
-}
-
-// ExtractResumeSchema is the structured output of reading a resume: its
-// facts, one Person observation each.
-const ExtractResumeSchema = `{
-  "type": "object",
-  "properties": {
-    "contact": {"type": "array", "items": {"type": "string"}},
-    "location": {"type": "array", "items": {"type": "string"}},
-    "experience": {"type": "array", "items": {"type": "string"}},
-    "education": {"type": "array", "items": {"type": "string"}},
-    "skill": {"type": "array", "items": {"type": "string"}},
-    "project": {"type": "array", "items": {"type": "string"}},
-    "publication": {"type": "array", "items": {"type": "string"}}
-  },
-  "required": ["contact", "location", "experience", "education", "skill", "project", "publication"],
-  "additionalProperties": false
-}`
-
-// ExtractedResume is the structured output of ExtractResumeSchema.
-type ExtractedResume struct {
-	Contact     []string `json:"contact"`
-	Location    []string `json:"location"`
-	Experience  []string `json:"experience"`
-	Education   []string `json:"education"`
-	Skill       []string `json:"skill"`
-	Project     []string `json:"project"`
-	Publication []string `json:"publication"`
+// ImportResumePrompt is the turn text that has the agent update the user's
+// own Person note from their uploaded resume; run it with ToolsWorkspace
+// and the user's memory: the file is the user's own.
+func ImportResumePrompt(r ResumeImport) (string, error) {
+	return execute(importResumePrompt, r)
 }
 
 func execute(t *template.Template, data any) (string, error) {

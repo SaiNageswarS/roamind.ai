@@ -274,12 +274,6 @@ func jobsSetup(t *testing.T) (Deps, *fakeWeb, JobHuntInput) {
 	berlin, _ := time.LoadLocation("Europe/Berlin")
 	now := time.Date(2026, 10, 17, 10, 0, 0, 0, berlin)
 	d.Web, d.Jobs, d.Location, d.Now = fw, atsServer(t), berlin, func() time.Time { return now }
-	// pdftotext prints the "PDF" as it is.
-	dir := t.TempDir()
-	d.PDFToText = filepath.Join(dir, "pdftotext")
-	if err := os.WriteFile(d.PDFToText, []byte("#!/bin/sh\ncat \"$4\"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	fw.resumes["resumes/u1/resume.pdf"] = "Sai Test, sai@x.com. " + strings.Repeat("Built and shipped ML systems in Go and JAX. ", 10)
 	fw.profiles["u1"] = web.Profile{Email: "Sai@X.com", Name: "Sai", ResumePath: "resumes/u1/resume.pdf",
 		Roles: []string{"ML Engineer", "Account Executive"}, Regions: []string{"Berlin", "New York"}}
@@ -295,7 +289,7 @@ func jobsSetup(t *testing.T) (Deps, *fakeWeb, JobHuntInput) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Memory = mem
+	d.Memory, d.Agent.Memory = mem, mem
 	p, err := d.assignProject(ctx, id)
 	if err != nil {
 		t.Fatal(err)

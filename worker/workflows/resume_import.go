@@ -1,14 +1,12 @@
 package workflows
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -17,32 +15,27 @@ import (
 
 	"roamind.ai/agent"
 	"roamind.ai/agent/protocol"
+	"roamind.ai/channels/slack"
 	"roamind.ai/channels/web"
-	"roamind.ai/memory/store/notes"
 )
 
 // ResumeImportName is the resume-import workflow, which writes a resume the
 // user uploaded in the web app into their memory, where the job assistant
 // and chat turns read it:
 //
-//	memory → read → extract → write
+//	memory → fetch → update
 //
 // memory sets up the user's Basic Memory project if they have none, as for
-// a web-only user; read reads the PDF as text; extract has the agent list
-// its facts; write merges them into the user's own Person note. A PDF with
-// no text, such as a scan, is reported to the web app by read, and the
-// tasks after it are skipped. The web app's listener starts it once per
-// upload.
+// a web-only user; fetch saves the PDF in their workspace's uploads, where
+// files they share in Slack go too; update is an agent turn with the
+// workspace tools and their memory, which reads it and updates their own
+// Person note by its schema, as a chat turn does with a CV shared in Slack.
+// The file is the user's own, so the turn gets tools, unlike third-party
+// text. The web app's listener starts it once per upload.
 const ResumeImportName = "resume-import"
 
-// maxResume is how much of a resume's text is kept.
-const maxResume = 30000
-
-// Reasons an import failed, for the user.
-const (
-	resumeScan   = "Couldn't read text from the PDF; it may be a scan. Upload one with selectable text."
-	resumeFailed = "Couldn't write your resume into your memory. Upload it again to retry."
-)
+// resumeFailed is why an import failed, for the user.
+const resumeFailed = "Couldn't write your resume into your memory. Upload it again to retry."
 
 // ResumeImportInput names the user and the upload, by its Storage
 // generation.
@@ -52,29 +45,20 @@ type ResumeImportInput struct {
 	Generation string `json:"generation"`
 }
 
-// importRead is read's result; Skip, always present for the later tasks'
-// skip condition, says why the resume can't be imported.
-type importRead struct {
-	Text string `json:"text"`
-	Skip string `json:"skip"`
+// importFetch is fetch's result.
+type importFetch struct {
+	Path string `json:"path"` // relative to the user's workspace
 }
 
-// importExtract is extract's result.
-type importExtract struct {
-	Resume  agent.ExtractedResume `json:"resume"`
-	CostUSD float64               `json:"cost_usd,omitempty"`
+// importUpdate is update's result.
+type importUpdate struct {
+	// Summary is the agent's account of what changed on the note.
+	Summary string  `json:"summary"`
+	CostUSD float64 `json:"cost_usd,omitempty"`
 }
-
-// importWrite is write's result.
-type importWrite struct {
-	Note string `json:"note"` // the Person note's title
-}
-
-// errScan is readResume's error for a PDF without a text layer.
-var errScan = errors.New("the resume has almost no text; it may be a scan")
 
 // ResumeImport declares the resume-import workflow. Runs are serialized per
-// user. When a task fails for good, the web app is told why.
+// user. When a task fails for good, the web app is told.
 func ResumeImport(c *hatchet.Client, d Deps) *hatchet.Workflow {
 	maxRuns := int32(1)
 	strategy := hatchet.GroupRoundRobin
@@ -92,54 +76,27 @@ func ResumeImport(c *hatchet.Client, d Deps) *hatchet.Workflow {
 		hatchet.WithRetries(2),
 		hatchet.WithExecutionTimeout(time.Minute),
 	)
-	read := wf.NewTask("read", func(ctx hatchet.Context, in ResumeImportInput) (importRead, error) {
-		gen, err := strconv.ParseInt(in.Generation, 10, 64)
-		if err != nil {
-			return importRead{}, fmt.Errorf("generation %q: %w", in.Generation, err)
-		}
-		p, err := d.Web.Profile(ctx, in.UID)
-		if err != nil || p == nil {
-			return importRead{}, fmt.Errorf("profile %s: %v", in.UID, err)
-		}
-		text, err := d.readResume(ctx, in.UserID, p.ResumePath, gen)
-		if errors.Is(err, errScan) {
-			return importRead{Skip: err.Error()}, d.Web.SetResumeImport(ctx, in.UID,
-				web.ResumeImport{Status: "failed", Reason: resumeScan, Generation: in.Generation, At: d.now()})
-		}
-		return importRead{Text: text}, err
+	fetch := wf.NewTask("fetch", func(ctx hatchet.Context, in ResumeImportInput) (importFetch, error) {
+		return d.fetchResume(ctx, in)
 	},
 		hatchet.WithParents(memory),
 		hatchet.WithRetries(2),
 		hatchet.WithExecutionTimeout(2*time.Minute),
 	)
-	extract := wf.NewTask("extract", func(ctx hatchet.Context, in ResumeImportInput) (importExtract, error) {
-		var r importRead
-		if err := ctx.ParentOutput(read, &r); err != nil {
-			return importExtract{}, err
-		}
-		return d.extractResume(ctx, in, r)
-	},
-		hatchet.WithParents(read),
-		hatchet.WithSkipIf(hatchet.ParentCondition(read, skipped)),
-		hatchet.WithRetries(1),
-		hatchet.WithExecutionTimeout(5*time.Minute),
-	)
-	wf.NewTask("write", func(ctx hatchet.Context, in ResumeImportInput) (importWrite, error) {
+	wf.NewTask("update", func(ctx hatchet.Context, in ResumeImportInput) (importUpdate, error) {
 		var p memoryProject
-		var e importExtract
+		var f importFetch
 		if err := ctx.ParentOutput(memory, &p); err != nil {
-			return importWrite{}, err
+			return importUpdate{}, err
 		}
-		if err := ctx.ParentOutput(extract, &e); err != nil {
-			return importWrite{}, err
+		if err := ctx.ParentOutput(fetch, &f); err != nil {
+			return importUpdate{}, err
 		}
-		return d.writeResume(ctx, in, p, e)
+		return d.updateSelf(ctx, in, p, f)
 	},
-		hatchet.WithParents(memory, read, extract),
-		hatchet.WithSkipIf(hatchet.ParentCondition(read, skipped)),
-		// The note is written whole, so a retry writes the same.
-		hatchet.WithRetries(2),
-		hatchet.WithExecutionTimeout(time.Minute),
+		hatchet.WithParents(memory, fetch),
+		hatchet.WithRetries(1),
+		hatchet.WithExecutionTimeout(10*time.Minute),
 	)
 	wf.OnFailure(func(ctx hatchet.Context, in ResumeImportInput) (struct{}, error) {
 		return struct{}{}, d.Web.SetResumeImport(ctx, in.UID, web.ResumeImport{Status: "failed", Reason: resumeFailed, Generation: in.Generation, At: d.now()})
@@ -160,100 +117,78 @@ func (d Deps) importMemory(ctx context.Context, in ResumeImportInput) (memoryPro
 	return d.setUpMemory(p)
 }
 
-// readResume returns the text of the given generation of the resume at
-// path, read with pdftotext once per upload and kept in the user's jobs
-// folder, apart from the chat workspace.
-func (d Deps) readResume(ctx context.Context, userID, path string, gen int64) (string, error) {
-	dir := filepath.Join(d.Agent.DataDir, "users", userID, "jobs")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	txt := filepath.Join(dir, "resume-"+strconv.FormatInt(gen, 10)+".txt")
-	if b, err := os.ReadFile(txt); err == nil {
-		return string(b), nil
-	}
-	pdf, err := os.CreateTemp(dir, "resume-*.pdf")
+// fetchResume saves the upload in the user's workspace, as
+// uploads/resume-<generation>.pdf, once.
+func (d Deps) fetchResume(ctx context.Context, in ResumeImportInput) (importFetch, error) {
+	gen, err := strconv.ParseInt(in.Generation, 10, 64)
 	if err != nil {
-		return "", err
+		return importFetch{}, fmt.Errorf("generation %q: %w", in.Generation, err)
 	}
-	defer os.Remove(pdf.Name())
-	err = d.Web.DownloadResume(ctx, path, gen, pdf)
-	if cerr := pdf.Close(); err == nil {
+	rel := filepath.Join(slack.UploadsDir, "resume-"+in.Generation+".pdf")
+	ws, err := agent.WorkspaceDir(d.Agent, in.UserID)
+	if err != nil {
+		return importFetch{}, err
+	}
+	path := filepath.Join(ws, rel)
+	if _, err := os.Stat(path); err == nil {
+		return importFetch{Path: rel}, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return importFetch{}, err
+	}
+	p, err := d.Web.Profile(ctx, in.UID)
+	if err != nil || p == nil {
+		return importFetch{}, fmt.Errorf("profile %s: %v", in.UID, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return importFetch{}, err
+	}
+	// Written whole under a temporary name, so a failed download leaves
+	// nothing a retry would take for the file.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".resume-*")
+	if err != nil {
+		return importFetch{}, err
+	}
+	defer os.Remove(tmp.Name())
+	err = d.Web.DownloadResume(ctx, p.ResumePath, gen, tmp)
+	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
-		return "", err
+		return importFetch{}, err
 	}
-	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, orDefault(d.PDFToText, "pdftotext"), "-layout", "-enc", "UTF-8", pdf.Name(), "-")
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("pdftotext: %v: %s", err, stderr.String())
-	}
-	text := cutText(stdout.String(), maxResume)
-	if len(text) < 200 {
-		return "", errScan
-	}
-	return text, os.WriteFile(txt, []byte(text), 0o600)
+	return importFetch{Path: rel}, os.Rename(tmp.Name(), path)
 }
 
-// extractResume has the agent list the resume's facts, with no tools: a
-// resume is a document, read as text.
-func (d Deps) extractResume(ctx context.Context, in ResumeImportInput, r importRead) (importExtract, error) {
-	var out importExtract
+// updateSelf has the agent read the resume and update the user's own
+// Person note from it, then checks the note is there and tells the web app.
+func (d Deps) updateSelf(ctx context.Context, in ResumeImportInput, p memoryProject, f importFetch) (importUpdate, error) {
+	var out importUpdate
 	u, err := d.Store.UserByID(ctx, in.UserID)
 	if err != nil || u == nil {
 		return out, fmt.Errorf("user %s: %v", in.UserID, err)
 	}
 	name := orDefault(u.DisplayName, "the user")
-	prompt, err := agent.ExtractResumePrompt(agent.ResumeReading{UserName: name, Date: d.today(), Resume: r.Text})
+	prompt, err := agent.ImportResumePrompt(agent.ResumeImport{UserName: name, Date: d.today(), Path: f.Path})
 	if err != nil {
 		return out, err
 	}
 	turn, err := agent.RunTurn(ctx, d.Agent, protocol.TurnInput{
-		UserID: in.UserID, Text: prompt, UserName: name,
-		Tools: protocol.ToolsNone, OutputSchema: agent.ExtractResumeSchema,
+		UserID: in.UserID, Text: prompt, UserName: name, UserEmail: u.Email,
+		MemoryProject: p.Project, Tools: protocol.ToolsWorkspace,
 	}, func(protocol.Packet) {})
-	out.CostUSD = turn.CostUSD
+	out.Summary, out.CostUSD = turn.Text, turn.CostUSD
 	if err != nil {
 		return out, err
 	}
-	if err := json.Unmarshal(turn.Structured, &out.Resume); err != nil {
-		return out, fmt.Errorf("resume: %w", err)
-	}
-	if len(out.Resume.Experience) == 0 && len(out.Resume.Education) == 0 {
-		return out, fmt.Errorf("the resume lists no roles or education")
-	}
-	return out, nil
-}
-
-// writeResume merges the resume into the user's own Person note, creating
-// it for a user who has none, and tells the web app.
-func (d Deps) writeResume(ctx context.Context, in ResumeImportInput, p memoryProject, e importExtract) (importWrite, error) {
 	self, err := d.Memory.Self(p.Project)
 	if err != nil {
-		return importWrite{}, err
+		return out, err
 	}
-	title := ""
-	if self != nil {
-		title = self.Title
-	} else {
-		u, err := d.Store.UserByID(ctx, in.UserID)
-		if err != nil || u == nil {
-			return importWrite{}, fmt.Errorf("user %s: %v", in.UserID, err)
-		}
-		title = orDefault(u.DisplayName, u.Email)
+	if self == nil {
+		return out, errors.New("the turn left no Person note with relationship self")
 	}
-	r := e.Resume
-	note := notes.SelfNote(self, notes.Resume{
-		Contact: r.Contact, Location: r.Location, Experience: r.Experience, Education: r.Education,
-		Skill: r.Skill, Project: r.Project, Publication: r.Publication,
-	}, "stated, resume, "+d.today())
-	if err := d.Memory.WriteNote(ctx, p.Project, notes.SelfFolder, title, "person", note); err != nil {
-		return importWrite{}, err
-	}
-	slog.Info("resume imported", "user", in.UserID, "note", title)
-	return importWrite{Note: title}, d.Web.SetResumeImport(ctx, in.UID, web.ResumeImport{Status: "done", Generation: in.Generation, At: d.now()})
+	slog.Info("resume imported", "user", in.UserID, "note", self.Title)
+	return out, d.Web.SetResumeImport(ctx, in.UID, web.ResumeImport{Status: "done", Generation: in.Generation, At: d.now()})
 }
 
 // today is the local date, YYYY-MM-DD.

@@ -15,7 +15,7 @@ The two sides share no code. They share Firestore and Cloud Storage, laid out as
 
 | Path | Written by | What |
 |---|---|---|
-| `resumes/{uid}/resume.pdf` | web app | The user's resume, a PDF with a text layer (scans aren't read), at most 10 MB. Uploading a new one replaces it. The worker writes each upload into the user's memory once, within seconds; nothing reads the PDF after that. |
+| `resumes/{uid}/resume.pdf` | web app | The user's resume, a PDF with a text layer (scans aren't read), at most 10 MB. Uploading a new one replaces it. The worker saves each upload in the user's workspace and has the agent write it into their memory once, within seconds; scans are read too. Nothing reads the PDF after that. |
 
 ## Firestore
 

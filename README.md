@@ -34,10 +34,10 @@ Novelty is rated against other self-hosted personal agents:
 
   | Turn | Tools |
   |---|---|
-  | Chat, exercise drafting | Web, files and shell in the user's workspace, plus their memory |
+  | Chat, exercise drafting, importing an uploaded resume (the user's own files) | Web, files and shell in the user's workspace, plus their memory |
   | News ranking (reads third-party feed text) | **None**: no tools, no memory, a throwaway directory, no saved session |
   | Job search on the web | WebSearch and WebFetch only: no files, shell or memory; blocked domains are denied |
-  | Job ranking and tailoring (read posting text), reading an uploaded resume | **None**, as for news ranking |
+  | Job ranking and tailoring (read posting text) | **None**, as for news ranking |
 
 - **Sandboxed shell.** Bash runs in a bubblewrap sandbox that sees only the user's workspace: no home directory, other users, secrets or local ports. Nothing runs unsandboxed.
 - **Isolated users.** Each user has their own workspace, memory database and config. Memory and Roamind's MCP server are pinned to the turn's user.
@@ -123,7 +123,7 @@ task all vllm
 process-compose up            # runs task init, then the worker
 ```
 
-For the job assistant, also `pdftotext` (poppler-utils), then follow [docs/web.md](docs/web.md#setting-up-the-workers-side).
+For the job assistant, follow [docs/web.md](docs/web.md#setting-up-the-workers-side).
 
 Full steps, upgrades and running at boot: [docs/deployment.md](docs/deployment.md). Run `task` for every command.
 

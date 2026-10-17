@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"roamind.ai/agent"
 	"roamind.ai/channels/web"
 	"roamind.ai/memory/store"
 )
@@ -207,8 +208,8 @@ func TestQueueSlackLinks(t *testing.T) {
 	}
 }
 
-// A resume upload is imported into memory once, merged into the user's own
-// note.
+// A resume upload is imported into memory once, by a turn with the
+// workspace tools and the user's memory.
 func TestResumeImport(t *testing.T) {
 	ctx := context.Background()
 	d, fw, hunt := jobsSetup(t)
@@ -233,50 +234,39 @@ func TestResumeImport(t *testing.T) {
 	if err != nil || fw.imports["u1"].Status != "running" {
 		t.Fatalf("memory = %+v %v %+v", mp, err, fw.imports["u1"])
 	}
-	text, err := d.readResume(ctx, in.UserID, p.ResumePath, 7)
-	if err != nil || !strings.HasPrefix(text, "Sai Test") {
-		t.Fatalf("read = %q %v", text, err)
+	// The PDF lands in the workspace's uploads, as Slack files do, once.
+	f, err := d.fetchResume(ctx, in)
+	if err != nil || f.Path != "uploads/resume-7.pdf" {
+		t.Fatalf("fetch = %+v %v", f, err)
 	}
-	// Read once per upload.
-	os.Remove(d.PDFToText)
-	if again, err := d.readResume(ctx, in.UserID, p.ResumePath, 7); err != nil || again != text {
-		t.Fatalf("cached read = %v", err)
+	ws, _ := agent.WorkspaceDir(d.Agent, in.UserID)
+	if b, _ := os.ReadFile(filepath.Join(ws, f.Path)); !strings.HasPrefix(string(b), "Sai Test") {
+		t.Fatalf("saved resume = %q", b)
+	}
+	delete(fw.resumes, p.ResumePath)
+	if again, err := d.fetchResume(ctx, in); err != nil || again != f {
+		t.Fatalf("fetched again = %+v %v", again, err)
 	}
 
-	bin, argsLog := fakeClaudeWith(t, "testdata/extract_resume.jsonl")
+	bin, argsLog := fakeClaudeWith(t, "testdata/import_resume.jsonl")
 	d.Agent.ClaudeBinary = bin
-	ex, err := d.extractResume(ctx, in, importRead{Text: text})
-	if err != nil || len(ex.Resume.Experience) != 2 {
-		t.Fatalf("extract = %+v %v", ex, err)
+	up, err := d.updateSelf(ctx, in, mp, f)
+	if err != nil || !strings.HasPrefix(up.Summary, "Updated your note") {
+		t.Fatalf("update = %+v %v", up, err)
 	}
-	if args, _ := os.ReadFile(argsLog); !strings.Contains(string(args), "--tools  ") {
-		t.Fatalf("extract args: %s", args)
+	args, _ := os.ReadFile(argsLog)
+	if !strings.Contains(string(args), "--mcp-config") || !strings.Contains(string(args), "bm-u-sai-1") || strings.Contains(string(args), "--tools  ") {
+		t.Fatalf("update args: %s", args)
 	}
-	if _, err := d.writeResume(ctx, in, mp, ex); err != nil {
-		t.Fatal(err)
-	}
-	self, err := d.Memory.Self(mp.Project)
-	if err != nil || self == nil {
-		t.Fatalf("self = %+v %v", self, err)
-	}
-	for _, want := range []string{
-		"- [contact] sai@x.com (stated, slack, 2026-10-11)",
-		"- [contact] +49 151 0000 (stated, resume, 2026-10-17)",
-		"- [experience] ML Engineer, Acme, 2020-01 to present: ML systems in Go and JAX (stated, resume, 2026-10-17)",
-	} {
-		if !strings.Contains(self.Body, want) {
-			t.Fatalf("self note lacks %q:\n%s", want, self.Body)
-		}
-	}
-	// The resume's roles replace the note's; its permalink stays.
-	if strings.Contains(self.Body, "built and shipped") || self.Permalink != "people/sai-test" {
-		t.Fatalf("self note =\n%s", self.Body)
+	if stdin := readStdin(t, argsLog); !strings.Contains(stdin, "uploads/resume-7.pdf") || !strings.Contains(stdin, "(stated, resume, 2026-10-17)") {
+		t.Fatalf("update prompt: %s", stdin)
 	}
 	if fw.imports["u1"] != (web.ResumeImport{Status: "done", Generation: "7", At: d.now()}) {
 		t.Fatalf("import = %+v", fw.imports["u1"])
 	}
 
-	// A web-only user gets a memory project and a note of their own.
+	// A web-only user gets a memory project; a turn that leaves them no
+	// note of their own fails.
 	fw.profiles["u2"] = web.Profile{Email: "new@x.com", Name: "New Person", ResumePath: "resumes/u2/resume.pdf", ResumeGeneration: "1"}
 	newUser := fw.profiles["u2"]
 	newUser.UID = "u2"
@@ -286,13 +276,10 @@ func TestResumeImport(t *testing.T) {
 		t.Fatalf("new user started = %+v", started)
 	}
 	mp2, err := d.importMemory(ctx, started[0])
-	if err != nil || mp2.Project == "" || mp2.Project == mp.Project {
+	if err != nil || mp2.Project == "" || mp2.Project == mp.Project || !d.Memory.Ready(mp2.Project) {
 		t.Fatalf("new user memory = %+v %v", mp2, err)
 	}
-	if _, err := d.writeResume(ctx, started[0], mp2, ex); err != nil {
-		t.Fatal(err)
-	}
-	if self, _ := d.Memory.Self(mp2.Project); self == nil || !strings.Contains(self.Body, "ML Engineer, Acme") {
-		t.Fatalf("new user's note = %+v", self)
+	if _, err := d.updateSelf(ctx, started[0], mp2, importFetch{Path: "uploads/resume-1.pdf"}); err == nil {
+		t.Fatal("no note, yet done")
 	}
 }

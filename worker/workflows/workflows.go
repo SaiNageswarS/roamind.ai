@@ -15,7 +15,7 @@
 //   - job-hunt: check-skip → resume, find → pick → spawn.
 //   - job-links: resume → pick → spawn, for the postings a user linked to,
 //     started by the web app's listener (web_listen.go).
-//   - resume-import: memory → read → extract → write, writing a resume
+//   - resume-import: memory → fetch → update, writing a resume
 //     uploaded in the web app into the user's memory, also started by the
 //     listener.
 //   - job-application: check-skip → tailor → publish, per posting.
@@ -86,9 +86,6 @@ type Deps struct {
 	Jobs *jobs.Client
 	// JobsPerRun caps the postings a job hunt picks; 0 means JobsPerRun.
 	JobsPerRun int
-	// PDFToText is the pdftotext command that reads uploaded resumes;
-	// empty means pdftotext on the PATH.
-	PDFToText string
 	// Location is the timezone of the daily exercises, news shorts and job
 	// searches.
 	Location *time.Location

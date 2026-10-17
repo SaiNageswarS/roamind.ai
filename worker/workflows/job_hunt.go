@@ -44,6 +44,8 @@ const (
 	// maxCandidates how many new ones are read and judged.
 	maxFound      = 15
 	maxCandidates = 20
+	// maxResume is how much of a resume note is given to a turn.
+	maxResume = 30000
 	// stalePick is how long a picked posting may wait for its application
 	// before it counts as failed.
 	stalePick = 12 * time.Hour
