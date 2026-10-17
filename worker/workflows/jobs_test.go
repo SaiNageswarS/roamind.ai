@@ -148,7 +148,22 @@ func (f *fakeWeb) SetResumeImport(_ context.Context, uid string, r web.ResumeImp
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.imports[uid] = r
+	p := f.profiles[uid]
+	p.ResumeImport = &r
+	f.profiles[uid] = p
 	return nil
+}
+
+// The fake's generation of a resume is its length, as ResumeVersion says.
+func (f *fakeWeb) DeleteResume(_ context.Context, path string, generation int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.resumes[path]
+	if !ok || int64(len(r)) != generation {
+		return false, nil
+	}
+	delete(f.resumes, path)
+	return true, nil
 }
 
 // The listeners aren't exercised here: tests call their handlers.

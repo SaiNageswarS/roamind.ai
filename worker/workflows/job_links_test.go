@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -208,24 +209,34 @@ func TestQueueSlackLinks(t *testing.T) {
 	}
 }
 
-// A resume upload is imported into memory once, by a turn with the
-// workspace tools and the user's memory.
+// A resume upload is imported into memory once, by the turn the user would
+// have sharing it in Slack, and then deleted.
 func TestResumeImport(t *testing.T) {
 	ctx := context.Background()
 	d, fw, hunt := jobsSetup(t)
+	const path = "resumes/u1/resume.pdf"
+	gen := strconv.Itoa(len(fw.resumes[path])) // the fake's generation
 	p := fw.profiles["u1"]
-	p.ResumeGeneration = "7"
+	p.ResumeGeneration = gen
+	fw.profiles["u1"] = p
 	var started []ResumeImportInput
 	start := func(in ResumeImportInput) error {
 		started = append(started, in)
 		return nil
 	}
+	profile := func(uid string) web.Profile {
+		p := fw.profiles[uid]
+		p.UID = uid
+		return p
+	}
 	d.onProfile(ctx, web.Profile{Name: "No email"}, start)
-	p.UID = "u1"
-	d.onProfile(ctx, p, start)
-	// The run's own status writes change the profile again: no second run.
-	d.onProfile(ctx, p, start)
-	if len(started) != 1 || started[0] != (ResumeImportInput{UserID: hunt.UserID, UID: "u1", Generation: "7"}) {
+	d.onProfile(ctx, profile("u1"), start)
+	if fw.imports["u1"].Status != "queued" {
+		t.Fatalf("import = %+v", fw.imports["u1"])
+	}
+	// The snapshot of its own queued write starts no second run.
+	d.onProfile(ctx, profile("u1"), start)
+	if len(started) != 1 || started[0] != (ResumeImportInput{UserID: hunt.UserID, UID: "u1", Generation: gen}) {
 		t.Fatalf("started = %+v", started)
 	}
 	in := started[0]
@@ -236,14 +247,13 @@ func TestResumeImport(t *testing.T) {
 	}
 	// The PDF lands in the workspace's uploads, as Slack files do, once.
 	f, err := d.fetchResume(ctx, in)
-	if err != nil || f.Path != "uploads/resume-7.pdf" {
+	if err != nil || f.Path != "uploads/resume-"+gen+".pdf" {
 		t.Fatalf("fetch = %+v %v", f, err)
 	}
 	ws, _ := agent.WorkspaceDir(d.Agent, in.UserID)
 	if b, _ := os.ReadFile(filepath.Join(ws, f.Path)); !strings.HasPrefix(string(b), "Sai Test") {
 		t.Fatalf("saved resume = %q", b)
 	}
-	delete(fw.resumes, p.ResumePath)
 	if again, err := d.fetchResume(ctx, in); err != nil || again != f {
 		t.Fatalf("fetched again = %+v %v", again, err)
 	}
@@ -251,27 +261,44 @@ func TestResumeImport(t *testing.T) {
 	bin, argsLog := fakeClaudeWith(t, "testdata/import_resume.jsonl")
 	d.Agent.ClaudeBinary = bin
 	up, err := d.updateSelf(ctx, in, mp, f)
-	if err != nil || !strings.HasPrefix(up.Summary, "Updated your note") {
+	if err != nil || !strings.HasPrefix(up.Reply, "Updated your note") || !up.Deleted {
 		t.Fatalf("update = %+v %v", up, err)
 	}
 	args, _ := os.ReadFile(argsLog)
-	if !strings.Contains(string(args), "--mcp-config") || !strings.Contains(string(args), "bm-u-sai-1") || strings.Contains(string(args), "--tools  ") {
+	if !strings.Contains(string(args), "--mcp-config") || !strings.Contains(string(args), "bm-u-sai-1") ||
+		!strings.Contains(string(args), "here through the job assistant's web app") || !strings.Contains(string(args), "({how}, web, ") {
 		t.Fatalf("update args: %s", args)
 	}
-	if stdin := readStdin(t, argsLog); !strings.Contains(stdin, "uploads/resume-7.pdf") || !strings.Contains(stdin, "(stated, resume, 2026-10-17)") {
-		t.Fatalf("update prompt: %s", stdin)
+	stdin := readStdin(t, argsLog)
+	if !strings.HasPrefix(stdin, importMessage) || !strings.Contains(stdin, "- uploads/resume-"+gen+".pdf (application/pdf") {
+		t.Fatalf("update message: %s", stdin)
 	}
-	if fw.imports["u1"] != (web.ResumeImport{Status: "done", Generation: "7", At: d.now()}) {
+	if fw.imports["u1"] != (web.ResumeImport{Status: "done", Generation: gen, At: d.now()}) {
 		t.Fatalf("import = %+v", fw.imports["u1"])
+	}
+	if _, ok := fw.resumes[path]; ok {
+		t.Fatal("the imported upload is still there")
+	}
+	// Done, the profile's next snapshots start nothing.
+	if d.onProfile(ctx, profile("u1"), start); len(started) != 1 {
+		t.Fatalf("started again = %+v", started)
+	}
+
+	// An upload replaced during an import isn't deleted with it.
+	fw.resumes[path] = "a newer resume, longer than the first one was, so another generation"
+	if d.deleteUpload(ctx, in) {
+		t.Fatal("deleted a newer upload")
+	}
+	if _, ok := fw.resumes[path]; !ok {
+		t.Fatal("the newer upload is gone")
 	}
 
 	// A web-only user gets a memory project; a turn that leaves them no
 	// note of their own fails.
-	fw.profiles["u2"] = web.Profile{Email: "new@x.com", Name: "New Person", ResumePath: "resumes/u2/resume.pdf", ResumeGeneration: "1"}
-	newUser := fw.profiles["u2"]
-	newUser.UID = "u2"
+	fw.resumes["resumes/u2/resume.pdf"] = "New Person's resume"
+	fw.profiles["u2"] = web.Profile{Email: "new@x.com", Name: "New Person", ResumePath: "resumes/u2/resume.pdf", ResumeGeneration: "19"}
 	started = nil
-	d.onProfile(ctx, newUser, start)
+	d.onProfile(ctx, profile("u2"), start)
 	if len(started) != 1 {
 		t.Fatalf("new user started = %+v", started)
 	}
@@ -279,7 +306,14 @@ func TestResumeImport(t *testing.T) {
 	if err != nil || mp2.Project == "" || mp2.Project == mp.Project || !d.Memory.Ready(mp2.Project) {
 		t.Fatalf("new user memory = %+v %v", mp2, err)
 	}
-	if _, err := d.updateSelf(ctx, started[0], mp2, importFetch{Path: "uploads/resume-1.pdf"}); err == nil {
+	f2, err := d.fetchResume(ctx, started[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.updateSelf(ctx, started[0], mp2, f2); err == nil {
 		t.Fatal("no note, yet done")
+	}
+	if _, ok := fw.resumes["resumes/u2/resume.pdf"]; !ok {
+		t.Fatal("a failed import's upload was deleted")
 	}
 }

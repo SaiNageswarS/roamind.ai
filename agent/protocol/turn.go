@@ -13,6 +13,9 @@ type TurnInput struct {
 	// UserEmail is the user's verified email (their identity), shown to the
 	// model as theirs.
 	UserEmail string `json:"user_email,omitempty"`
+	// Channel is where the user's message comes from, ChannelSlack (the
+	// zero value) or ChannelWeb; memory records it as the evidence's source.
+	Channel string `json:"channel,omitempty"`
 	// MemoryProject is the user's Basic Memory project; empty runs the turn
 	// without memory.
 	MemoryProject string `json:"memory_project,omitempty"`
@@ -36,6 +39,12 @@ type TurnInput struct {
 type ExerciseRef struct {
 	Permalink string `json:"permalink"`
 }
+
+// Channels for TurnInput.Channel.
+const (
+	ChannelSlack = ""
+	ChannelWeb   = "web"
+)
 
 // Tool sets for TurnInput.Tools.
 const (

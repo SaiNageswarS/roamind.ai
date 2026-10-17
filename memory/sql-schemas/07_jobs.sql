@@ -34,10 +34,3 @@ CREATE TABLE IF NOT EXISTS job_link_requests (
     requested_at INTEGER NOT NULL,
     PRIMARY KEY (user_id, url)
 );
--- The resume upload, by Storage generation, last written into each user's
--- memory. Recorded when its import starts, so an upload is imported once.
-CREATE TABLE IF NOT EXISTS resume_imports (
-    user_id    TEXT PRIMARY KEY REFERENCES users(id),
-    generation TEXT NOT NULL,
-    started_at INTEGER NOT NULL
-);

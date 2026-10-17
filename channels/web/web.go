@@ -11,11 +11,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"slices"
 	"time"
 
 	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/storage"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iterator"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -38,6 +40,9 @@ type Profile struct {
 	Regions          []string  `firestore:"regions"`
 	Paused           bool      `firestore:"paused"`
 	UpdatedAt        time.Time `firestore:"updated_at"`
+	// ResumeImport is the worker's: how writing the latest upload into the
+	// user's memory went; nil before the first.
+	ResumeImport *ResumeImport `firestore:"resume_import"`
 }
 
 // Application is the job assistant's work for one posting, in
@@ -99,9 +104,10 @@ const (
 )
 
 // ResumeImport is the state of writing the user's latest resume upload
-// into their memory, shown in the web app.
+// into their memory, shown in the web app. Once it is done, the upload is
+// deleted: memory holds the resume.
 type ResumeImport struct {
-	Status     string    `firestore:"status"` // running, done or failed
+	Status     string    `firestore:"status"` // queued, running, done or failed
 	Reason     string    `firestore:"reason"`
 	Generation string    `firestore:"generation"`
 	At         time.Time `firestore:"at"`
@@ -223,6 +229,21 @@ func (c *Client) DownloadResume(ctx context.Context, path string, generation int
 	defer r.Close()
 	_, err = io.Copy(w, io.LimitReader(r, MaxResume))
 	return err
+}
+
+// DeleteResume deletes the resume at path if it is still the given
+// generation; ok is false when a newer upload has replaced it, or it is
+// gone.
+func (c *Client) DeleteResume(ctx context.Context, path string, generation int64) (bool, error) {
+	err := c.bucket.Object(path).If(storage.Conditions{GenerationMatch: generation}).Delete(ctx)
+	var gerr *googleapi.Error
+	switch {
+	case errors.Is(err, storage.ErrObjectNotExist):
+		return false, nil
+	case errors.As(err, &gerr) && gerr.Code == http.StatusPreconditionFailed:
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func (c *Client) applications(uid string) *firestore.CollectionRef {

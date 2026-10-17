@@ -3,7 +3,6 @@ package workflows
 import (
 	"context"
 	"log/slog"
-	"strconv"
 	"time"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
@@ -54,9 +53,10 @@ func (d Deps) keepListening(ctx context.Context, what string, listen func() erro
 }
 
 // onProfile brings the profile's owner in as a user and, for a resume
-// upload not imported yet, starts a resume-import run. The upload is
-// recorded first, so the snapshots that the run's own status writes cause
-// don't start it again.
+// upload not imported yet, starts a resume-import run. An upload is
+// imported once resume_import has its generation: the listener marks it
+// queued first, so the snapshots that follow don't start it again, and a
+// failed one waits for a new upload.
 func (d Deps) onProfile(ctx context.Context, p web.Profile, start func(ResumeImportInput) error) {
 	email := identity.NormalizeEmail(p.Email)
 	if email == "" {
@@ -68,29 +68,18 @@ func (d Deps) onProfile(ctx context.Context, p web.Profile, start func(ResumeImp
 		log.Error("profile not brought in", "err", err)
 		return
 	}
-	if p.ResumePath == "" {
+	gen := p.ResumeGeneration
+	if p.ResumePath == "" || gen == "" || (p.ResumeImport != nil && p.ResumeImport.Generation == gen) {
 		return
 	}
-	gen := p.ResumeGeneration
-	if gen == "" {
-		v, err := d.Web.ResumeVersion(ctx, p.ResumePath)
-		if err != nil {
-			log.Error("resume version", "err", err)
-			return
-		}
-		gen = strconv.FormatInt(v, 10)
-	}
-	ok, err := d.Store.StartResumeImport(ctx, id, gen)
-	if err != nil || !ok {
-		if err != nil {
-			log.Error("resume import not recorded", "err", err)
-		}
+	if err := d.Web.SetResumeImport(ctx, p.UID, web.ResumeImport{Status: "queued", Generation: gen, At: d.now()}); err != nil {
+		log.Error("resume import not queued", "err", err)
 		return
 	}
 	if err := start(ResumeImportInput{UserID: id, UID: p.UID, Generation: gen}); err != nil {
 		log.Error("resume-import not started", "err", err)
-		if err := d.Store.ForgetResumeImport(ctx, id, gen); err != nil {
-			log.Error("resume import not forgotten", "err", err)
+		if err := d.Web.SetResumeImport(ctx, p.UID, web.ResumeImport{Status: "failed", Reason: resumeFailed, Generation: gen, At: d.now()}); err != nil {
+			log.Error("resume import failure not recorded", "err", err)
 		}
 	}
 }

@@ -13,13 +13,10 @@ var (
 	rankJobsTmpl string
 	//go:embed prompts/tailor_application.md
 	tailorApplicationTmpl string
-	//go:embed prompts/import_resume.md
-	importResumeTmpl string
 
 	findJobsPrompt          = template.Must(template.New("find_jobs").Parse(findJobsTmpl))
 	rankJobsPrompt          = template.Must(template.New("rank_jobs").Parse(rankJobsTmpl))
 	tailorApplicationPrompt = template.Must(template.New("tailor_application").Parse(tailorApplicationTmpl))
-	importResumePrompt      = template.Must(template.New("import_resume").Parse(importResumeTmpl))
 )
 
 // JobSearch is what the agent is given to find job postings for a user.
@@ -203,22 +200,6 @@ type FormAnswer struct {
 	Question string `json:"question"`
 	Required bool   `json:"required"`
 	Answer   string `json:"answer"`
-}
-
-// ResumeImport is what the agent is given to write an uploaded resume
-// into the user's memory.
-type ResumeImport struct {
-	UserName string
-	Date     string // ISO date
-	// Path is the resume's PDF, relative to the user's workspace.
-	Path string
-}
-
-// ImportResumePrompt is the turn text that has the agent update the user's
-// own Person note from their uploaded resume; run it with ToolsWorkspace
-// and the user's memory: the file is the user's own.
-func ImportResumePrompt(r ResumeImport) (string, error) {
-	return execute(importResumePrompt, r)
 }
 
 func execute(t *template.Template, data any) (string, error) {

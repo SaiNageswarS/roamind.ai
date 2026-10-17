@@ -54,6 +54,7 @@ type WebAPI interface {
 	Profile(ctx context.Context, uid string) (*web.Profile, error)
 	ResumeVersion(ctx context.Context, path string) (int64, error)
 	DownloadResume(ctx context.Context, path string, generation int64, w io.Writer) error
+	DeleteResume(ctx context.Context, path string, generation int64) (bool, error)
 	SaveApplication(ctx context.Context, uid, id string, a web.Application) error
 	ApplicationStatuses(ctx context.Context, uid string, ids []string) (map[string]string, error)
 	SetSearch(ctx context.Context, uid string, s web.Search) error

@@ -309,25 +309,3 @@ func (s *Store) TakeLinkRequests(ctx context.Context, userID string) ([]string, 
 	}
 	return out, nil
 }
-
-// StartResumeImport records that the user's resume of the given Storage
-// generation is being written into their memory; ok is false when it was
-// already.
-func (s *Store) StartResumeImport(ctx context.Context, userID, generation string) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO resume_imports (user_id, generation, started_at) VALUES (?, ?, ?)
-		ON CONFLICT (user_id) DO UPDATE SET generation = excluded.generation, started_at = excluded.started_at
-		WHERE resume_imports.generation != excluded.generation`, userID, generation, time.Now().Unix())
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	return n == 1, err
-}
-
-// ForgetResumeImport undoes StartResumeImport for a run that could not be
-// started, so the upload is imported later.
-func (s *Store) ForgetResumeImport(ctx context.Context, userID, generation string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM resume_imports WHERE user_id = ? AND generation = ?`, userID, generation)
-	return err
-}

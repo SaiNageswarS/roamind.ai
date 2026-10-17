@@ -197,19 +197,4 @@ func TestWebProfilesAndRequests(t *testing.T) {
 		t.Fatalf("b's = %v", got)
 	}
 
-	// An upload is imported once; a new one again.
-	for _, c := range []struct {
-		gen  string
-		want bool
-	}{{"1", true}, {"1", false}, {"2", true}, {"2", false}} {
-		if ok, err := s.StartResumeImport(ctx, "a", c.gen); err != nil || ok != c.want {
-			t.Fatalf("start %s = %v %v", c.gen, ok, err)
-		}
-	}
-	if err := s.ForgetResumeImport(ctx, "a", "2"); err != nil {
-		t.Fatal(err)
-	}
-	if ok, _ := s.StartResumeImport(ctx, "a", "2"); !ok {
-		t.Fatal("forgotten import not started again")
-	}
 }

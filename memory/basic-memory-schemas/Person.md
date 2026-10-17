@@ -23,7 +23,11 @@ exactly one such note). Save in folder people/ with note_type person.
 
 Experience, education, skill, project, publication and interest capture
 someone's career and research; on the user's own note they are their
-resume, which the job assistant writes applications from.
+resume, which the job assistant writes applications from. A resume or CV
+they share is the latest word on their career: where it lists roles,
+education, skills, projects or publications, those replace the note's;
+contact details and locations it gives are added to the note's; every
+other line stays.
 Each role or degree is one line in the format given by its field, so its
 parts stay together; the current role ends with "to present".
 

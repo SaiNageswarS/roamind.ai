@@ -15,7 +15,7 @@ The two sides share no code. They share Firestore and Cloud Storage, laid out as
 
 | Path | Written by | What |
 |---|---|---|
-| `resumes/{uid}/resume.pdf` | web app | The user's resume, a PDF with a text layer (scans aren't read), at most 10 MB. Uploading a new one replaces it. The worker saves each upload in the user's workspace and has the agent write it into their memory once, within seconds; scans are read too. Nothing reads the PDF after that. |
+| `resumes/{uid}/resume.pdf` | web app; deleted by the worker | The user's resume, a PDF of at most 10 MB; scans are read too. Uploading a new one replaces it. Within seconds the worker saves it in the user's workspace and has the agent write it into their memory, then deletes it here: memory holds the resume. An upload whose import failed stays until the user replaces it. |
 
 ## Firestore
 
@@ -35,7 +35,7 @@ Written by the web app, except `search` and `resume_import`, which only the work
 | `paused` | bool | Stops the daily search. |
 | `updated_at` | timestamp | When the user last saved the profile. |
 | `search` | map | The latest search, for the web app to show: `status` (`running`, `done`, `skipped` or `failed`), `reason` (shown to the user), `found` (applications written) and `last_run_at`. |
-| `resume_import` | map | Writing the latest upload into memory: `status` (`running`, `done` or `failed`), `reason` (shown to the user), `generation` and `at`. |
+| `resume_import` | map | Writing the latest upload into memory: `status` (`queued`, `running`, `done` or `failed`), `reason` (shown to the user), `generation` and `at`. An upload whose generation is here is never imported again. |
 
 ### `profiles/{uid}/applications/{id}`
 
