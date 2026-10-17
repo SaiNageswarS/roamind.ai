@@ -40,6 +40,9 @@ type Config struct {
 	// turn appends --user <id>. Chat turns get it, structured-output turns
 	// don't.
 	ToolsServer []string
+	// BlockedDomains are domains, with their subdomains, that ToolsWeb
+	// turns never fetch.
+	BlockedDomains []string
 }
 
 // Emit receives packets as the turn progresses.
@@ -102,7 +105,7 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, emit Emit) 
 	case protocol.ToolsWorkspace:
 		opts.Tools, opts.Settings, opts.AllowedTools = workspaceTools, workspaceSettings, allowedWorkspaceTools(dir)
 	case protocol.ToolsWeb:
-		opts.Tools, opts.Settings, opts.AllowedTools = webTools, webSettings, webTools
+		opts.Tools, opts.Settings, opts.AllowedTools = webTools, webSettings(cfg.BlockedDomains), webTools
 	case protocol.ToolsNone:
 		opts.NoSessionPersistence = true
 	}

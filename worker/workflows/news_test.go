@@ -16,9 +16,9 @@ import (
 	"github.com/google/cel-go/cel"
 
 	"roamind.ai/agent"
-	"roamind.ai/channels/feeds"
 	"roamind.ai/channels/identity"
 	"roamind.ai/channels/slack"
+	"roamind.ai/connectors/feeds"
 	"roamind.ai/memory/store"
 	"roamind.ai/memory/store/notes"
 	"roamind.ai/memory/store/storetest"

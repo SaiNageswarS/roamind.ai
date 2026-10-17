@@ -7,6 +7,7 @@ require (
 	github.com/slack-go/slack v0.30.1
 	roamind.ai/agent v0.0.0
 	roamind.ai/channels v0.0.0
+	roamind.ai/connectors v0.0.0
 	roamind.ai/memory v0.0.0
 )
 
@@ -107,5 +108,7 @@ require (
 replace roamind.ai/agent => ../agent
 
 replace roamind.ai/channels => ../channels
+
+replace roamind.ai/connectors => ../connectors
 
 replace roamind.ai/memory => ../memory

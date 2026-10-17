@@ -14,7 +14,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"roamind.ai/channels/feeds"
+	"roamind.ai/connectors/feeds"
 	"roamind.ai/memory/store"
 )
 

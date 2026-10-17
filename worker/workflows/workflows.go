@@ -10,18 +10,25 @@
 //   - news-shorts: once a day, a news-digest run per user.
 //   - news-digest: check-skip → build-context → draft-digest → post.
 //   - news-reaction: reactions to digests, as feedback.
+//   - job-search: every quarter-hour, a job-hunt run per web user whose
+//     daily time has come.
+//   - job-hunt: check-skip → resume, find → pick → spawn.
+//   - job-application: check-skip → tailor → publish, per posting.
 package workflows
 
 import (
 	"context"
+	"io"
 	"time"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 	slackapi "github.com/slack-go/slack"
 
 	"roamind.ai/agent"
-	"roamind.ai/channels/feeds"
 	"roamind.ai/channels/slack"
+	"roamind.ai/channels/web"
+	"roamind.ai/connectors/feeds"
+	"roamind.ai/connectors/jobs"
 	"roamind.ai/memory/store"
 	"roamind.ai/memory/store/notes"
 )
@@ -33,6 +40,17 @@ type SlackAPI interface {
 	GetUserInfoContext(ctx context.Context, user string, options ...slackapi.GetUserInfoOption) (*slackapi.User, error)
 	CreateConversationContext(ctx context.Context, params slackapi.CreateConversationParams) (*slackapi.Channel, error)
 	InviteUsersToConversationContext(ctx context.Context, channelID string, users ...string) (*slackapi.Channel, error)
+}
+
+// WebAPI is the web app's data the job assistant needs (web.Client).
+type WebAPI interface {
+	Profiles(ctx context.Context) ([]web.Profile, error)
+	Profile(ctx context.Context, uid string) (*web.Profile, error)
+	ResumeVersion(ctx context.Context, path string) (int64, error)
+	DownloadResume(ctx context.Context, path string, generation int64, w io.Writer) error
+	SaveApplication(ctx context.Context, uid, id string, a web.Application) error
+	ApplicationStatuses(ctx context.Context, uid string, ids []string) (map[string]string, error)
+	SetSearch(ctx context.Context, uid string, s web.Search) error
 }
 
 // Deps are the long-lived dependencies of the workflows.
@@ -47,7 +65,18 @@ type Deps struct {
 	Memory *notes.Notes
 	// Feeds reads the feeds of news interests.
 	Feeds *feeds.Client
-	// Location is the timezone of the daily exercises and news shorts.
+	// Web is the job assistant's web app; without it there is no job
+	// assistant.
+	Web WebAPI
+	// Jobs reads job postings from their sites.
+	Jobs *jobs.Client
+	// JobsPerRun caps the postings a job hunt picks; 0 means JobsPerRun.
+	JobsPerRun int
+	// PDFToText is the pdftotext command that reads resumes; empty means
+	// pdftotext on the PATH.
+	PDFToText string
+	// Location is the timezone of the daily exercises, news shorts and job
+	// searches.
 	Location *time.Location
 	// Now defaults to time.Now.
 	Now func() time.Time
@@ -69,9 +98,15 @@ func (d Deps) now() time.Time {
 
 // Register declares every workflow on the client, for the worker.
 func Register(c *hatchet.Client, d Deps) []hatchet.WorkflowBase {
+	var wfs []hatchet.WorkflowBase
+	if d.Web != nil {
+		application := JobApplication(c, d)
+		hunt := JobHunt(c, d, application)
+		wfs = append(wfs, application, hunt, JobSearch(c, d, hunt))
+	}
 	goals := GoalChannels(c, d)
 	if d.Memory == nil {
-		return []hatchet.WorkflowBase{ChatTurn(c, d), goals}
+		return append(wfs, ChatTurn(c, d), goals)
 	}
 	setup := UserSetup(c, d)
 	d.SetupUser = func(ctx context.Context, userID string) error {
@@ -81,10 +116,10 @@ func Register(c *hatchet.Client, d Deps) []hatchet.WorkflowBase {
 	d.AfterTurn = goalChannelsTrigger(goals, d)
 	exercise := LearningExercise(c, d)
 	digest := NewsDigest(c, d)
-	return []hatchet.WorkflowBase{
+	return append(wfs,
 		ChatTurn(c, d), setup, goals, exercise, LearningExercises(c, d, exercise),
 		digest, NewsShorts(c, d, digest, setup), NewsReaction(c, d),
-	}
+	)
 }
 
 // topLevel makes the runs started with ctx top-level runs rather than

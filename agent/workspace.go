@@ -51,14 +51,23 @@ var workspaceSettings = mustJSON(map[string]any{
 	},
 })
 
-// webTools are the tools of a ToolsWeb turn, and webSettings allows
-// WebFetch on any domain; there is no Bash, so no sandbox.
-var (
-	webTools    = []string{"WebSearch", "WebFetch"}
-	webSettings = mustJSON(map[string]any{
-		"permissions": map[string]any{"allow": []string{"WebFetch(domain:*)"}},
+// webTools are the tools of a ToolsWeb turn; there is no Bash, so no
+// sandbox.
+var webTools = []string{"WebSearch", "WebFetch"}
+
+// webSettings allows WebFetch on any domain but the blocked ones and their
+// subdomains.
+func webSettings(blocked []string) string {
+	deny := []string{}
+	for _, d := range blocked {
+		if d = strings.TrimSpace(d); d != "" {
+			deny = append(deny, "WebFetch(domain:"+d+")", "WebFetch(domain:*."+d+")")
+		}
+	}
+	return mustJSON(map[string]any{
+		"permissions": map[string]any{"allow": []string{"WebFetch(domain:*)"}, "deny": deny},
 	})
-)
+}
 
 func mustJSON(v any) string {
 	b, err := json.Marshal(v)

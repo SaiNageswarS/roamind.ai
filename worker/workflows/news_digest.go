@@ -17,7 +17,7 @@ import (
 
 	"roamind.ai/agent"
 	"roamind.ai/agent/protocol"
-	"roamind.ai/channels/feeds"
+	"roamind.ai/connectors/feeds"
 	"roamind.ai/memory/store"
 )
 

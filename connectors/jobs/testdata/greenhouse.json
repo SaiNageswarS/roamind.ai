@@ -1,0 +1,157 @@
+{
+ "absolute_url": "https://job-boards.greenhouse.io/anthropic/jobs/4461450008",
+ "id": 4461450008,
+ "updated_at": "2026-08-21T21:32:54-04:00",
+ "title": "Account Executive, AI Native",
+ "company_name": "Anthropic",
+ "first_published": "2024-12-20T13:53:38-05:00",
+ "location": {
+  "name": "New York City, NY; San Francisco, CA | New York City, NY"
+ },
+ "content": "&lt;div class=&quot;content-intro&quot;&gt;&lt;h2&gt;&lt;strong&gt;About Anthropic&lt;/strong&gt;&lt;/h2&gt;\n&lt;p&gt;Anthropic’s mission is to create reliable, interpretable, and steerable AI systems. We want AI to be safe and beneficial for our users and for society as a whole. Our team is a quickly growing group of committed researchers, engineers, policy experts, and business leaders working together to build beneficial AI systems.&lt;/p&gt;&lt;/div&gt;&lt;div&gt;\n&lt;h2&gt;About the role&lt;/h2&gt;\n&lt;/div&gt;\n&lt;div&gt;As a AI Native Account Executive at Anthropic, you’ll drive adoption of safe, frontier AI by securing strategic deals with some of the fastest growing startups in the world. You’ll leverage your consultative sales expertise to propel revenue growth while becoming a trusted partner to customers, helping them embed and deploy AI while uncovering its full range of capabilities. In collaboration with GTM, product, and marketing teams, you’ll continuously refine our value proposition, sales methodology, and market positioning to ensure differentiated value across the landscape.&lt;/div&gt;\n&lt;div&gt;&amp;nbsp;&lt;/div&gt;\n&lt;div&gt;The ideal candidate will have a passion for developing new market segments, pinpointing high-potential opportunities, and executing strategies to capture them. By driving deployment of Anthropic&#39;s emerging products, you will help enterprises obtain new capabilities while also advancing the ethical development of AI.&lt;/div&gt;\n&lt;h2&gt;Responsibilities:&lt;/h2&gt;\n&lt;ul&gt;\n&lt;li&gt;Win new business and drive revenue for Anthropic. Find your way to the right people at prospective customers, educate them about LLMs, and help them succeed with Anthropic. You’ll own the full sales cycle, from first outbound to launch&lt;/li&gt;\n&lt;li&gt;Design and execute innovative sales strategies to meet and exceed revenue quotas. Analyze market landscapes, trends, and dynamics to translate high-level plans into targeted sales activities, partnerships, and campaigns&lt;/li&gt;\n&lt;li&gt;Spearhead market expansion by pinpointing new customer segments and use cases. Collaborate cross-functionally to differentiate our offerings and sustain a competitive edge&lt;/li&gt;\n&lt;li&gt;Inform product roadmaps and features by gathering customer feedback and conveying market needs. Provide insights that strengthen our value proposition and enhance the customer experience&lt;/li&gt;\n&lt;li&gt;Continuously refine the sales methodology by incorporating learnings into playbooks, templates, and best practices. Identify process improvements that optimize sales productivity and consistency&lt;/li&gt;\n&lt;/ul&gt;\n&lt;h2&gt;You may be a good fit if you have:&lt;/h2&gt;\n&lt;ul&gt;\n&lt;li&gt;4+ years of experience prospecting and closing startup leads, driving adoption of emerging technologies with a consultative, solutions-oriented sales approach&lt;/li&gt;\n&lt;li&gt;Familiarity working within complex sales cycles, selling to technical stakeholders, and securing strategic deals by understanding multifaceted technical requirements and crafting tailored solutions&lt;/li&gt;\n&lt;li&gt;Success as a strategic business advisor, deeply understanding the needs of startup founders and creating innovative solutions that align with their vision and help them succeed&lt;/li&gt;\n&lt;li&gt;Exposure to negotiating complex, customized commercial agreements with multiple stakeholders&lt;/li&gt;\n&lt;li&gt;Demonstrated history of exceeding quota by effectively qualifying and advancing opportunities in a fast-paced work environment&lt;/li&gt;\n&lt;li&gt;Excellent communication skills and the ability to present confidently and build connections across all customer levels, from ICs to C-level executives&lt;/li&gt;\n&lt;li&gt;A knack for bringing order to chaos and an enthusiastic “roll up your sleeves&#39;&#39; mentality. You are a true team player&lt;/li&gt;\n&lt;li&gt;Analytical approach to understanding customer needs combined with creative follow-up to advance opportunities&lt;/li&gt;\n&lt;li&gt;Passion for emerging technologies like AI, with interest in ensuring they are developed safely and responsibly&lt;/li&gt;\n&lt;li&gt;A strategic, analytical approach to assessing markets combined with creative, tactical execution to capture opportunities&lt;/li&gt;\n&lt;li&gt;A passion for and/or experience with advanced AI systems. You feel strongly about ensuring frontier AI systems are developed safely&lt;/li&gt;\n&lt;/ul&gt;\n&lt;p&gt;&lt;strong&gt;Deadline to apply:&amp;nbsp;&lt;/strong&gt;None. Applications will be reviewed on a rolling basis.&amp;nbsp;&lt;/p&gt;&lt;/div&gt;",
+ "questions": [
+  {
+   "description": null,
+   "label": "First Name",
+   "required": true,
+   "fields": [
+    {
+     "name": "first_name",
+     "type": "input_text",
+     "values": []
+    }
+   ]
+  },
+  {
+   "description": null,
+   "label": "Last Name",
+   "required": true,
+   "fields": [
+    {
+     "name": "last_name",
+     "type": "input_text",
+     "values": []
+    }
+   ]
+  },
+  {
+   "description": null,
+   "label": "Email",
+   "required": true,
+   "fields": [
+    {
+     "name": "email",
+     "type": "input_text",
+     "values": []
+    }
+   ]
+  },
+  {
+   "description": null,
+   "label": "Phone",
+   "required": true,
+   "fields": [
+    {
+     "name": "phone",
+     "type": "input_text",
+     "values": []
+    }
+   ]
+  },
+  {
+   "description": null,
+   "label": "Resume/CV",
+   "required": true,
+   "fields": [
+    {
+     "name": "resume",
+     "type": "input_file",
+     "values": []
+    },
+    {
+     "name": "resume_text",
+     "type": "textarea",
+     "values": []
+    }
+   ]
+  },
+  {
+   "description": "<p>Please ensure to provide <em>either</em> your website or Resume, we require at least one of the two.&nbsp;</p>",
+   "label": "Website",
+   "required": false,
+   "fields": [
+    {
+     "name": "question_8581812008",
+     "type": "input_text",
+     "values": []
+    }
+   ]
+  },
+  {
+   "description": null,
+   "label": "Are you currently located in SF/NYC or open to relocation, if not? ",
+   "required": true,
+   "fields": [
+    {
+     "name": "question_8590525008",
+     "type": "multi_value_single_select",
+     "values": [
+      {
+       "label": "Yes",
+       "value": 1
+      },
+      {
+       "label": "No",
+       "value": 0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "description": null,
+   "label": "Our Account Executive team is in office 4 days/week. Are you open to working in our office 4 days/week?",
+   "required": true,
+   "fields": [
+    {
+     "name": "question_8581804008",
+     "type": "multi_value_single_select",
+     "values": [
+      {
+       "label": "Yes",
+       "value": 1
+      },
+      {
+       "label": "No",
+       "value": 0
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "description": null,
+   "label": "Do you have experience selling API or technical products to engineering teams? If yes, please describe in a few sentences.",
+   "required": true,
+   "fields": [
+    {
+     "name": "question_10246878008",
+     "type": "textarea",
+     "values": []
+    }
+   ]
+  },
+  {
+   "description": "<p>Why do you want to work at Anthropic? (We value this response highly - great answers are often 200-400 words.)</p>",
+   "label": "Why Anthropic?",
+   "required": true,
+   "fields": [
+    {
+     "name": "question_8581808008",
+     "type": "textarea",
+     "values": []
+    }
+   ]
+  }
+ ]
+}

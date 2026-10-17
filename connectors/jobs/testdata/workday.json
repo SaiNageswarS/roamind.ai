@@ -1,0 +1,35 @@
+{
+ "jobPostingInfo": {
+  "id": "d9e6924a46c5102afa392443ed9d0000",
+  "title": "Principal Block and File Storage Software Engineer, Linux - DGX Cloud",
+  "jobDescription": "<p>We are looking for a 100% hands-on<span> </span><span>Storage Services Software engineer to join the block storage group. You will be a member of a team that builds the next-generation block storage capabilities and architects a proprietary distributed file system solution from its inception. You will work closely with a variety of teams and architects including the networking team, and external customers. You will take part in defining the software architecture and implementation of the most advanced storage services! Services that will need to meet extreme performance and scalability demands! We have crafted a team of extraordinary people stretching around the globe, whose mission is to push the frontiers of what is possible today and define the platform of tomorrow.</span></p><p></p><p><span>At NVIDIA, we work, think and learn as a team. We thrive in a deeply strong environment, and we&#39;re passionate about a culture that demands innovation and the highest standards. The rewards are sweet and include collaborating with some of the smartest people in the industry, an aggressive compensation plan that rewards top performers, and the opportunity to work on products that transf",
+  "location": "US, CA, Santa Clara",
+  "postedOn": "Posted Yesterday",
+  "startDate": "2026-10-16",
+  "timeType": "Full time",
+  "jobReqId": "JR2024421",
+  "jobPostingId": "Principal-Block-File-Storage-Software-Engineer--Linux---DGX-Cloud_JR2024421",
+  "jobPostingSiteId": "NVIDIAExternalCareerSite",
+  "country": {
+   "descriptor": "United States of America",
+   "id": "bc33aa3152ec42d4995f4791a106ed09"
+  },
+  "canApply": true,
+  "posted": true,
+  "includeResumeParsing": true,
+  "jobRequisitionLocation": {
+   "descriptor": "US, CA, Santa Clara",
+   "country": {
+    "descriptor": "United States of America",
+    "id": "bc33aa3152ec42d4995f4791a106ed09",
+    "alpha2Code": "US"
+   }
+  },
+  "externalUrl": "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/Principal-Block-File-Storage-Software-Engineer--Linux---DGX-Cloud_JR2024421",
+  "questionnaireId": "2f2764b3a82910064296831695150000"
+ },
+ "hiringOrganization": {
+  "name": "2100 NVIDIA USA",
+  "url": ""
+ }
+}

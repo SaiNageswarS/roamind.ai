@@ -58,3 +58,36 @@ func TestAssignMemoryProject(t *testing.T) {
 		t.Fatalf("user row project = %q", u.MemoryProject)
 	}
 }
+
+func TestWebUsers(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	if err := s.UpsertWebUser(ctx, User{ID: "w", Email: "w@x", DisplayName: "W"}); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := s.UserByID(ctx, "w"); u == nil || u.Channel != ChannelWeb {
+		t.Fatalf("web user = %+v", u)
+	}
+	// A Slack user who signs in on the web stays a Slack user.
+	if err := s.UpsertSlackUser(ctx, User{ID: "s", Email: "s@x", DisplayName: "S", SlackTeamID: "T", SlackUserID: "U1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertWebUser(ctx, User{ID: "s", Email: "s@x", DisplayName: "Web name"}); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := s.UserByID(ctx, "s"); u.Channel != ChannelSlack || u.DisplayName != "S" || u.SlackUserID != "U1" {
+		t.Fatalf("slack user = %+v", u)
+	}
+	// Only Slack users get Slack features.
+	us, err := s.Users(ctx)
+	if err != nil || len(us) != 1 || us[0].ID != "s" {
+		t.Fatalf("users = %+v, %v", us, err)
+	}
+	// A web user who joins Slack becomes a Slack user.
+	if err := s.UpsertSlackUser(ctx, User{ID: "w", Email: "w@x", DisplayName: "W", SlackTeamID: "T", SlackUserID: "U2"}); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := s.UserByID(ctx, "w"); u.Channel != ChannelSlack {
+		t.Fatalf("joined = %+v", u)
+	}
+}

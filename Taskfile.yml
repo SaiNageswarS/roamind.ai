@@ -8,7 +8,7 @@ dotenv: ['.env']
 set: [errexit, pipefail]
 
 vars:
-  MODULES: agent channels memory worker mcp
+  MODULES: agent channels connectors memory worker mcp
   WITH_HATCHET: deploy/bin/with-hatchet.sh
   HATCHET_VERSION: v0.110.22 # keep in step with the Go SDK in worker/go.mod
   CADDY_VERSION: v2.11.7
@@ -38,13 +38,13 @@ tasks:
 
   worker:
     desc: Build bin/worker
-    sources: ['agent/**/*.go', 'channels/**/*.go', 'memory/**/*.go', 'worker/**/*.go', '**/go.mod', '**/go.sum']
+    sources: ['agent/**/*.go', 'channels/**/*.go', 'connectors/**/*.go', 'memory/**/*.go', 'worker/**/*.go', '**/go.mod', '**/go.sum']
     generates: [bin/worker]
     cmds: [go build -o bin/worker ./worker/cmd/worker]
 
   mcp:
     desc: Build bin/mcp, the MCP server claude starts per chat turn
-    sources: ['agent/**/*.go', 'channels/**/*.go', 'memory/**/*.go', 'mcp/**/*.go', '**/go.mod', '**/go.sum']
+    sources: ['connectors/**/*.go', 'memory/**/*.go', 'mcp/**/*.go', '**/go.mod', '**/go.sum']
     generates: [bin/mcp]
     cmds: [go build -o bin/mcp ./mcp/cmd/mcp]
 

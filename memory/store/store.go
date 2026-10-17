@@ -8,6 +8,7 @@
 //	04_interests.sql  interests.go
 //	05_news.sql       news.go
 //	06_events.sql     events.go
+//	07_jobs.sql       jobs.go
 //
 // Conversation content itself lives only in claude's session files.
 package store

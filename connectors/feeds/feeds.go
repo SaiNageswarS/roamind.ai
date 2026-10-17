@@ -7,17 +7,15 @@ import (
 	"context"
 	"fmt"
 	"html"
-	"io"
-	"net"
 	"net/http"
-	"net/netip"
 	"regexp"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/mmcdole/gofeed"
+
+	"roamind.ai/connectors/safehttp"
 )
 
 // Entry is one item of a feed.
@@ -42,38 +40,9 @@ type Client struct {
 }
 
 // New returns a client that gives up on a feed after timeout and connects
-// only to public addresses. Feed URLs can come from the agent, and the
-// worker and MCP server run outside the sandbox, next to Hatchet, the
-// search models and the tailnet; the check is made on the address actually
-// dialled, so it also covers redirects and DNS answers.
+// only to public addresses: feed URLs can come from the agent.
 func New(timeout time.Duration) *Client {
-	dialer := &net.Dialer{Timeout: 10 * time.Second, Control: publicOnly}
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.Proxy = nil // a proxy would dial on our behalf
-	tr.DialContext = dialer.DialContext
-	return &Client{HTTP: &http.Client{Timeout: timeout, Transport: tr}}
-}
-
-// cgnat is the shared address space, which Tailscale uses.
-var cgnat = netip.MustParsePrefix("100.64.0.0/10")
-
-// publicOnly refuses connections to loopback, private, shared (CGNAT),
-// link-local, multicast and unspecified addresses.
-func publicOnly(network, address string, _ syscall.RawConn) error {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return err
-	}
-	ip, err := netip.ParseAddr(host)
-	if err != nil {
-		return err
-	}
-	ip = ip.Unmap()
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() || cgnat.Contains(ip) {
-		return fmt.Errorf("%s is not a public address", ip)
-	}
-	return nil
+	return &Client{HTTP: safehttp.New(timeout)}
 }
 
 // Fetch reads the feed at url and returns its entries with a title and a
@@ -119,12 +88,9 @@ func (c *Client) parse(ctx context.Context, url string) (*gofeed.Feed, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("http %s", resp.Status)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBody+1))
+	body, err := safehttp.ReadAll(resp.Body, MaxBody)
 	if err != nil {
 		return nil, err
-	}
-	if len(body) > MaxBody {
-		return nil, fmt.Errorf("larger than %d MB", MaxBody>>20)
 	}
 	return gofeed.NewParser().Parse(bytes.NewReader(body))
 }

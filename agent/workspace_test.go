@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"encoding/json"
+	"reflect"
 	"slices"
 	"testing"
 )
@@ -17,5 +19,18 @@ func TestAllowedWorkspaceToolsScopesEdits(t *testing.T) {
 		if !slices.Contains(rules, want) {
 			t.Errorf("%s missing from %v", want, rules)
 		}
+	}
+}
+
+func TestWebSettings(t *testing.T) {
+	var s struct {
+		Permissions struct{ Allow, Deny []string }
+	}
+	if err := json.Unmarshal([]byte(webSettings([]string{"jobs.example.org", " "})), &s); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(s.Permissions.Allow, []string{"WebFetch(domain:*)"}) ||
+		!reflect.DeepEqual(s.Permissions.Deny, []string{"WebFetch(domain:jobs.example.org)", "WebFetch(domain:*.jobs.example.org)"}) {
+		t.Fatalf("settings = %+v", s)
 	}
 }

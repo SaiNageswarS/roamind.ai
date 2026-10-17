@@ -1,6 +1,6 @@
 # Roamind
 
-A self-hosted, multi-user personal agent in Slack, organised around your goals.
+A self-hosted, multi-user personal agent in Slack, organised around your goals, with a job application assistant on the web.
 
 A personal open-source project, designed and built by [Sai Nageswar Satchidanand](https://github.com/SaiNageswarS) for personal use.
 
@@ -16,12 +16,13 @@ Novelty is rated against other self-hosted personal agents:
 | **A channel per goal** | Say you want to build, learn or achieve something, and it becomes a Goal note in your memory. Roamind then opens a private Slack channel for it. Everything said there is about that goal, with no @mention needed. Invite someone to share the channel; each of you keeps the goal in your own memory. | ★★★ |
 | **Daily exercises that adapt** | Each learning goal gets one exercise every morning, drafted from the goal, your stated preferences and your recent exercises. Your answer is graded in its thread by the same Claude session that wrote the exercise, and the results set the next one's topic and difficulty. The next exercise waits until you've answered. | ★★★ |
 | **News ranked by a rubric per interest** | A daily digest from curated RSS/Atom feeds. Every interest has its own rubric in prose, for example positivity for living well or novelty for AI research. Claude judges each interest's items against it separately. A story already sent in the last 48 hours is left out, even from another source. | ★★★ |
+| **Job applications, drafted daily** | Upload a resume and name your roles and regions in the web app. Once a day, at a time of its own for each user, Roamind searches applicant tracking sites on the web, judges each new posting's fit against the resume, and writes a tailored CV, a cover letter and an answer sheet for the form's questions. You review them and apply yourself; new ones come only once the last ones are reviewed. | ★★ |
 | **Feeds can't steer the agent** | The model that ranks third-party feed text runs with no tools, no memory and no saved session, in a throwaway folder. A prompt injection in a feed can only change a score. | ★★ |
 | **Interests the agent curates** | Ask in chat to follow, mute or add a news interest. Through Roamind's own MCP server, the agent adds new interests with feeds it has checked and a rubric it writes. Your 👍/👎 reactions and replies to a digest weigh its interests in later ones. | ★★ |
 | **Memory with evidence** | Facts are typed, linked Markdown notes: Person, Place, Preference, Event, Goal, Progress, Task and Exercise. Each fact records how it was learned (stated, inferred, observed or corrected), from where and when. Read and edit them like any files. | ★★ |
 | **Claude Code is the agent** | Every turn is `claude -p`, with web search, files, PDFs, images and a shell. A Slack thread is one resumable Claude session, and the conversation lives only in Claude's own session files. | ★★ |
 | **A sandboxed workspace per user** | Each user has a private, persistent folder where Claude can write files and run commands. Files you share in Slack land in it, and the shell runs in a bubblewrap sandbox. | ★★ |
-| **Slack is the whole interface** | Threads are conversations, channels are goals, and the workspace is the identity. There's no sign-up or app to install. | ★★ |
+| **Slack is the main interface** | Threads are conversations, channels are goals, and the workspace is the identity. There's no sign-up or app to install. Only the job assistant lives in a web app. | ★★ |
 | **Durable runs** | Every message, scheduled job and new-user setup is a [Hatchet](https://hatchet.run) workflow, with retries, per-user ordering, and runs you can trace and replay. | ★ |
 | **Local memory search** | Memory search uses Qwen3 embedding and re-ranking models on your own GPU, so notes never leave the machine for search. | ★ |
 | **Streamed answers with citations** | Replies stream into the thread as Claude writes them, with numbered sources. | ★ |
@@ -35,30 +36,36 @@ Novelty is rated against other self-hosted personal agents:
   |---|---|
   | Chat, exercise drafting | Web, files and shell in the user's workspace, plus their memory |
   | News ranking (reads third-party feed text) | **None**: no tools, no memory, a throwaway directory, no saved session |
+  | Job search on the web | WebSearch and WebFetch only: no files, shell or memory; blocked domains are denied |
+  | Job ranking and tailoring (read posting text) | **None**, as for news ranking |
 
 - **Sandboxed shell.** Bash runs in a bubblewrap sandbox that sees only the user's workspace: no home directory, other users, secrets or local ports. Nothing runs unsandboxed.
 - **Isolated users.** Each user has their own workspace, memory database and config. Memory and Roamind's MCP server are pinned to the turn's user.
-- **Safe feed fetching.** The feed reader connects only to public addresses and reads at most 8 MB.
-- **Small public surface.** Only the Slack webhook path is public, via Tailscale Funnel. Dashboards are tailnet-only, for listed logins.
-- **No accounts.** Identity is the member's Slack-verified email. Only your workspace's members can use the agent.
+- **Safe fetching.** The feed and job-posting readers connect only to public addresses and read at most 8 MB.
+- **Small public surface.** Only the Slack webhook path is public, via Tailscale Funnel. Dashboards are tailnet-only, for listed logins. The web app is hosted on Firebase; the worker only connects out to it.
+- **No accounts.** Identity is the member's Slack-verified email. Only your workspace's members can use the agent. Web users sign in with Google, and their verified email is their identity.
+- **Nothing is submitted for you.** The job assistant drafts applications; it never fills in or submits a form.
 
 ## Why Slack
 
-Slack is the only channel, by design:
+Slack is the main channel, by design:
 
 - **Threads** are conversations: one resumable Claude session each.
 - **Channels** are goals; invite someone to share one.
 - **The workspace** is the identity: no sign-up or login.
 - **Apps, notifications, search and file sharing** come for free.
 
+The job assistant is the exception: reviewing several CVs and cover letters is easier on a web page, and job seekers needn't join the Slack workspace.
+
 ## How it works
 
 ```
 Slack ─▶ Tailscale Funnel ─▶ Hatchet ─▶ worker ─▶ claude -p ─▶ reply streamed into the thread
                                                      └ memory: bm mcp (per user)
+web app (Firebase) ◀─▶ Firestore ◀─ worker: daily job hunts ─▶ ATS sites
 ```
 
-Details: [docs/architecture.md](docs/architecture.md).
+Details: [docs/architecture.md](docs/architecture.md); the web app's data contract: [docs/web.md](docs/web.md).
 
 ## Design principles of the code
 
@@ -67,7 +74,8 @@ Details: [docs/architecture.md](docs/architecture.md).
 3. **Used a layered design with one-way dependencies.** The layers are:
    - `memory` is the data layer;
    - `agent` drives Claude;
-   - `channels` speaks Slack and RSS;
+   - `channels` are where users talk: Slack, and the job assistant's web app on Firebase;
+   - `connectors` pull content in: RSS/Atom feeds and job postings;
    - `worker` (Hatchet workflows) and `mcp` (the agent's tools) sit on top and orchestrate.
 
    Each layer is its own Go module in a `go.work` workspace, and code shared by two binaries lives in a shared module, never inside one of them.
@@ -90,7 +98,7 @@ Details: [docs/architecture.md](docs/architecture.md).
    - Roamind adds no wrapper services around them.
 9. **Applied least privilege per turn and physical isolation per user.**
    - A turn gets only the tools its input warrants.
-   - Text from third-party feeds is ranked with no tools at all.
+   - Text from third-party feeds and job postings is judged with no tools at all.
    - Each user has their own sandboxed workspace, memory database and config.
 10. **Stored little, and stored derived values once.** Conversations live only in Claude's session files, and SQLite just maps threads to sessions. A user's memory project name is assigned once and stored, not computed per turn.
 11. **Wrote prompts that give data and say what to do.** When the model got something wrong, the fix was the right data or a positive instruction rather than a prohibition. Note schemas, not the system prompt, own the rules for each note type.
@@ -114,5 +122,7 @@ task hatchet-env              # Hatchet server, Slack webhook, Funnel; prints th
 task all vllm
 process-compose up            # runs task init, then the worker
 ```
+
+For the job assistant, also `pdftotext` (poppler-utils), then follow [docs/web.md](docs/web.md#setting-up-the-workers-side).
 
 Full steps, upgrades and running at boot: [docs/deployment.md](docs/deployment.md). Run `task` for every command.

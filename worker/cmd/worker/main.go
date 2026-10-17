@@ -18,7 +18,9 @@ import (
 	slackapi "github.com/slack-go/slack"
 
 	"roamind.ai/agent"
-	"roamind.ai/channels/feeds"
+	"roamind.ai/channels/web"
+	"roamind.ai/connectors/feeds"
+	"roamind.ai/connectors/jobs"
 	"roamind.ai/memory/store"
 	"roamind.ai/memory/store/notes"
 	"roamind.ai/worker/client"
@@ -81,6 +83,29 @@ func run() error {
 	} else {
 		slog.Warn("bin/mcp not found (task mcp); chat turns run without Roamind's tools")
 	}
+	// The job assistant needs the web app's Firebase project.
+	var webApp workflows.WebAPI
+	if project := os.Getenv("FIREBASE_PROJECT_ID"); project != "" {
+		wc, err := web.New(ctx, project, os.Getenv("FIREBASE_STORAGE_BUCKET"))
+		if err != nil {
+			return err
+		}
+		defer wc.Close()
+		webApp = wc
+	} else {
+		slog.Warn("FIREBASE_PROJECT_ID is not set; no job assistant")
+	}
+	jobsPerRun, _ := strconv.Atoi(os.Getenv("ROAMIND_JOBS_PER_RUN"))
+	// Domains the job search never reads, comma-separated.
+	var blocked []string
+	for _, d := range strings.Split(os.Getenv("ROAMIND_JOBS_BLOCKED_DOMAINS"), ",") {
+		if d = strings.TrimSpace(d); d != "" {
+			blocked = append(blocked, d)
+		}
+	}
+	jobsClient := jobs.New(20 * time.Second)
+	jobsClient.Blocked = blocked
+
 	c, err := client.HatchetClient()
 	if err != nil {
 		return err
@@ -89,15 +114,19 @@ func run() error {
 		Store: st,
 		Slack: slackapi.New(token),
 		Agent: agent.Config{
-			DataDir:      dataDir,
-			ClaudeBinary: os.Getenv("ROAMIND_CLAUDE_BIN"),
-			Model:        os.Getenv("ROAMIND_MODEL"),
-			Memory:       mem,
-			ToolsServer:  toolsServer,
+			DataDir:        dataDir,
+			ClaudeBinary:   os.Getenv("ROAMIND_CLAUDE_BIN"),
+			Model:          os.Getenv("ROAMIND_MODEL"),
+			Memory:         mem,
+			ToolsServer:    toolsServer,
+			BlockedDomains: blocked,
 		},
-		Memory:   mem,
-		Feeds:    feeds.New(20 * time.Second),
-		Location: loc,
+		Memory:     mem,
+		Feeds:      feeds.New(20 * time.Second),
+		Web:        webApp,
+		Jobs:       jobsClient,
+		JobsPerRun: jobsPerRun,
+		Location:   loc,
 	})
 	if mem != nil {
 		slog.Info("daily exercises", "tz", loc.String(),
