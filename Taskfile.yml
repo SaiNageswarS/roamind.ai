@@ -81,8 +81,12 @@ tasks:
             rm -f "$cfg.tmp"
             echo "init: skipped $cfg: jq could not merge the settings into it" >&2
           fi
+          # Schema notes are the repo's: a changed one replaces the project's.
           mkdir -p "$project/notes/schemas"
-          cp --update=none memory/basic-memory-schemas/*.md "$project/notes/schemas/"
+          for schema in memory/basic-memory-schemas/*.md; do
+            dst="$project/notes/schemas/${schema##*/}"
+            cmp -s "$schema" "$dst" || cp "$schema" "$dst"
+          done
         done
 
   hatchet-env:

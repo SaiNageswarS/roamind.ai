@@ -1,6 +1,7 @@
 package notes
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,11 +11,11 @@ import (
 )
 
 // Setup creates project for a new user, or completes it: its folders, its
-// bm config.json and the schema notes it lacks. The config lists only this
-// project and carries the settings in memory/basic-memory-config.json
-// (search models), merged over any keys bm has added. Schema notes come
-// from memory/basic-memory-schemas; ones the project has, possibly edited,
-// are kept. Safe to repeat. `task init` brings existing projects up to
+// bm config.json and the schema notes. The config lists only this project
+// and carries the settings in memory/basic-memory-config.json (search
+// models), merged over any keys bm has added. Schema notes come from
+// memory/basic-memory-schemas and are the repo's: a project's copy that
+// differs is replaced. Safe to repeat. `task init` brings existing projects up to
 // date the same way (BM_CONFIG in Taskfile.yml; TestSetupMatchesTaskInit).
 func (n Notes) Setup(project string) error {
 	if err := ValidProject(project); err != nil {
@@ -108,9 +109,11 @@ func readJSON(path string, v any) error {
 	return nil
 }
 
-// copySchemas copies the Picoschema notes in src that dir lacks. bm picks
-// them up as plain markdown files; fields map to observation categories,
-// and validation is "warn", so they guide rather than gate.
+// copySchemas copies the Picoschema notes in src into dir, replacing the
+// copies that differ; unchanged ones are left alone, so bm doesn't reindex
+// them. bm picks them up as plain markdown files; fields map to
+// observation categories, and validation is "warn", so they guide rather
+// than gate.
 func copySchemas(src, dir string) error {
 	entries, err := os.ReadDir(src)
 	if err != nil {
@@ -121,18 +124,11 @@ func copySchemas(src, dir string) error {
 		if err != nil {
 			return err
 		}
-		f, err := os.OpenFile(filepath.Join(dir, e.Name()), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if errors.Is(err, fs.ErrExist) {
+		dst := filepath.Join(dir, e.Name())
+		if have, err := os.ReadFile(dst); err == nil && bytes.Equal(have, body) {
 			continue
 		}
-		if err != nil {
-			return err
-		}
-		_, err = f.Write(body)
-		if cerr := f.Close(); err == nil {
-			err = cerr
-		}
-		if err != nil {
+		if err := os.WriteFile(dst, body, 0o600); err != nil {
 			return err
 		}
 	}
