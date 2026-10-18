@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"roamind.ai/agent/protocol"
@@ -54,8 +55,8 @@ func mcpServers(cfg Config, in protocol.TurnInput, memory, tools bool) (servers 
 		servers[ToolsServerName] = map[string]any{
 			"type":    "stdio",
 			"command": cfg.ToolsServer[0],
-			"args": append(cfg.ToolsServer[1:len(cfg.ToolsServer):len(cfg.ToolsServer)],
-				"--user", in.UserID, "--tools", strings.Join(in.ServerTools, ",")),
+			// A new slice: cfg is shared by concurrent turns.
+			"args": slices.Concat(cfg.ToolsServer[1:], []string{"--user", in.UserID, "--tools", strings.Join(in.ServerTools, ",")}),
 		}
 		allowed = append(allowed, "mcp__"+ToolsServerName)
 	}
