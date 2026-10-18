@@ -22,7 +22,7 @@ Novelty is rated against other self-hosted personal agents:
 | **Memory with evidence** | Facts are typed, linked Markdown notes: Person, Place, Preference, Event, Goal, Progress, Task and Exercise. Each fact records how it was learned (stated, inferred, observed or corrected), from where and when. Read and edit them like any files. | ★★ |
 | **Claude Code is the agent** | Every turn is `claude -p`, with web search, files, PDFs, images and a shell. A Slack thread is one resumable Claude session, and the conversation lives only in Claude's own session files. | ★★ |
 | **A sandboxed workspace per user** | Each user has a private, persistent folder where Claude can write files and run commands. Files you share in Slack land in it, and the shell runs in a bubblewrap sandbox. | ★★ |
-| **Slack is the main interface** | Threads are conversations, channels are goals, and the workspace is the identity. There's no sign-up or app to install. Only the job assistant lives in a web app. | ★★ |
+| **Slack is the main interface** | Threads are conversations, channels are goals, and the workspace is the identity. There's no sign-up or app to install. A web app, on Firebase, is the second channel, for what reads better on a page, and for people outside the Slack workspace. | ★★ |
 | **Durable runs** | Every message, scheduled job and new-user setup is a [Hatchet](https://hatchet.run) workflow, with retries, per-user ordering, and runs you can trace and replay. | ★ |
 | **Local memory search** | Memory search uses Qwen3 embedding and re-ranking models on your own GPU, so notes never leave the machine for search. | ★ |
 | **Streamed answers with citations** | Replies stream into the thread as Claude writes them, with numbered sources. | ★ |
@@ -55,7 +55,7 @@ Slack is the main channel, by design:
 - **The workspace** is the identity: no sign-up or login.
 - **Apps, notifications, search and file sharing** come for free.
 
-The job assistant is the exception: reviewing several cover letters and answer sheets is easier on a web page, and job seekers needn't join the Slack workspace.
+The web app is the second channel, for what reads better on a page, and for people who needn't join the Slack workspace. The job assistant is its first feature: reviewing several cover letters and answer sheets is easier on a web page.
 
 ## How it works
 
@@ -74,7 +74,7 @@ Details: [docs/architecture.md](docs/architecture.md); the web app's data contra
 3. **Used a layered design with one-way dependencies.** The layers are:
    - `memory` is the data layer;
    - `agent` drives Claude;
-   - `channels` are where users talk: Slack, and the job assistant's web app on Firebase;
+   - `channels` are where users talk: Slack, and the web app on Firebase;
    - `connectors` pull content in: RSS/Atom feeds and job postings;
    - `worker` (Hatchet workflows) and `mcp` (the agent's tools) sit on top and orchestrate.
 

@@ -17,7 +17,7 @@ type User struct {
 	Email       string
 	DisplayName string
 	// Channel is where the user came from: ChannelSlack, or ChannelWeb for
-	// users of the job assistant only.
+	// users who signed up in the web app.
 	Channel     string
 	SlackTeamID string
 	SlackUserID string
@@ -28,11 +28,11 @@ type User struct {
 
 // Channels for User.Channel.
 const (
-	// ChannelSlack users get every feature: chat, goals, exercises, news
-	// shorts, and the job assistant when they also use the web app.
+	// ChannelSlack users get Slack's features: chat, goals, exercises and
+	// news shorts, and the web app's when they also use it.
 	ChannelSlack = "slack"
-	// ChannelWeb users signed up in the web app and get the job assistant
-	// only.
+	// ChannelWeb users signed up in the web app and get its features, not
+	// Slack's, which need a Slack identity.
 	ChannelWeb = "web"
 )
 

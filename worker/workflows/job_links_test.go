@@ -266,7 +266,7 @@ func TestResumeImport(t *testing.T) {
 	}
 	args, _ := os.ReadFile(argsLog)
 	if !strings.Contains(string(args), "--mcp-config") || !strings.Contains(string(args), "bm-u-sai-1") ||
-		!strings.Contains(string(args), "here through the job assistant's web app") || !strings.Contains(string(args), "({how}, web, ") {
+		!strings.Contains(string(args), "here through Roamind's web app") || !strings.Contains(string(args), "({how}, web, ") {
 		t.Fatalf("update args: %s", args)
 	}
 	stdin := readStdin(t, argsLog)

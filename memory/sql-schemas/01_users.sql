@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS users (
     id               TEXT PRIMARY KEY, -- sha256(lowercase(trim(email)))
     email            TEXT NOT NULL UNIQUE,
     display_name     TEXT NOT NULL DEFAULT '',
-    channel          TEXT NOT NULL DEFAULT 'slack', -- slack, or web for job-assistant-only users
+    channel          TEXT NOT NULL DEFAULT 'slack', -- slack, or web for users who signed up in the web app
     slack_team_id    TEXT,
     slack_user_id    TEXT,
     memory_project   TEXT UNIQUE, -- Basic Memory project, bm-u-<name>-<idx>

@@ -1,6 +1,6 @@
-# Web channel: the job assistant's data contract
+# Web channel: the web app's data contract
 
-The job assistant's web app is a separate repo on Firebase. Users sign in with Google, upload a resume, and give their roles, regions and notes. The worker writes the resume into the user's own memory, their Person note with `relationship: self`, which is where every application is written from; a Slack user's memory may hold it already. The worker finds postings and writes an application for each: a cover letter and an answer sheet for the form. Users can also paste links to postings they found, in the web app or in Slack, and get an application for each. Users review them in the web app and apply on their own, with their own resume.
+Roamind's web app is its second channel, beside Slack, a separate repo on Firebase. The job assistant is its first feature. Users sign in with Google, upload a resume, and give their roles, regions and notes. The worker writes the resume into the user's own memory, their Person note with `relationship: self`, which is where every application is written from; a Slack user's memory may hold it already. The worker finds postings and writes an application for each: a cover letter and an answer sheet for the form. Users can also paste links to postings they found, in the web app or in Slack, and get an application for each. Users review them in the web app and apply on their own, with their own resume.
 
 The two sides share no code. They share Firestore and Cloud Storage, laid out as below. The worker uses a service account (`GOOGLE_APPLICATION_CREDENTIALS`), which bypasses the security rules; the web app is held to them.
 
@@ -8,7 +8,7 @@ The two sides share no code. They share Firestore and Cloud Storage, laid out as
 
 - The web app writes the signed-in user's Google email into their profile. The rules require it to equal `request.auth.token.email`, so a profile always carries its owner's verified email.
 - The worker maps that email to Roamind's user id, `sha256(lowercase(trim(email)))`. A web user and a Slack user with the same email are the same person.
-- Web-only users get `channel = 'web'` in the `users` table: they have the job assistant and nothing else, with a Basic Memory project set up when they first upload a resume. A Slack user who also uses the web app keeps all their Slack features.
+- Web-only users get `channel = 'web'` in the `users` table: they have the web app's features but not Slack's, which need a Slack identity, with a Basic Memory project set up when they first upload a resume. A Slack user who also uses the web app keeps all their Slack features.
 - The worker records each user's profile `uid` (`web_profiles`), so links a Slack user sends land in their profile. A Slack user has to have signed in to the web app once for that.
 
 ## Storage

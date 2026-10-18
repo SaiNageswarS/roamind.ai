@@ -1,5 +1,4 @@
-// Package web is Roamind's web channel: the job assistant's web app on
-// Firebase, which the worker reaches through Firestore and Cloud Storage
+// Package web is Roamind's web channel: its web app on Firebase, which the worker reaches through Firestore and Cloud Storage
 // with a service account. The web app writes users' profiles, resumes and
 // links to postings; the worker writes the resumes into users' memory, and
 // writes their applications and the state of its work. The data contract

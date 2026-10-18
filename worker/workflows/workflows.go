@@ -80,8 +80,8 @@ type Deps struct {
 	Memory *notes.Notes
 	// Feeds reads the feeds of news interests.
 	Feeds *feeds.Client
-	// Web is the job assistant's web app; without it, or without Memory,
-	// which holds users' resumes, there is no job assistant.
+	// Web is the web app's data; without it, or without Memory, which holds
+	// users' resumes, there is no job assistant.
 	Web WebAPI
 	// Jobs reads job postings from their sites.
 	Jobs *jobs.Client

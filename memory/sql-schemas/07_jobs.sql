@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS job_postings (
     closed_at    INTEGER,
     PRIMARY KEY (user_id, url_hash)
 );
--- The job assistant's web app profile of each user: its Firebase Auth uid,
+-- The web app profile of each user: its Firebase Auth uid,
 -- under which their applications and links are kept.
 CREATE TABLE IF NOT EXISTS web_profiles (
     user_id TEXT PRIMARY KEY REFERENCES users(id),

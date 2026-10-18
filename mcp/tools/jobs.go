@@ -26,7 +26,7 @@ func jobs(s *mcp.Server, d Deps) {
 		Name: "submit_job_links",
 		Description: "Ask the job assistant to draft an application, a cover letter and answers to the application form's questions, " +
 			"for each job posting the user linked to in their message and wants to apply to. It writes them from the user's resume, " +
-			"their own person note in memory, and the user reviews them in the job assistant's web app, where they apply themselves. " +
+			"their own person note in memory, and the user reviews them in Roamind's web app, where they apply themselves. " +
 			"Use it only for links the user gave in this message; when it isn't clear they want to apply, ask first.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in SubmitLinksInput) (*mcp.CallToolResult, Done, error) {
 		if err := check(len(in.URLs) > 0 && len(in.URLs) <= maxJobLinks, fmt.Sprintf("give 1 to %d links", maxJobLinks)); err != nil {
@@ -43,13 +43,13 @@ func jobs(s *mcp.Server, d Deps) {
 			return nil, Done{}, err
 		}
 		if uid == "" {
-			return nil, Done{Message: "The user hasn't signed in to the job assistant's web app yet. Nothing was submitted: " +
+			return nil, Done{Message: "The user hasn't signed in to Roamind's web app yet. Nothing was submitted: " +
 				"ask them to sign in there with Google, with the email they use here, and then send the links again."}, nil
 		}
 		if err := st.AddLinkRequests(ctx, userID, in.URLs); err != nil {
 			return nil, Done{}, err
 		}
 		return nil, Done{Message: fmt.Sprintf("Submitted %d links. The job assistant drafts them in a few minutes; "+
-			"the user reviews the drafts in its web app.", len(in.URLs))}, nil
+			"the user reviews the drafts in the web app.", len(in.URLs))}, nil
 	})
 }
