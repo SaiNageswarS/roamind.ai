@@ -111,7 +111,7 @@ func TestProcessGoalChannel(t *testing.T) {
 	d, _, argsLog := setup(t)
 	withMemory(t, &d)
 	var after []string
-	d.AfterTurn = func(_ context.Context, u *store.User) error {
+	d.AfterTurn = func(_ context.Context, u *store.User, _ FinishedTurn) error {
 		after = append(after, u.MemoryProject)
 		return nil
 	}

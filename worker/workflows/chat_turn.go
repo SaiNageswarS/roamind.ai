@@ -181,6 +181,7 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 		Exercise:      exercise,
 		News:          newsRef,
 		Tools:         protocol.ToolsWorkspace,
+		ServerTools:   d.serverTools(ChatTurnName),
 	}, up.Apply)
 
 	note := ""
@@ -203,7 +204,7 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 		}
 	}
 	if d.AfterTurn != nil && user.MemoryProject != "" {
-		if err := d.AfterTurn(finishCtx, user); err != nil {
+		if err := d.AfterTurn(finishCtx, user, FinishedTurn{Text: text, Channel: ev.Channel, ThreadTS: ev.RootTS()}); err != nil {
 			log.Error("after turn", "err", err)
 		}
 	}

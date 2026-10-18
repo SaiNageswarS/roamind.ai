@@ -23,6 +23,11 @@ func TestJobPrompts(t *testing.T) {
 	if err != nil || !strings.Contains(rank, `<posting id="c1">`+"\nML Engineer, Acme (Berlin)\nBuild models") {
 		t.Errorf("rank: %v\n%s", err, rank)
 	}
+	// Links from Slack come with no roles or regions.
+	rank, err = RankJobsPrompt(JobRanking{UserName: "Sai", Resume: "CV text", Candidates: []JobCandidate{{ID: "c1", Title: "ML Engineer"}}})
+	if err != nil || strings.Contains(rank, "Roles they want") || strings.Contains(rank, "Regions") || !strings.Contains(rank, "picked these postings themselves") {
+		t.Errorf("rank without roles: %v\n%s", err, rank)
+	}
 	t1 := Tailoring{UserName: "Sai", UserEmail: "sai@x.com", Resume: "CV text", Posting: JobCandidate{Title: "ML Engineer"},
 		Questions: []FormQuestion{{Label: "Relocate?", Required: true, Kind: "select", Options: []string{"Yes", "No"}}}}
 	tailor, err := TailorApplicationPrompt(t1)

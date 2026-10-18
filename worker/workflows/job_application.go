@@ -12,34 +12,46 @@ import (
 
 	"roamind.ai/agent"
 	"roamind.ai/agent/protocol"
-	"roamind.ai/channels/web"
 	"roamind.ai/connectors/jobs"
 	"roamind.ai/memory/store"
 )
 
 // JobApplicationName is the job-application workflow, which writes one
-// posting's application for the user to review in the web app:
+// posting's application:
 //
 //	check-skip → tailor → publish
 //
-// tailor has the agent write a CV, a cover letter and answers to the
-// application form's questions; publish puts them in the web app. When a
-// task fails for good, the posting is marked failed, so it doesn't keep
-// the user's next hunt waiting.
+// tailor has the agent write a cover letter and answers to the
+// application form's questions, from the user's resume in memory; publish
+// delivers them where the request came from (jobReply): to the web app for
+// the user to review, pointing the links the user added the posting with
+// at it, or to the Slack thread. When a task fails for good, the posting
+// is marked failed, so it doesn't keep the user's next hunt waiting, and
+// so are its links.
 const JobApplicationName = "job-application"
 
 // JobApplicationInput is a picked posting, with what its application is
-// written from.
+// written from and where it goes: the web app profile UID, or the Slack
+// thread.
 type JobApplicationInput struct {
 	UserID  string       `json:"user_id"`
-	UID     string       `json:"uid"`
+	UID     string       `json:"uid,omitempty"`
+	Slack   *SlackThread `json:"slack,omitempty"`
 	URLHash string       `json:"url_hash"`
-	Date    string       `json:"date"`
-	Posting jobs.Posting `json:"posting"`
-	Score   int          `json:"score"`
-	Reasons []string     `json:"reasons,omitempty"`
-	Resume  string       `json:"resume"`
+	// UserName and Notes are the user's name and their notes on what they
+	// look for, from the web app profile if any.
+	UserName string       `json:"user_name,omitempty"`
+	Notes    string       `json:"notes,omitempty"`
+	Date     string       `json:"date"`
+	Posting  jobs.Posting `json:"posting"`
+	Score    int          `json:"score"`
+	Reasons  []string     `json:"reasons,omitempty"`
+	Resume   string       `json:"resume"`
+	// LinkIDs are the links the user added the posting with, if any.
+	LinkIDs []string `json:"link_ids,omitempty"`
 }
+
+func (in JobApplicationInput) reply(d Deps) jobReply { return d.jobReply(in.UID, in.Slack) }
 
 // applicationCheck is check-skip's result.
 type applicationCheck struct {
@@ -62,7 +74,7 @@ func JobApplication(c *hatchet.Client, d Deps) *hatchet.Workflow {
 	maxRuns := int32(1)
 	strategy := hatchet.GroupRoundRobin
 	wf := c.NewWorkflow(JobApplicationName,
-		hatchet.WithWorkflowDescription("Write a CV, cover letter and form answers for one job posting"),
+		hatchet.WithWorkflowDescription("Write a cover letter and form answers for one job posting"),
 		hatchet.WithWorkflowConcurrency(hatchet.Concurrency{
 			Expression:    "input.user_id",
 			MaxRuns:       &maxRuns,
@@ -97,14 +109,22 @@ func JobApplication(c *hatchet.Client, d Deps) *hatchet.Workflow {
 		hatchet.WithExecutionTimeout(time.Minute),
 	)
 	wf.OnFailure(func(ctx hatchet.Context, in JobApplicationInput) (struct{}, error) {
-		return struct{}{}, d.Store.MarkFailed(ctx, in.UserID, in.URLHash)
+		if in.Slack == nil {
+			if err := d.Store.MarkFailed(ctx, in.UserID, in.URLHash); err != nil {
+				return struct{}{}, err
+			}
+		}
+		return struct{}{}, in.reply(d).failPending(ctx, in.LinkIDs, linkFailed)
 	})
 	return wf
 }
 
-// checkApplication skips a posting that is no longer waiting for its
-// application.
+// checkApplication skips a posting for the web app that is no longer
+// waiting for its application. Postings for Slack aren't recorded.
 func (d Deps) checkApplication(ctx context.Context, in JobApplicationInput) (applicationCheck, error) {
+	if in.Slack != nil {
+		return applicationCheck{}, nil
+	}
 	p, err := d.Store.JobPostingOf(ctx, in.UserID, in.URLHash)
 	if err != nil {
 		return applicationCheck{}, err
@@ -126,13 +146,9 @@ func (d Deps) tailorApplication(ctx context.Context, in JobApplicationInput) (ap
 	if err != nil || u == nil {
 		return out, fmt.Errorf("user %s: %v", in.UserID, err)
 	}
-	p, err := d.Web.Profile(ctx, in.UID)
-	if err != nil || p == nil {
-		return out, fmt.Errorf("profile %s: %v", in.UID, err)
-	}
 	t := agent.Tailoring{
-		UserName: orDefault(p.Name, orDefault(u.DisplayName, "the user")), UserEmail: u.Email, Date: in.Date,
-		Notes: p.Notes, Resume: in.Resume,
+		UserName: orDefault(in.UserName, orDefault(u.DisplayName, "the user")), UserEmail: u.Email, Date: in.Date,
+		Notes: in.Notes, Resume: in.Resume,
 		Posting: agent.JobCandidate{Title: in.Posting.Title, Company: in.Posting.Company, Location: in.Posting.Location,
 			Posted: in.Posting.Posted, Description: in.Posting.Description},
 	}
@@ -155,31 +171,23 @@ func (d Deps) tailorApplication(ctx context.Context, in JobApplicationInput) (ap
 	if err := json.Unmarshal(turn.Structured, &out.Application); err != nil {
 		return out, fmt.Errorf("application: %w", err)
 	}
-	if strings.TrimSpace(out.Application.CV) == "" || strings.TrimSpace(out.Application.CoverLetter) == "" {
-		return out, fmt.Errorf("the application has no CV or cover letter")
+	if strings.TrimSpace(out.Application.CoverLetter) == "" {
+		return out, fmt.Errorf("the application has no cover letter")
 	}
 	return out, nil
 }
 
-// publishApplication puts the application in the web app, under the
-// posting's url hash, then records the posting as published.
+// publishApplication delivers the application where the request came
+// from; for the web app, it then records the posting as published.
 func (d Deps) publishApplication(ctx context.Context, in JobApplicationInput, t applicationTailor) (applicationPublish, error) {
-	a := web.Application{
-		Title: in.Posting.Title, Company: in.Posting.Company, Location: in.Posting.Location,
-		URL: in.Posting.URL, ApplyURL: orDefault(in.Posting.ApplyURL, in.Posting.URL), Source: in.Posting.Source,
-		PostedAt: in.Posting.Posted, Fit: web.Fit{Score: in.Score, Reasons: in.Reasons},
-		CV: t.Application.CV, CoverLetter: t.Application.CoverLetter,
-		Status: web.StatusReady, CreatedAt: d.now(),
-	}
-	for _, ans := range t.Application.Answers {
-		a.Answers = append(a.Answers, web.Answer{Question: ans.Question, Required: ans.Required, Answer: ans.Answer})
-	}
-	if err := d.Web.SaveApplication(ctx, in.UID, in.URLHash, a); err != nil {
+	if err := in.reply(d).publish(ctx, in, t.Application); err != nil {
 		return applicationPublish{}, err
 	}
-	if err := d.Store.MarkPublished(ctx, in.UserID, in.URLHash); err != nil {
-		return applicationPublish{}, err
+	if in.Slack == nil {
+		if err := d.Store.MarkPublished(ctx, in.UserID, in.URLHash); err != nil {
+			return applicationPublish{}, err
+		}
 	}
-	slog.Info("job application published", "user", in.UserID, "posting", in.Posting.URL, "score", in.Score)
+	slog.Info("job application published", "user", in.UserID, "posting", in.Posting.URL, "score", in.Score, "slack", in.Slack != nil)
 	return applicationPublish{ID: in.URLHash}, nil
 }

@@ -83,7 +83,7 @@ type JobRanking struct {
 	Roles    []string
 	Regions  []string
 	Notes    string
-	// Resume is the text of the user's resume.
+	// Resume is the user's resume: their own Person note.
 	Resume     string
 	Candidates []JobCandidate
 }
@@ -159,8 +159,8 @@ type FormQuestion struct {
 	Options  []string
 }
 
-// TailorApplicationPrompt is the turn text that has the agent write a CV,
-// cover letter and form answers for a posting; run it with ToolsNone and
+// TailorApplicationPrompt is the turn text that has the agent write a cover
+// letter and form answers for a posting; run it with ToolsNone and
 // OutputSchema TailorApplicationSchema.
 func TailorApplicationPrompt(t Tailoring) (string, error) {
 	return execute(tailorApplicationPrompt, t)
@@ -170,7 +170,6 @@ func TailorApplicationPrompt(t Tailoring) (string, error) {
 const TailorApplicationSchema = `{
   "type": "object",
   "properties": {
-    "cv_md": {"type": "string", "description": "The tailored CV, in Markdown"},
     "cover_letter_md": {"type": "string", "description": "The cover letter, in Markdown"},
     "answers": {
       "type": "array",
@@ -186,13 +185,12 @@ const TailorApplicationSchema = `{
       }
     }
   },
-  "required": ["cv_md", "cover_letter_md", "answers"],
+  "required": ["cover_letter_md", "answers"],
   "additionalProperties": false
 }`
 
 // TailoredApplication is the structured output of TailorApplicationSchema.
 type TailoredApplication struct {
-	CV          string       `json:"cv_md"`
 	CoverLetter string       `json:"cover_letter_md"`
 	Answers     []FormAnswer `json:"answers"`
 }

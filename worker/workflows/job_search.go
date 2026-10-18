@@ -17,8 +17,8 @@ import (
 
 // JobSearchName is the cron workflow of the job assistant: every
 // quarter-hour it brings in the web app's profiles, gives each new user a
-// daily search time, and starts a job-hunt run for each user whose time has
-// come today.
+// daily search time, starts a job-hunt run for each user whose time has
+// come today, and queues again the links a stopped worker left processing.
 const JobSearchName = "job-search"
 
 const (
@@ -31,6 +31,9 @@ const (
 	// from.
 	jobGap  = 90
 	jobStep = 15
+	// staleClaim is how long a link may stay processing before it counts as
+	// left behind: a job-links run marks it done or failed well within.
+	staleClaim = time.Hour
 )
 
 // jobSearchOutput lists what a dispatch did.
@@ -38,6 +41,7 @@ type jobSearchOutput struct {
 	Profiles  int      `json:"profiles"`
 	Scheduled []string `json:"scheduled,omitempty"` // new users given a time, "user hh:mm"
 	Hunts     []string `json:"hunts,omitempty"`     // user ids
+	Requeued  int      `json:"requeued,omitempty"`  // links left processing, queued again
 	// Failed are the users whose run could not be started, logged; the
 	// others still start.
 	Failed []string `json:"failed,omitempty"`
@@ -48,7 +52,7 @@ type jobSearchOutput struct {
 // again at the next quarter-hour.
 func JobSearch(c *hatchet.Client, d Deps, hunt *hatchet.Workflow) *hatchet.StandaloneTask {
 	return c.NewStandaloneTask(JobSearchName, func(ctx hatchet.Context, _ struct{}) (jobSearchOutput, error) {
-		out, due, err := d.dueHunts(ctx, d.now())
+		out, due, users, err := d.dueHunts(ctx, d.now())
 		if err != nil {
 			return out, err
 		}
@@ -63,6 +67,14 @@ func JobSearch(c *hatchet.Client, d Deps, hunt *hatchet.Workflow) *hatchet.Stand
 			}
 			out.Hunts = append(out.Hunts, in.UserID)
 		}
+		// Queued again, the web app's listener takes them up.
+		for _, p := range users {
+			n, err := d.Web.RequeueStaleLinks(ctx, p.UID, d.now().Add(-staleClaim))
+			if err != nil {
+				return out, err
+			}
+			out.Requeued += n
+		}
 		return out, nil
 	},
 		hatchet.WithWorkflowDescription("Every quarter-hour, start each job-assistant user's daily job hunt at their time"),
@@ -74,12 +86,13 @@ func JobSearch(c *hatchet.Client, d Deps, hunt *hatchet.Workflow) *hatchet.Stand
 
 // dueHunts brings in every profile of the web app as a user with a daily
 // search time, and returns a job-hunt input for each user whose time has
-// come today and who has not searched yet today.
-func (d Deps) dueHunts(ctx context.Context, now time.Time) (jobSearchOutput, []JobHuntInput, error) {
+// come today and who has not searched yet today, and the profiles by user
+// id.
+func (d Deps) dueHunts(ctx context.Context, now time.Time) (jobSearchOutput, []JobHuntInput, map[string]web.Profile, error) {
 	var out jobSearchOutput
 	profiles, err := d.Web.Profiles(ctx)
 	if err != nil {
-		return out, nil, err
+		return out, nil, nil, err
 	}
 	out.Profiles = len(profiles)
 	byUser := map[string]web.Profile{}
@@ -89,12 +102,12 @@ func (d Deps) dueHunts(ctx context.Context, now time.Time) (jobSearchOutput, []J
 			continue
 		}
 		id := identity.UserID(email)
-		if err := d.Store.UpsertWebUser(ctx, store.User{ID: id, Email: email, DisplayName: p.Name}); err != nil {
-			return out, nil, err
+		if err := d.bringIn(ctx, id, email, p); err != nil {
+			return out, nil, nil, err
 		}
 		minute, created, err := d.assignSchedule(ctx, id)
 		if err != nil {
-			return out, nil, err
+			return out, nil, nil, err
 		}
 		if created {
 			out.Scheduled = append(out.Scheduled, fmt.Sprintf("%s %02d:%02d", id, minute/60, minute%60))
@@ -105,7 +118,7 @@ func (d Deps) dueHunts(ctx context.Context, now time.Time) (jobSearchOutput, []J
 	date := local.Format(time.DateOnly)
 	due, err := d.Store.DueSchedules(ctx, local.Hour()*60+local.Minute(), date)
 	if err != nil {
-		return out, nil, err
+		return out, nil, nil, err
 	}
 	var hunts []JobHuntInput
 	for _, id := range due {
@@ -113,7 +126,13 @@ func (d Deps) dueHunts(ctx context.Context, now time.Time) (jobSearchOutput, []J
 			hunts = append(hunts, JobHuntInput{UserID: id, UID: p.UID, Date: date})
 		}
 	}
-	return out, hunts, nil
+	return out, hunts, byUser, nil
+}
+
+// bringIn makes the profile's owner a user, as a web user unless they are
+// one already.
+func (d Deps) bringIn(ctx context.Context, userID, email string, p web.Profile) error {
+	return d.Store.UpsertWebUser(ctx, store.User{ID: userID, Email: email, DisplayName: p.Name})
 }
 
 // assignSchedule gives the user a daily search time unless they have one,

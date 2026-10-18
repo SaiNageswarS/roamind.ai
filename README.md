@@ -16,13 +16,13 @@ Novelty is rated against other self-hosted personal agents:
 | **A channel per goal** | Say you want to build, learn or achieve something, and it becomes a Goal note in your memory. Roamind then opens a private Slack channel for it. Everything said there is about that goal, with no @mention needed. Invite someone to share the channel; each of you keeps the goal in your own memory. | ★★★ |
 | **Daily exercises that adapt** | Each learning goal gets one exercise every morning, drafted from the goal, your stated preferences and your recent exercises. Your answer is graded in its thread by the same Claude session that wrote the exercise, and the results set the next one's topic and difficulty. The next exercise waits until you've answered. | ★★★ |
 | **News ranked by a rubric per interest** | A daily digest from curated RSS/Atom feeds. Every interest has its own rubric in prose, for example positivity for living well or novelty for AI research. Claude judges each interest's items against it separately. A story already sent in the last 48 hours is left out, even from another source. | ★★★ |
-| **Job applications, drafted daily** | Upload a resume and name your roles and regions in the web app. Once a day, at a time of its own for each user, Roamind searches applicant tracking sites on the web, judges each new posting's fit against the resume, and writes a tailored CV, a cover letter and an answer sheet for the form's questions. You review them and apply yourself; new ones come only once the last ones are reviewed. | ★★ |
+| **Job applications, drafted daily** | Your resume lives in your memory: upload one in the web app and it's written there, or tell Roamind about your work in Slack. Name your roles and regions, and once a day, at a time of its own for each user, Roamind searches applicant tracking sites, judges each new posting's fit against your resume, and writes a cover letter and an answer sheet for the form's questions. Paste links to postings you found and get the same for each within seconds: in the web app to review there, or in Slack, where the drafts come back in the thread, no web sign-in needed. You apply yourself; new ones from the search come only once the last ones are reviewed. | ★★ |
 | **Feeds can't steer the agent** | The model that ranks third-party feed text runs with no tools, no memory and no saved session, in a throwaway folder. A prompt injection in a feed can only change a score. | ★★ |
 | **Interests the agent curates** | Ask in chat to follow, mute or add a news interest. Through Roamind's own MCP server, the agent adds new interests with feeds it has checked and a rubric it writes. Your 👍/👎 reactions and replies to a digest weigh its interests in later ones. | ★★ |
 | **Memory with evidence** | Facts are typed, linked Markdown notes: Person, Place, Preference, Event, Goal, Progress, Task and Exercise. Each fact records how it was learned (stated, inferred, observed or corrected), from where and when. Read and edit them like any files. | ★★ |
 | **Claude Code is the agent** | Every turn is `claude -p`, with web search, files, PDFs, images and a shell. A Slack thread is one resumable Claude session, and the conversation lives only in Claude's own session files. | ★★ |
 | **A sandboxed workspace per user** | Each user has a private, persistent folder where Claude can write files and run commands. Files you share in Slack land in it, and the shell runs in a bubblewrap sandbox. | ★★ |
-| **Slack is the main interface** | Threads are conversations, channels are goals, and the workspace is the identity. There's no sign-up or app to install. Only the job assistant lives in a web app. | ★★ |
+| **Slack is the main interface** | Threads are conversations, channels are goals, and the workspace is the identity. There's no sign-up or app to install. A web app, on Firebase, is the second channel, for what reads better on a page, and for people outside the Slack workspace. | ★★ |
 | **Durable runs** | Every message, scheduled job and new-user setup is a [Hatchet](https://hatchet.run) workflow, with retries, per-user ordering, and runs you can trace and replay. | ★ |
 | **Local memory search** | Memory search uses Qwen3 embedding and re-ranking models on your own GPU, so notes never leave the machine for search. | ★ |
 | **Streamed answers with citations** | Replies stream into the thread as Claude writes them, with numbered sources. | ★ |
@@ -34,7 +34,7 @@ Novelty is rated against other self-hosted personal agents:
 
   | Turn | Tools |
   |---|---|
-  | Chat, exercise drafting | Web, files and shell in the user's workspace, plus their memory |
+  | Chat, exercise drafting, importing an uploaded resume (the user's own files) | Web, files and shell in the user's workspace, plus their memory |
   | News ranking (reads third-party feed text) | **None**: no tools, no memory, a throwaway directory, no saved session |
   | Job search on the web | WebSearch and WebFetch only: no files, shell or memory; blocked domains are denied |
   | Job ranking and tailoring (read posting text) | **None**, as for news ranking |
@@ -55,7 +55,7 @@ Slack is the main channel, by design:
 - **The workspace** is the identity: no sign-up or login.
 - **Apps, notifications, search and file sharing** come for free.
 
-The job assistant is the exception: reviewing several CVs and cover letters is easier on a web page, and job seekers needn't join the Slack workspace.
+The web app is the second channel, for what reads better on a page, and for people who needn't join the Slack workspace. The job assistant is its first feature: reviewing several cover letters and answer sheets is easier on a web page.
 
 ## How it works
 
@@ -74,7 +74,7 @@ Details: [docs/architecture.md](docs/architecture.md); the web app's data contra
 3. **Used a layered design with one-way dependencies.** The layers are:
    - `memory` is the data layer;
    - `agent` drives Claude;
-   - `channels` are where users talk: Slack, and the job assistant's web app on Firebase;
+   - `channels` are where users talk: Slack, and the web app on Firebase;
    - `connectors` pull content in: RSS/Atom feeds and job postings;
    - `worker` (Hatchet workflows) and `mcp` (the agent's tools) sit on top and orchestrate.
 
@@ -123,7 +123,7 @@ task all vllm
 process-compose up            # runs task init, then the worker
 ```
 
-For the job assistant, also `pdftotext` (poppler-utils), then follow [docs/web.md](docs/web.md#setting-up-the-workers-side).
+For the job assistant, follow [docs/web.md](docs/web.md#setting-up-the-workers-side).
 
 Full steps, upgrades and running at boot: [docs/deployment.md](docs/deployment.md). Run `task` for every command.
 

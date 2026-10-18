@@ -13,6 +13,9 @@ type TurnInput struct {
 	// UserEmail is the user's verified email (their identity), shown to the
 	// model as theirs.
 	UserEmail string `json:"user_email,omitempty"`
+	// Channel is where the user's message comes from, ChannelSlack (the
+	// zero value) or ChannelWeb; memory records it as the evidence's source.
+	Channel string `json:"channel,omitempty"`
 	// MemoryProject is the user's Basic Memory project; empty runs the turn
 	// without memory.
 	MemoryProject string `json:"memory_project,omitempty"`
@@ -27,6 +30,10 @@ type TurnInput struct {
 	// Tools is the set of tools the turn gets: ToolsWorkspace, ToolsWeb or
 	// ToolsNone.
 	Tools string `json:"tools,omitempty"`
+	// ServerTools are the tool sets of Roamind's MCP server the turn gets,
+	// by name (ServerInterests and the rest), as configured for its task.
+	// Only ToolsWorkspace turns get them; with none, there is no server.
+	ServerTools []string `json:"server_tools,omitempty"`
 	// OutputSchema, a JSON Schema, makes the turn return structured output
 	// (TurnOutput.Structured) instead of chat text.
 	OutputSchema string `json:"output_schema,omitempty"`
@@ -36,6 +43,12 @@ type TurnInput struct {
 type ExerciseRef struct {
 	Permalink string `json:"permalink"`
 }
+
+// Channels for TurnInput.Channel.
+const (
+	ChannelSlack = ""
+	ChannelWeb   = "web"
+)
 
 // Tool sets for TurnInput.Tools.
 const (
@@ -50,6 +63,16 @@ const (
 	// session: for turns whose whole input is third-party text, so nothing
 	// in it can steer the turn at the user's files or the web.
 	ToolsNone = "none"
+)
+
+// Tool sets of Roamind's MCP server (bin/mcp), for TurnInput.ServerTools;
+// the server serves them by these names.
+const (
+	// ServerInterests is following and adding news interests.
+	ServerInterests = "interests"
+	// ServerJobs is asking the job assistant to draft applications for job
+	// links.
+	ServerJobs = "jobs"
 )
 
 // NewsRef is the context of a turn in the user's news-shorts channel.

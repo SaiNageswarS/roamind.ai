@@ -110,7 +110,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	wfs := workflows.Register(c, workflows.Deps{
+	wfs, listen := workflows.Register(c, workflows.Deps{
 		Store: st,
 		Slack: slackapi.New(token),
 		Agent: agent.Config{
@@ -133,6 +133,17 @@ func run() error {
 			"crons_utc", workflows.LocalCrons(loc, workflows.ExerciseHour))
 		slog.Info("news shorts", "tz", loc.String(),
 			"crons_utc", workflows.LocalCrons(loc, workflows.NewsHours...))
+	}
+
+	if listen != nil {
+		// The job assistant starts its runs as users act in the web app.
+		go func() {
+			if err := listen(ctx); err != nil && ctx.Err() == nil {
+				slog.Error("web app listener stopped", "err", err)
+			}
+		}()
+	} else if webApp != nil {
+		slog.Warn("memory is disabled; no job assistant")
 	}
 
 	slots, _ := strconv.Atoi(envOr("ROAMIND_WORKER_SLOTS", "4"))

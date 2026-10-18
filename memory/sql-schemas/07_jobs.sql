@@ -20,3 +20,11 @@ CREATE TABLE IF NOT EXISTS job_postings (
     closed_at    INTEGER,
     PRIMARY KEY (user_id, url_hash)
 );
+-- Posting links a user asked for in Slack (the submit_job_links tool),
+-- until the chat turn's harness starts drafting them.
+CREATE TABLE IF NOT EXISTS job_link_requests (
+    user_id      TEXT NOT NULL REFERENCES users(id),
+    url          TEXT NOT NULL,
+    requested_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, url)
+);

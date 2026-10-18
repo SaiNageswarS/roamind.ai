@@ -83,9 +83,9 @@ func TestToolSets(t *testing.T) {
 			t.Fatalf("%q: %v", c.tools, err)
 		}
 		if c.tools == protocol.ToolsWorkspace {
-			// A chat turn, which also gets the Roamind server.
+			// A turn given Roamind's tool sets also gets its server.
 			os.Remove(logf)
-			if _, err := RunTurn(context.Background(), cfg, protocol.TurnInput{UserID: "u1", Text: "hi"}, func(protocol.Packet) {}); err != nil {
+			if _, err := RunTurn(context.Background(), cfg, protocol.TurnInput{UserID: "u1", Text: "hi", ServerTools: []string{protocol.ServerInterests}}, func(protocol.Packet) {}); err != nil {
 				t.Fatal(err)
 			}
 		}
