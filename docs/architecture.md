@@ -35,7 +35,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
 - `store/notes/`: the users' Basic Memory notes on disk: the project layout and names, creating a project (`Setup`: its folders, `config.json` and schema notes), reading goal and exercise notes, and writing notes through bm's CLI.
 - `seed/`: seed data as SQL. `interests.sql` inserts the curated news interests, each reading its rubric from `rubrics/*.md` with sqlite3's `readfile`.
 - `basic-memory-config.json`: the bm settings Roamind manages (search models), written into each project's `config.json` by the user-setup workflow for a new project and by `task init` for existing ones. bm's own keys are kept.
-- `basic-memory-schemas/*.md`: the Picoschema notes copied into each user's Basic Memory project, by user-setup for a new one and by `task init` for existing ones. Notes a project already has are left alone.
+- `basic-memory-schemas/*.md`: the Picoschema notes copied into each user's Basic Memory project, by user-setup for a new one and by `task init` for existing ones. They are the repo's: a project's copy that differs is replaced.
 
 ## Design rules
 - Conversation history lives only in claude's session files (`~/.claude/projects/<cwd>`). SQLite maps each thread to its session id and stores nothing else about the conversation.
@@ -68,7 +68,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
   - `users/<project>/notes/` holds their Markdown notes.
 
   Each turn's bm gets only that user's `BASIC_MEMORY_CONFIG_DIR`, so it can't open another user's database. To delete a user's memory, remove `users/<project>`. Notes are plain Markdown, so you can browse and edit them directly.
-- New projects are seeded with the Picoschema notes in `memory/basic-memory-schemas/*.md` (person, place, preference, event, goal, progress, task, exercise). Add a file there to give every project a new schema at the next `task init`; an edited file reaches only projects that lack it, since existing copies are kept. The prompt tells the model which folder and `note_type` to use for each.
+- New projects are seeded with the Picoschema notes in `memory/basic-memory-schemas/*.md` (person, place, preference, event, goal, progress, task, exercise). Add or edit a file there and every project gets it at the next `task init`; a project's own edits to a schema note are overwritten. The prompt tells the model which folder and `note_type` to use for each.
 - **Preferences are atomic:** one note per preference in `preferences/<subject>/`, with exactly the schema fields `[preference]`, `[subject]` and `[evidence]`.
   - `subject` is an enum: food, travel, fitness, health, work, tech, communication, shopping, entertainment, home, finance, other.
   - `evidence` is an enum: stated, inferred, observed or corrected. The source and date go in its context, e.g. `- [evidence] stated (slack, 2026-10-11)`.

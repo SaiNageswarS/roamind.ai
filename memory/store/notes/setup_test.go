@@ -1,6 +1,7 @@
 package notes
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -108,15 +109,16 @@ func TestSetupCopiesSchemas(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Edited schemas survive a second setup.
+	// An outdated copy is replaced by the repo's on the next setup.
 	p := filepath.Join(dir, "Person.md")
-	if err := os.WriteFile(p, []byte("edited"), 0o600); err != nil {
+	if err := os.WriteFile(p, []byte("outdated"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := n.Setup("bm-u-sai-1"); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(p); string(b) != "edited" {
+	want, _ := os.ReadFile(filepath.Join(memoryDir, "basic-memory-schemas", "Person.md"))
+	if b, _ := os.ReadFile(p); !bytes.Equal(b, want) {
 		t.Fatalf("Person.md = %q", b)
 	}
 }

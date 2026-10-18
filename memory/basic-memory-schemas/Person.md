@@ -5,6 +5,7 @@ entity: person
 version: 1
 schema:
   relationship: string, how they relate to the user (colleague, advisor, collaborator, friend), or self for the user themself
+  summary?: string, their professional headline and summary, as a resume opens
   contact?(array): string, phone, email or handle
   works_at?(array): Place, where they work
   experience?(array): 'string, one role per line: <role>, <organization>, <YYYY-MM> to <YYYY-MM or present>, optionally followed by a colon and highlights'
@@ -21,13 +22,13 @@ settings:
 Someone in the user's life, including the user themself (relationship self,
 exactly one such note). Save in folder people/ with note_type person.
 
-Experience, education, skill, project, publication and interest capture
-someone's career and research; on the user's own note they are their
+Summary, experience, education, skill, project, publication and interest
+capture someone's career and research; on the user's own note they are their
 resume, which the job assistant writes applications from. A resume or CV
-they share is the latest word on their career: where it lists roles,
-education, skills, projects or publications, those replace the note's;
-contact details and locations it gives are added to the note's; every
-other line stays.
+they share is the latest word on their career: where it gives a summary,
+roles, education, skills, projects or publications, those replace the
+note's; contact details and locations it gives are added to the note's;
+every other line stays.
 Each role or degree is one line in the format given by its field, so its
 parts stay together; the current role ends with "to present".
 
