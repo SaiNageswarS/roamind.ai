@@ -95,13 +95,6 @@ type Link struct {
 	ClaimedAt time.Time `firestore:"claimed_at,omitempty" json:"-"`
 }
 
-// Sources of a Link: added in the web app, or asked for in Slack, which
-// the worker adds for the user.
-const (
-	SourceWeb   = "web"
-	SourceSlack = "slack"
-)
-
 // ResumeImport is the state of writing the user's latest resume upload
 // into their memory, shown in the web app. Once it is done, the upload is
 // deleted: memory holds the resume.
@@ -415,22 +408,6 @@ func (c *Client) RequeueStaleLinks(ctx context.Context, uid string, before time.
 		n++
 	}
 	return n, nil
-}
-
-// AddLinks queues links to postings for uid, as the web app does, from
-// source.
-func (c *Client) AddLinks(ctx context.Context, uid, source string, urls []string) error {
-	now := time.Now()
-	return c.fs.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-		for _, u := range urls {
-			if err := tx.Create(c.links(uid).NewDoc(), map[string]any{
-				"url": u, "status": LinkQueued, "source": source, "created_at": now,
-			}); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
 }
 
 // SetResumeImport records how writing uid's resume into their memory went.

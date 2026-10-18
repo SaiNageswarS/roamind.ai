@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -132,16 +131,6 @@ func (f *fakeWeb) RequeueStaleLinks(_ context.Context, uid string, before time.T
 		}
 	}
 	return n, nil
-}
-
-func (f *fakeWeb) AddLinks(_ context.Context, uid, source string, urls []string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, u := range urls {
-		id := source + strconv.Itoa(len(f.links)+1)
-		f.links[uid+"/"+id] = fakeLink{web.Link{ID: id, URL: u, CreatedAt: time.Now()}, web.LinkState{Status: web.LinkQueued}}
-	}
-	return nil
 }
 
 func (f *fakeWeb) SetResumeImport(_ context.Context, uid string, r web.ResumeImport) error {
@@ -295,9 +284,6 @@ func jobsSetup(t *testing.T) (Deps, *fakeWeb, JobHuntInput) {
 	ctx := context.Background()
 	id := identity.UserID("sai@x.com")
 	if err := d.Store.UpsertWebUser(ctx, store.User{ID: id, Email: "sai@x.com", DisplayName: "Sai"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Store.SaveWebProfile(ctx, id, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	mem, err := notes.New(t.TempDir(), "../../memory", fakeBM(t))

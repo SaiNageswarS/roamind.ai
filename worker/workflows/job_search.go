@@ -130,12 +130,9 @@ func (d Deps) dueHunts(ctx context.Context, now time.Time) (jobSearchOutput, []J
 }
 
 // bringIn makes the profile's owner a user, as a web user unless they are
-// one already, and records the profile as theirs.
+// one already.
 func (d Deps) bringIn(ctx context.Context, userID, email string, p web.Profile) error {
-	if err := d.Store.UpsertWebUser(ctx, store.User{ID: userID, Email: email, DisplayName: p.Name}); err != nil {
-		return err
-	}
-	return d.Store.SaveWebProfile(ctx, userID, p.UID)
+	return d.Store.UpsertWebUser(ctx, store.User{ID: userID, Email: email, DisplayName: p.Name})
 }
 
 // assignSchedule gives the user a daily search time unless they have one,

@@ -414,6 +414,7 @@ func (d Deps) pickJobs(ctx context.Context, in JobHuntInput, r huntResume, f hun
 		}
 		out.Picked = append(out.Picked, JobApplicationInput{
 			UserID: in.UserID, UID: in.UID, URLHash: rec.URLHash, Date: in.Date,
+			UserName: ranking.UserName, Notes: p.Notes,
 			Posting: b.posting, Score: b.fit.Score, Reasons: b.fit.Reasons, Resume: r.Text,
 		})
 	}

@@ -240,25 +240,6 @@ func (s *Store) ClosePostings(ctx context.Context, userID string, hashes []strin
 	return tx.Commit()
 }
 
-// SaveWebProfile records uid as the user's web app profile.
-func (s *Store) SaveWebProfile(ctx context.Context, userID, uid string) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO web_profiles (user_id, uid) VALUES (?, ?)
-		ON CONFLICT (user_id) DO UPDATE SET uid = excluded.uid`, userID, uid)
-	return err
-}
-
-// WebProfileOf returns the uid of the user's web app profile, or "" when
-// they have not signed in to it.
-func (s *Store) WebProfileOf(ctx context.Context, userID string) (string, error) {
-	var uid string
-	err := s.db.QueryRowContext(ctx, `SELECT uid FROM web_profiles WHERE user_id = ?`, userID).Scan(&uid)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	return uid, err
-}
-
 // AddLinkRequests records posting links the user asked for; a link asked
 // for again is kept once.
 func (s *Store) AddLinkRequests(ctx context.Context, userID string, urls []string) error {

@@ -164,23 +164,10 @@ func TestJobPostings(t *testing.T) {
 	}
 }
 
-func TestWebProfilesAndRequests(t *testing.T) {
+func TestLinkRequests(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
 	jobsUsers(t, s, "a", "b")
-	if uid, err := s.WebProfileOf(ctx, "a"); uid != "" || err != nil {
-		t.Fatalf("no profile = %q %v", uid, err)
-	}
-	if err := s.SaveWebProfile(ctx, "a", "uid-a"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SaveWebProfile(ctx, "a", "uid-a2"); err != nil {
-		t.Fatal(err)
-	}
-	if uid, _ := s.WebProfileOf(ctx, "a"); uid != "uid-a2" {
-		t.Fatalf("profile = %q", uid)
-	}
-
 	if err := s.AddLinkRequests(ctx, "a", []string{"https://x/1", "https://x/2"}); err != nil {
 		t.Fatal(err)
 	}
@@ -196,5 +183,4 @@ func TestWebProfilesAndRequests(t *testing.T) {
 	if got, _ := s.TakeLinkRequests(ctx, "b"); len(got) != 0 {
 		t.Fatalf("b's = %v", got)
 	}
-
 }

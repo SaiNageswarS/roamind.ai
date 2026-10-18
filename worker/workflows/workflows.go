@@ -14,7 +14,8 @@
 //     daily time has come.
 //   - job-hunt: check-skip → resume, find → pick → spawn.
 //   - job-links: resume → pick → spawn, for the postings a user linked to,
-//     started by the web app's listener (web_listen.go).
+//     started by the web app's listener (web_listen.go) or after a chat
+//     turn, replying where the links came from (job_reply.go).
 //   - resume-import: memory → fetch → update, writing a resume
 //     uploaded in the web app into the user's memory, also started by the
 //     listener.
@@ -63,7 +64,6 @@ type WebAPI interface {
 	LinkStatus(ctx context.Context, uid, id string) (string, error)
 	SetLink(ctx context.Context, uid, id string, s web.LinkState) (bool, error)
 	RequeueStaleLinks(ctx context.Context, uid string, before time.Time) (int, error)
-	AddLinks(ctx context.Context, uid, source string, urls []string) error
 	ListenProfiles(ctx context.Context, fn func(web.Profile)) error
 	ListenLinks(ctx context.Context, fn func(uid string, links []web.Link)) error
 }
@@ -80,8 +80,10 @@ type Deps struct {
 	Memory *notes.Notes
 	// Feeds reads the feeds of news interests.
 	Feeds *feeds.Client
-	// Web is the web app's data; without it, or without Memory, which holds
-	// users' resumes, there is no job assistant.
+	// Web is the web app's data; without it, the job assistant serves
+	// Slack only: no job hunts, resume uploads or links from the web app.
+	// Without Memory, which holds users' resumes, there is no job
+	// assistant.
 	Web WebAPI
 	// Jobs reads job postings from their sites.
 	Jobs *jobs.Client
@@ -96,10 +98,18 @@ type Deps struct {
 	// chat-turn calls it for a user who is not set up. Register sets it to
 	// start a user-setup run.
 	SetupUser func(ctx context.Context, userID string) error
-	// AfterTurn, when set, runs after each chat turn with memory, with the
-	// user's message. Register sets it to give new goals their channels and
-	// to queue the job links the user asked for. Its errors are logged.
-	AfterTurn func(ctx context.Context, u *store.User, text string) error
+	// AfterTurn, when set, runs after each chat turn with memory. Register
+	// sets it to give new goals their channels and to start drafting the
+	// job links the user asked for. Its errors are logged.
+	AfterTurn func(ctx context.Context, u *store.User, t FinishedTurn) error
+}
+
+// FinishedTurn is a chat turn, for AfterTurn: the user's message and its
+// thread.
+type FinishedTurn struct {
+	Text     string
+	Channel  string
+	ThreadTS string
 }
 
 func (d Deps) now() time.Time {
@@ -110,35 +120,38 @@ func (d Deps) now() time.Time {
 }
 
 // Register declares every workflow on the client, for the worker. listen,
-// when there is a job assistant, listens to the web app and starts its
+// when there is a web app, listens to it and starts the job assistant's
 // runs until ctx is done; the worker runs it alongside.
 func Register(c *hatchet.Client, d Deps) (wfs []hatchet.WorkflowBase, listen func(ctx context.Context) error) {
-	jobs := d.Web != nil && d.Memory != nil
-	if jobs {
-		application := JobApplication(c, d)
-		hunt := JobHunt(c, d, application)
-		links := JobLinks(c, d, application)
-		resume := ResumeImport(c, d)
-		wfs = append(wfs, application, hunt, links, resume, JobSearch(c, d, hunt))
-		listen = func(ctx context.Context) error { return d.listenWeb(ctx, links, resume) }
-	}
 	goals := GoalChannels(c, d)
 	if d.Memory == nil {
-		return append(wfs, ChatTurn(c, d), goals), listen
+		return append(wfs, ChatTurn(c, d), goals), nil
+	}
+	application := JobApplication(c, d)
+	links := JobLinks(c, d, application)
+	wfs = append(wfs, application, links)
+	if d.Web != nil {
+		hunt := JobHunt(c, d, application)
+		resume := ResumeImport(c, d)
+		wfs = append(wfs, hunt, resume, JobSearch(c, d, hunt))
+		listen = func(ctx context.Context) error { return d.listenWeb(ctx, links, resume) }
 	}
 	setup := UserSetup(c, d)
 	d.SetupUser = func(ctx context.Context, userID string) error {
 		_, err := setup.RunNoWait(topLevel(ctx), UserSetupInput{UserID: userID})
 		return err
 	}
-	hooks := []func(context.Context, *store.User, string) error{goalChannelsTrigger(goals, d)}
-	if jobs {
-		hooks = append(hooks, d.queueSlackLinks)
+	hooks := []func(context.Context, *store.User, FinishedTurn) error{
+		goalChannelsTrigger(goals, d),
+		d.startSlackLinks(func(ctx context.Context, in JobLinksInput) error {
+			_, err := links.RunNoWait(topLevel(ctx), in)
+			return err
+		}),
 	}
-	d.AfterTurn = func(ctx context.Context, u *store.User, text string) error {
+	d.AfterTurn = func(ctx context.Context, u *store.User, t FinishedTurn) error {
 		var errs []error
 		for _, h := range hooks {
-			errs = append(errs, h(ctx, u, text))
+			errs = append(errs, h(ctx, u, t))
 		}
 		return errors.Join(errs...)
 	}

@@ -204,7 +204,7 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 		}
 	}
 	if d.AfterTurn != nil && user.MemoryProject != "" {
-		if err := d.AfterTurn(finishCtx, user, text); err != nil {
+		if err := d.AfterTurn(finishCtx, user, FinishedTurn{Text: text, Channel: ev.Channel, ThreadTS: ev.RootTS()}); err != nil {
 			log.Error("after turn", "err", err)
 		}
 	}

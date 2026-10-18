@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -24,12 +25,19 @@ import (
 //	resume → pick → spawn
 //
 // resume reads the user's resume from their memory; pick reads the
-// postings from their sites, has the agent judge their fit and records
-// them; spawn starts a job-application run for each. Whenever a user has
-// links, it runs: unlike a job hunt, it has no check-skip, doesn't wait for
-// the user's reviews and keeps every posting whatever its fit, since the
-// user asked for these. The web app's listener claims the links, marking
-// them processing, as they are queued, and starts the run.
+// postings from their sites and has the agent judge their fit; spawn
+// starts a job-application run for each. Whenever a user has links, it
+// runs: unlike a job hunt, it has no check-skip, doesn't wait for the
+// user's reviews and keeps every posting whatever its fit, since the user
+// asked for these.
+//
+// Results go back where the links came from (jobReply). The web app's
+// listener claims the links added there, marking them processing, and
+// starts a run with the profile's uid: the postings are recorded, so a
+// posting is drafted once, and the applications are reviewed in the web
+// app. After a chat turn, the links the user sent in Slack start a run with
+// the thread: the applications are posted there, and nothing is recorded,
+// since there is no review in Slack. A Slack user needn't use the web app.
 const JobLinksName = "job-links"
 
 // maxLinks is how many links a run takes at most; more make more runs.
@@ -37,23 +45,29 @@ const maxLinks = 20
 
 // Reasons a link failed, for the user.
 const (
-	linkNoResume  = "Upload your resume in your profile, or tell Roamind about your work in Slack, first."
-	linkNotURL    = "This doesn't look like a link to a job posting."
-	linkBlocked   = "Postings on this site aren't read."
-	linkUnread    = "Couldn't read this posting: it may have closed, or its page needs a login."
-	linkFailed    = "Drafting this application failed. Add the link again to retry."
-	linkInFlight  = "Being drafted; it will be ready shortly."
-	linkDraftedBy = "Already drafted."
+	linkNoResume      = "Upload your resume in your profile, or tell Roamind about your work in Slack, first."
+	linkNoResumeSlack = "Share your resume with me, or tell me about your work, first."
+	linkNotURL        = "This doesn't look like a link to a job posting."
+	linkBlocked       = "Postings on this site aren't read."
+	linkUnread        = "Couldn't read this posting: it may have closed, or its page needs a login."
+	linkFailed        = "Drafting this application failed. Send the link again to retry."
+	linkInFlight      = "Being drafted; it will be ready shortly."
+	linkDraftedBy     = "Already drafted."
 )
 
-// JobLinksInput names the user, the local date and the links claimed for
-// the run.
+// JobLinksInput names the user, where the links came from, the local date
+// and the links. Links from Slack have their URL as id.
 type JobLinksInput struct {
-	UserID string     `json:"user_id"`
-	UID    string     `json:"uid"`
-	Date   string     `json:"date"`
-	Links  []web.Link `json:"links"`
+	UserID string `json:"user_id"`
+	// UID is the web app profile the links were added in.
+	UID string `json:"uid,omitempty"`
+	// Slack is the thread the links were sent in, instead.
+	Slack *SlackThread `json:"slack,omitempty"`
+	Date  string       `json:"date"`
+	Links []web.Link   `json:"links"`
 }
+
+func (in JobLinksInput) reply(d Deps) jobReply { return d.jobReply(in.UID, in.Slack) }
 
 // linksPick is pick's result: the applications to write.
 type linksPick struct {
@@ -66,8 +80,7 @@ type linksPick struct {
 }
 
 // JobLinks declares the job-links workflow. Runs are serialized per user.
-// When a task fails for good, the links still processing are marked
-// failed.
+// When a task fails for good, the links not drafted yet are failed.
 func JobLinks(c *hatchet.Client, d Deps, application *hatchet.Workflow) *hatchet.Workflow {
 	maxRuns := int32(1)
 	strategy := hatchet.GroupRoundRobin
@@ -117,24 +130,29 @@ func JobLinks(c *hatchet.Client, d Deps, application *hatchet.Workflow) *hatchet
 	return wf
 }
 
-// linksFailed marks failed the run's links still processing: they can't
-// be drafted without a resume in memory, else drafting failed.
+// linksFailed fails the run's links not drafted yet: they can't be drafted
+// without a resume in memory, else drafting failed.
 func (d Deps) linksFailed(ctx context.Context, in JobLinksInput) error {
 	reason := linkFailed
 	if u, err := d.Store.UserByID(ctx, in.UserID); err == nil && (u == nil || !d.hasResume(u)) {
 		reason = linkNoResume
+		if in.Slack != nil {
+			reason = linkNoResumeSlack
+		}
 	}
-	return d.failProcessingLinks(ctx, in.UID, linkIDs(in.Links), reason)
+	return in.reply(d).failPending(ctx, linkIDs(in.Links), reason)
 }
 
 // pickLinks reads the linked postings from their sites, has the agent
-// judge their fit, and records and returns them all, whatever their fit.
-// A posting that already has an application points its links there.
+// judge their fit, and returns them all, whatever their fit. For the web
+// app, it records them, and a posting that already has an application
+// points its links there.
 func (d Deps) pickLinks(ctx context.Context, in JobLinksInput, r huntResume) (linksPick, error) {
 	out := linksPick{Failed: map[string]string{}}
-	p, err := d.Web.Profile(ctx, in.UID)
-	if err != nil || p == nil {
-		return out, fmt.Errorf("profile %s: %v", in.UID, err)
+	reply := in.reply(d)
+	ranking, err := d.linksRanking(ctx, in, r)
+	if err != nil {
+		return out, err
 	}
 
 	// Each posting once, by its canonical URL, with the links to it.
@@ -155,27 +173,12 @@ func (d Deps) pickLinks(ctx context.Context, in JobLinksInput, r huntResume) (li
 		}
 	}
 
-	// Postings found for the user before keep their application; those
-	// passed over or failed are drafted again.
-	var fresh []agent.FoundJob
-	for _, fj := range found {
-		h := store.URLHash(fj.URL)
-		prev, err := d.Store.JobPostingOf(ctx, in.UserID, h)
-		if err != nil {
+	// Slack keeps no record of postings, so its links are always drafted.
+	fresh := found
+	if in.Slack == nil {
+		if fresh, err = d.undrafted(ctx, in.UserID, found, byURL, reply, &out); err != nil {
 			return out, err
 		}
-		if prev == nil || prev.Status == store.PostingPassed || prev.Status == store.PostingFailed {
-			fresh = append(fresh, fj)
-			continue
-		}
-		reason := linkDraftedBy
-		if prev.Status == store.PostingPicked {
-			reason = linkInFlight
-		}
-		if err := d.doneLinks(ctx, in.UID, byURL[fj.URL], h, reason); err != nil {
-			return out, err
-		}
-		out.Done = append(out.Done, byURL[fj.URL]...)
 	}
 
 	postings, unread := d.readPostings(ctx, fresh)
@@ -184,14 +187,13 @@ func (d Deps) pickLinks(ctx context.Context, in JobLinksInput, r huntResume) (li
 			out.Failed[id] = linkUnread
 		}
 	}
-	if err := d.failLinks(ctx, in.UID, out.Failed); err != nil {
+	if err := reply.fail(ctx, out.Failed); err != nil {
 		return out, err
 	}
 	if len(postings) == 0 {
 		return out, nil
 	}
 
-	ranking := agent.JobRanking{UserName: orDefault(p.Name, "the user"), Roles: p.Roles, Regions: p.Regions, Notes: p.Notes, Resume: r.Text}
 	for i, jp := range postings {
 		ranking.Candidates = append(ranking.Candidates, agent.JobCandidate{
 			ID: "c" + strconv.Itoa(i+1), Title: jp.Title, Company: jp.Company, Location: jp.Location, Posted: jp.Posted, Description: jp.Description,
@@ -220,44 +222,96 @@ func (d Deps) pickLinks(ctx context.Context, in JobLinksInput, r huntResume) (li
 	}
 
 	for i, jp := range postings {
-		rec := store.JobPosting{UserID: in.UserID, URL: jp.URL, Title: jp.Title, Company: jp.Company, Source: jp.Source}
-		got, ok, err := d.Store.PickPosting(ctx, rec)
-		if err == nil && !ok {
-			got, ok, err = d.Store.RepickPosting(ctx, rec)
-		}
-		if err != nil {
-			return out, err
-		}
-		if !ok {
-			// A job hunt picked it meanwhile.
-			if err := d.doneLinks(ctx, in.UID, byURL[jp.URL], got.URLHash, linkInFlight); err != nil {
+		h := store.URLHash(jp.URL)
+		if in.Slack == nil {
+			rec := store.JobPosting{UserID: in.UserID, URL: jp.URL, Title: jp.Title, Company: jp.Company, Source: jp.Source}
+			got, ok, err := d.Store.PickPosting(ctx, rec)
+			if err == nil && !ok {
+				got, ok, err = d.Store.RepickPosting(ctx, rec)
+			}
+			if err != nil {
 				return out, err
 			}
-			out.Done = append(out.Done, byURL[jp.URL]...)
-			continue
+			if !ok {
+				// A job hunt picked it meanwhile.
+				if err := reply.done(ctx, byURL[jp.URL], got.URLHash, linkInFlight); err != nil {
+					return out, err
+				}
+				out.Done = append(out.Done, byURL[jp.URL]...)
+				continue
+			}
+			h = got.URLHash
 		}
 		f := fits["c"+strconv.Itoa(i+1)]
 		out.Picked = append(out.Picked, JobApplicationInput{
-			UserID: in.UserID, UID: in.UID, URLHash: got.URLHash, Date: in.Date,
+			UserID: in.UserID, UID: in.UID, Slack: in.Slack, URLHash: h, Date: in.Date,
+			UserName: ranking.UserName, Notes: ranking.Notes,
 			Posting: jp, Score: f.Score, Reasons: f.Reasons, Resume: r.Text, LinkIDs: byURL[jp.URL],
 		})
 	}
 	return out, nil
 }
 
+// undrafted returns the postings found that have no application for the
+// web app yet: one found before keeps its application, and its links point
+// there; those passed over or failed are drafted again.
+func (d Deps) undrafted(ctx context.Context, userID string, found []agent.FoundJob, byURL map[string][]string, reply jobReply, out *linksPick) ([]agent.FoundJob, error) {
+	var fresh []agent.FoundJob
+	for _, fj := range found {
+		h := store.URLHash(fj.URL)
+		prev, err := d.Store.JobPostingOf(ctx, userID, h)
+		if err != nil {
+			return nil, err
+		}
+		if prev == nil || prev.Status == store.PostingPassed || prev.Status == store.PostingFailed {
+			fresh = append(fresh, fj)
+			continue
+		}
+		reason := linkDraftedBy
+		if prev.Status == store.PostingPicked {
+			reason = linkInFlight
+		}
+		if err := reply.done(ctx, byURL[fj.URL], h, reason); err != nil {
+			return nil, err
+		}
+		out.Done = append(out.Done, byURL[fj.URL]...)
+	}
+	return fresh, nil
+}
+
+// linksRanking is what the links' fit is judged against: the web app
+// profile's roles, regions and notes, or only the resume for links from
+// Slack.
+func (d Deps) linksRanking(ctx context.Context, in JobLinksInput, r huntResume) (agent.JobRanking, error) {
+	if in.Slack != nil {
+		u, err := d.Store.UserByID(ctx, in.UserID)
+		if err != nil || u == nil {
+			return agent.JobRanking{}, fmt.Errorf("user %s: %v", in.UserID, err)
+		}
+		return agent.JobRanking{UserName: orDefault(u.DisplayName, "the user"), Resume: r.Text}, nil
+	}
+	p, err := d.Web.Profile(ctx, in.UID)
+	if err != nil || p == nil {
+		return agent.JobRanking{}, fmt.Errorf("profile %s: %v", in.UID, err)
+	}
+	return agent.JobRanking{UserName: orDefault(p.Name, "the user"), Roles: p.Roles, Regions: p.Regions, Notes: p.Notes, Resume: r.Text}, nil
+}
+
 // spawnLinkApplications starts a job-application run for each picked
-// posting. A posting whose run could not be started is marked failed, and
-// so are its links.
+// posting. A posting whose run could not be started fails, and so do its
+// links.
 func (d Deps) spawnLinkApplications(ctx context.Context, in JobLinksInput, p linksPick, start func(JobApplicationInput) error) (huntSpawn, error) {
 	var out huntSpawn
 	for _, a := range p.Picked {
 		if err := start(a); err != nil {
 			slog.Error("job-application not started", "user", in.UserID, "posting", a.Posting.URL, "err", err)
 			out.Failed = append(out.Failed, a.URLHash)
-			if err := d.Store.MarkFailed(ctx, in.UserID, a.URLHash); err != nil {
-				return out, err
+			if in.Slack == nil {
+				if err := d.Store.MarkFailed(ctx, in.UserID, a.URLHash); err != nil {
+					return out, err
+				}
 			}
-			if err := d.failProcessingLinks(ctx, in.UID, a.LinkIDs, linkFailed); err != nil {
+			if err := in.reply(d).failPending(ctx, a.LinkIDs, linkFailed); err != nil {
 				return out, err
 			}
 			continue
@@ -265,42 +319,6 @@ func (d Deps) spawnLinkApplications(ctx context.Context, in JobLinksInput, p lin
 		out.Started = append(out.Started, a.URLHash)
 	}
 	return out, nil
-}
-
-// doneLinks points the links at the application with id.
-func (d Deps) doneLinks(ctx context.Context, uid string, ids []string, appID, reason string) error {
-	for _, id := range ids {
-		if _, err := d.Web.SetLink(ctx, uid, id, web.LinkState{Status: web.LinkDone, Reason: reason, ApplicationID: appID}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// failLinks marks links failed, each with its reason.
-func (d Deps) failLinks(ctx context.Context, uid string, reasons map[string]string) error {
-	for id, reason := range reasons {
-		if _, err := d.Web.SetLink(ctx, uid, id, web.LinkState{Status: web.LinkFailed, Reason: reason}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// failProcessingLinks marks failed, with reason, those of the links that
-// are still processing; links done meanwhile, or removed, are left alone.
-func (d Deps) failProcessingLinks(ctx context.Context, uid string, ids []string, reason string) error {
-	failed := map[string]string{}
-	for _, id := range ids {
-		s, err := d.Web.LinkStatus(ctx, uid, id)
-		if err != nil {
-			return err
-		}
-		if s == web.LinkProcessing {
-			failed[id] = reason
-		}
-	}
-	return d.failLinks(ctx, uid, failed)
 }
 
 func linkIDs(links []web.Link) []string {
@@ -315,40 +333,44 @@ func linkIDs(links []web.Link) []string {
 // writes links: <https://…> or <https://…|label>.
 var typedURL = regexp.MustCompile(`https?://[^\s<>|]+`)
 
-// queueSlackLinks queues in the web app the job links the user asked for in
-// this chat turn (the submit_job_links tool), for the listener to take up.
-// Only links in the user's own message are queued: a page the turn read
-// can't make it apply anywhere.
-func (d Deps) queueSlackLinks(ctx context.Context, u *store.User, text string) error {
-	asked, err := d.Store.TakeLinkRequests(ctx, u.ID)
-	if err != nil || len(asked) == 0 {
-		return err
-	}
-	typed := map[string]bool{}
-	for _, raw := range typedURL.FindAllString(text, -1) {
-		if ref, err := jobs.Parse(raw); err == nil {
-			typed[ref.URL] = true
+// startSlackLinks starts a job-links run, replying in the turn's thread,
+// for the job links the user asked for in the turn (the submit_job_links
+// tool). Only links in the user's own message are taken: a page the turn
+// read can't make it apply anywhere.
+func (d Deps) startSlackLinks(start func(context.Context, JobLinksInput) error) func(context.Context, *store.User, FinishedTurn) error {
+	return func(ctx context.Context, u *store.User, t FinishedTurn) error {
+		asked, err := d.Store.TakeLinkRequests(ctx, u.ID)
+		if err != nil || len(asked) == 0 {
+			return err
 		}
-	}
-	var urls []string
-	for _, raw := range asked {
-		ref, err := jobs.Parse(raw)
-		if err != nil || !typed[ref.URL] {
-			slog.Warn("job link not in the user's message; dropped", "user", u.ID, "url", raw)
-			continue
+		typed := map[string]bool{}
+		for _, raw := range typedURL.FindAllString(t.Text, -1) {
+			if ref, err := jobs.Parse(raw); err == nil {
+				typed[ref.URL] = true
+			}
 		}
-		urls = append(urls, ref.URL)
+		var links []web.Link
+		seen := map[string]bool{}
+		for _, raw := range asked {
+			ref, err := jobs.Parse(raw)
+			if err != nil || !typed[ref.URL] {
+				slog.Warn("job link not in the user's message; dropped", "user", u.ID, "url", raw)
+				continue
+			}
+			if !seen[ref.URL] {
+				seen[ref.URL] = true
+				links = append(links, web.Link{ID: ref.URL, URL: ref.URL})
+			}
+		}
+		th := &SlackThread{Channel: t.Channel, ThreadTS: t.ThreadTS}
+		var errs []error
+		for len(links) > 0 {
+			batch := links[:min(maxLinks, len(links))]
+			links = links[len(batch):]
+			if err := start(ctx, JobLinksInput{UserID: u.ID, Slack: th, Date: d.today(), Links: batch}); err != nil {
+				errs = append(errs, err, d.jobReply("", th).failPending(ctx, linkIDs(batch), linkFailed))
+			}
+		}
+		return errors.Join(errs...)
 	}
-	if len(urls) == 0 {
-		return nil
-	}
-	uid, err := d.Store.WebProfileOf(ctx, u.ID)
-	if err != nil {
-		return err
-	}
-	if uid == "" {
-		// The tool told the user to sign in to the web app first.
-		return fmt.Errorf("user %s has no web app profile for %d job links", u.ID, len(urls))
-	}
-	return d.Web.AddLinks(ctx, uid, web.SourceSlack, urls)
 }

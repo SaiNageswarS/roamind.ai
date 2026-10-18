@@ -55,8 +55,8 @@ func GoalChannels(c *hatchet.Client, d Deps) *hatchet.StandaloneTask {
 // goalChannelsTrigger returns a hook for chat-turn: after a turn it starts a sync run
 // for the user when an active goal has no channel yet. The check reads only
 // local files and SQLite, so most turns start no run.
-func goalChannelsTrigger(task *hatchet.StandaloneTask, d Deps) func(ctx context.Context, u *store.User, _ string) error {
-	return func(ctx context.Context, u *store.User, _ string) error {
+func goalChannelsTrigger(task *hatchet.StandaloneTask, d Deps) func(ctx context.Context, u *store.User, _ FinishedTurn) error {
+	return func(ctx context.Context, u *store.User, _ FinishedTurn) error {
 		missing, err := d.Missing(ctx, u)
 		if err != nil || len(missing) == 0 {
 			return err

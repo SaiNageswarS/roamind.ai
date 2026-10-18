@@ -62,20 +62,11 @@ func TestSubmitJobLinks(t *testing.T) {
 		return string(b), res.IsError
 	}
 	const link = "https://jobs.lever.co/acme/6ed76ce8-4156-4b60-b120-403538bd66cd"
-	// A user who never signed in to the web app is told to.
-	if msg, isErr := call(link); isErr || !strings.Contains(msg, "hasn't signed in") {
-		t.Fatalf("no profile = %s %v", msg, isErr)
-	}
-	if got, _ := st.TakeLinkRequests(ctx, "h1"); len(got) != 0 {
-		t.Fatalf("recorded without a profile: %v", got)
-	}
-	if err := st.SaveWebProfile(ctx, "h1", "uid1"); err != nil {
-		t.Fatal(err)
-	}
 	if msg, isErr := call("ftp://x/1"); !isErr || !strings.Contains(msg, "not a web address") {
 		t.Fatalf("ftp = %s %v", msg, isErr)
 	}
-	if msg, isErr := call(link, "https://acme.com/careers/2"); isErr || !strings.Contains(msg, "Submitted 2 links") {
+	// A Slack user needn't have signed in to the web app.
+	if msg, isErr := call(link, "https://acme.com/careers/2"); isErr || !strings.Contains(msg, "Submitted 2 links") || !strings.Contains(msg, "this thread") {
 		t.Fatalf("submit = %s %v", msg, isErr)
 	}
 	if got, _ := st.TakeLinkRequests(ctx, "h1"); !reflect.DeepEqual(got, []string{link, "https://acme.com/careers/2"}) &&

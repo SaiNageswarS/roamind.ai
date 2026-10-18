@@ -102,7 +102,7 @@ func TestJobLinks(t *testing.T) {
 		}
 	}
 	// A failed run fails only the links still processing.
-	if err := d.failProcessingLinks(ctx, "u1", linkIDs(in.Links), linkFailed); err != nil {
+	if err := in.reply(d).failPending(ctx, linkIDs(in.Links), linkFailed); err != nil {
 		t.Fatal(err)
 	}
 	if fw.link("u1", "l1").Status != web.LinkDone || fw.link("u1", "l6") != (web.LinkState{Status: web.LinkFailed, Reason: linkFailed}) {
@@ -185,27 +185,82 @@ func listenLinks(t *testing.T, d Deps, fw *fakeWeb, uid string) []JobLinksInput 
 	return started
 }
 
-// Slack users' links are queued in the web app when they are in the user's
-// own message.
-func TestQueueSlackLinks(t *testing.T) {
+// Links a user sends in Slack are drafted when they are in the user's own
+// message, and the drafts are posted in the thread: no web app profile,
+// and no record of the postings.
+func TestSlackLinks(t *testing.T) {
 	ctx := context.Background()
 	d, fw, hunt := jobsSetup(t)
+	fs := d.Slack.(*fakeSlack)
 	u, _ := d.Store.UserByID(ctx, hunt.UserID)
 	const lever = "https://jobs.lever.co/palantir/6ed76ce8-4156-4b60-b120-403538bd66cd"
-	if err := d.Store.AddLinkRequests(ctx, u.ID, []string{lever + "?utm_source=slack", "https://evil.example/apply"}); err != nil {
+	const blocked = "https://de.jobs.example.org/view/1"
+	d.Jobs.Blocked = []string{"jobs.example.org"}
+	if err := d.Store.AddLinkRequests(ctx, u.ID, []string{lever + "?utm_source=slack", "https://evil.example/apply", blocked}); err != nil {
 		t.Fatal(err)
 	}
-	text := "Can you apply to <" + lever + "|this one> for me?"
-	if err := d.queueSlackLinks(ctx, u, text); err != nil {
+	turn := FinishedTurn{Text: "Can you apply to <" + lever + "|this one> and " + blocked + " for me?", Channel: "D1", ThreadTS: "1.0"}
+	var started []JobLinksInput
+	hook := d.startSlackLinks(func(_ context.Context, in JobLinksInput) error {
+		started = append(started, in)
+		return nil
+	})
+	if err := hook(ctx, u, turn); err != nil {
 		t.Fatal(err)
 	}
-	q := fw.queued("u1")
-	if len(q) != 1 || q[0].URL != lever {
-		t.Fatalf("queued = %+v", q)
+	th := &SlackThread{Channel: "D1", ThreadTS: "1.0"}
+	want := []web.Link{{ID: lever, URL: lever}, {ID: blocked, URL: blocked}}
+	if len(started) != 1 || started[0].UID != "" || *started[0].Slack != *th || !reflect.DeepEqual(started[0].Links, want) {
+		t.Fatalf("started = %+v", started)
 	}
 	// Requests are taken once.
-	if err := d.queueSlackLinks(ctx, u, text); err != nil || len(fw.queued("u1")) != 1 {
-		t.Fatalf("again: %v %+v", err, fw.queued("u1"))
+	if err := hook(ctx, u, turn); err != nil || len(started) != 1 {
+		t.Fatalf("again: %v %+v", err, started)
+	}
+	in := started[0]
+
+	r, err := d.memoryResume(ctx, in.UserID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, _ := fakeClaudeWith(t, "testdata/rank_jobs.jsonl")
+	d.Agent.ClaudeBinary = bin
+	pick, err := d.pickLinks(ctx, in, r)
+	if err != nil || len(pick.Picked) != 1 || pick.Picked[0].Slack == nil || pick.Picked[0].UserName != "Sai" {
+		t.Fatalf("pick = %+v %v", pick, err)
+	}
+	if p, _ := d.Store.JobPostingOf(ctx, in.UserID, store.URLHash(lever)); p != nil {
+		t.Fatalf("recorded posting = %+v", p)
+	}
+	// The failed link is told in the thread.
+	if n := len(fs.texts); n != 1 || fs.threads[0] != "1.0" || !strings.Contains(fs.texts[0], blocked+": "+linkBlocked) {
+		t.Fatalf("posts = %q", fs.texts)
+	}
+
+	bin, _ = fakeClaudeWith(t, "testdata/tailor_application.jsonl")
+	d.Agent.ClaudeBinary = bin
+	a := pick.Picked[0]
+	if chk, err := d.checkApplication(ctx, a); err != nil || chk.Skip != "" {
+		t.Fatalf("check = %+v %v", chk, err)
+	}
+	tl, err := d.tailorApplication(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.publishApplication(ctx, a, tl); err != nil {
+		t.Fatal(err)
+	}
+	posted := strings.Join(fs.texts[1:], "\n")
+	if !strings.Contains(posted, "*Cover letter*") || !strings.Contains(posted, tl.Application.Answers[0].Question) ||
+		fs.threads[len(fs.threads)-1] != "1.0" || len(fw.apps) != 0 {
+		t.Fatalf("published: %q; web apps %v", fs.texts, fw.apps)
+	}
+	// A failed application is told in the thread too.
+	if err := a.reply(d).failPending(ctx, a.LinkIDs, linkFailed); err != nil {
+		t.Fatal(err)
+	}
+	if last := fs.texts[len(fs.texts)-1]; !strings.Contains(last, lever+": "+linkFailed) {
+		t.Fatalf("failure post = %q", last)
 	}
 }
 

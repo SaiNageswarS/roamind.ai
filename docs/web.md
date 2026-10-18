@@ -1,6 +1,6 @@
 # Web channel: the web app's data contract
 
-Roamind's web app is its second channel, beside Slack, a separate repo on Firebase. The job assistant is its first feature. Users sign in with Google, upload a resume, and give their roles, regions and notes. The worker writes the resume into the user's own memory, their Person note with `relationship: self`, which is where every application is written from; a Slack user's memory may hold it already. The worker finds postings and writes an application for each: a cover letter and an answer sheet for the form. Users can also paste links to postings they found, in the web app or in Slack, and get an application for each. Users review them in the web app and apply on their own, with their own resume.
+Roamind's web app is its second channel, beside Slack, a separate repo on Firebase. The job assistant is its first feature. Users sign in with Google, upload a resume, and give their roles, regions and notes. The worker writes the resume into the user's own memory, their Person note with `relationship: self`, which is where every application is written from; a Slack user's memory may hold it already. The worker finds postings and writes an application for each: a cover letter and an answer sheet for the form. Users can also paste links to postings they found and get an application for each. Users review them in the web app and apply on their own, with their own resume. Links sent to Roamind in Slack are drafted in the Slack thread instead, and never touch Firestore: a Slack user needn't sign in here.
 
 The two sides share no code. They share Firestore and Cloud Storage, laid out as below. The worker uses a service account (`GOOGLE_APPLICATION_CREDENTIALS`), which bypasses the security rules; the web app is held to them.
 
@@ -9,7 +9,6 @@ The two sides share no code. They share Firestore and Cloud Storage, laid out as
 - The web app writes the signed-in user's Google email into their profile. The rules require it to equal `request.auth.token.email`, so a profile always carries its owner's verified email.
 - The worker maps that email to Roamind's user id, `sha256(lowercase(trim(email)))`. A web user and a Slack user with the same email are the same person.
 - Web-only users get `channel = 'web'` in the `users` table: they have the web app's features but not Slack's, which need a Slack identity, with a Basic Memory project set up when they first upload a resume. A Slack user who also uses the web app keeps all their Slack features.
-- The worker records each user's profile `uid` (`web_profiles`), so links a Slack user sends land in their profile. A Slack user has to have signed in to the web app once for that.
 
 ## Storage
 
@@ -57,7 +56,7 @@ Written by the worker, one per posting; `{id}` is the hash of the posting's URL.
 
 ### `profiles/{uid}/links/{id}`
 
-A posting the user linked to. The web app creates it, with only `url`, `status: "queued"` and `created_at` (server time), and may delete it unless it is `processing`. Only the worker updates it. The worker also creates links, with `source: "slack"`, for those a user sends in Slack.
+A posting the user linked to. The web app creates it, with only `url`, `status: "queued"` and `created_at` (server time), and may delete it unless it is `processing`. Only the worker updates it.
 
 | Field | Type | What |
 |---|---|---|
@@ -66,7 +65,6 @@ A posting the user linked to. The web app creates it, with only `url`, `status: 
 | `reason` | string | Worker: why it failed, or a note on a done one ("Already drafted."), for the user. |
 | `application_id` | string | Worker: the application for the posting, once `done`. |
 | `created_at` | timestamp | When the user added it. |
-| `source` | string | `slack` for links the worker added from Slack; absent for the web app's. |
 | `claimed_at` | timestamp | Worker: when it took the link up. |
 
 ## How the daily search uses them
