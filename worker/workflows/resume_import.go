@@ -190,7 +190,7 @@ func (d Deps) updateSelf(ctx context.Context, in ResumeImportInput, p memoryProj
 	turn, err := agent.RunTurn(ctx, d.Agent, protocol.TurnInput{
 		UserID: in.UserID, Text: importMessage + "\n\n" + note,
 		UserName: u.DisplayName, UserEmail: u.Email, Channel: protocol.ChannelWeb,
-		MemoryProject: p.Project, Tools: protocol.ToolsWorkspace,
+		MemoryProject: p.Project, Tools: protocol.ToolsWorkspace, ServerTools: d.serverTools(ResumeImportName),
 	}, func(protocol.Packet) {})
 	out.Reply, out.CostUSD = strings.TrimSpace(turn.Text), turn.CostUSD
 	if err != nil {

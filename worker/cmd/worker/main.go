@@ -95,10 +95,6 @@ func run() error {
 	} else {
 		slog.Warn("FIREBASE_PROJECT_ID is not set; no job assistant")
 	}
-	if webApp != nil && toolsServer != nil && mem != nil {
-		// Chat turns can ask the job assistant to draft the links they get.
-		toolsServer = append(toolsServer, "--jobs")
-	}
 	jobsPerRun, _ := strconv.Atoi(os.Getenv("ROAMIND_JOBS_PER_RUN"))
 	// Domains the job search never reads, comma-separated.
 	var blocked []string

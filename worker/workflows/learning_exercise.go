@@ -229,6 +229,7 @@ func (d Deps) draftExercise(ctx context.Context, in ExerciseInput, chk checkOutp
 		UserEmail:     u.Email,
 		MemoryProject: u.MemoryProject,
 		Tools:         protocol.ToolsWorkspace,
+		ServerTools:   d.serverTools(LearningExerciseName),
 		OutputSchema:  agent.DraftExerciseSchema,
 	}, func(protocol.Packet) {})
 	out.SessionID, out.CostUSD = turn.SessionID, turn.CostUSD

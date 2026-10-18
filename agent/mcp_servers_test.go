@@ -15,7 +15,7 @@ func TestMCPServers(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := Config{Memory: mem, ToolsServer: []string{"/opt/mcp", "--data", "/srv"}}
-	in := protocol.TurnInput{UserID: "u1", MemoryProject: "bm-u-sai-1"}
+	in := protocol.TurnInput{UserID: "u1", MemoryProject: "bm-u-sai-1", ServerTools: []string{protocol.ServerInterests, protocol.ServerJobs}}
 	if _, _, _, err := mcpServers(cfg, in, true, false); err == nil {
 		t.Fatal("a project not set up got a server")
 	}
@@ -32,7 +32,7 @@ func TestMCPServers(t *testing.T) {
 		!reflect.DeepEqual(args, []string{"mcp", "--project", "bm-u-sai-1"}) || !filepath.IsAbs(bm["command"].(string)) {
 		t.Fatalf("memory server = %v", bm)
 	}
-	if args := servers[ToolsServerName].(map[string]any)["args"]; !reflect.DeepEqual(args, []string{"--data", "/srv", "--user", "u1"}) {
+	if args := servers[ToolsServerName].(map[string]any)["args"]; !reflect.DeepEqual(args, []string{"--data", "/srv", "--user", "u1", "--tools", "interests,jobs"}) {
 		t.Fatalf("tools server args = %v", args)
 	}
 	if !reflect.DeepEqual(allowed, []string{"mcp__memory", "mcp__roamind"}) || len(disallowed) == 0 {

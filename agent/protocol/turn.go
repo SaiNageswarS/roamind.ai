@@ -30,6 +30,10 @@ type TurnInput struct {
 	// Tools is the set of tools the turn gets: ToolsWorkspace, ToolsWeb or
 	// ToolsNone.
 	Tools string `json:"tools,omitempty"`
+	// ServerTools are the tool sets of Roamind's MCP server the turn gets,
+	// by name (ServerInterests and the rest), as configured for its task.
+	// Only ToolsWorkspace turns get them; with none, there is no server.
+	ServerTools []string `json:"server_tools,omitempty"`
 	// OutputSchema, a JSON Schema, makes the turn return structured output
 	// (TurnOutput.Structured) instead of chat text.
 	OutputSchema string `json:"output_schema,omitempty"`
@@ -59,6 +63,16 @@ const (
 	// session: for turns whose whole input is third-party text, so nothing
 	// in it can steer the turn at the user's files or the web.
 	ToolsNone = "none"
+)
+
+// Tool sets of Roamind's MCP server (bin/mcp), for TurnInput.ServerTools;
+// the server serves them by these names.
+const (
+	// ServerInterests is following and adding news interests.
+	ServerInterests = "interests"
+	// ServerJobs is asking the job assistant to draft applications for job
+	// links.
+	ServerJobs = "jobs"
 )
 
 // NewsRef is the context of a turn in the user's news-shorts channel.

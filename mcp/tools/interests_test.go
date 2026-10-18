@@ -45,7 +45,9 @@ func TestInterests(t *testing.T) {
 	st1, st2 := mcp.NewInMemoryTransports()
 	server := mcp.NewServer(&mcp.Implementation{Name: "roamind", Version: "v1"}, nil)
 	// The feeds are on loopback, which feeds.New refuses.
-	Register(server, Deps{Store: st, Feeds: &feeds.Client{HTTP: srv.Client()}, UserID: "h1"})
+	if err := Register(server, Deps{Store: st, Feeds: &feeds.Client{HTTP: srv.Client()}, UserID: "h1"}, []string{Interests}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := server.Connect(ctx, st1, nil); err != nil {
 		t.Fatal(err)
 	}

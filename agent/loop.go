@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"text/template"
 	"time"
 
@@ -37,8 +38,8 @@ type Config struct {
 	Memory *notes.Notes
 	// ToolsServer, when set, is the command of Roamind's MCP server (bin/mcp),
 	// whose tools keep the user's data, such as their news interests; each
-	// turn appends --user <id>. Chat turns get it, structured-output turns
-	// don't.
+	// turn appends --user <id> and --tools with its ServerTools. Turns with
+	// no ServerTools don't get it.
 	ToolsServer []string
 	// BlockedDomains are domains, with their subdomains, that ToolsWeb
 	// turns never fetch.
@@ -76,7 +77,7 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, emit Emit) 
 	}
 	workspace := in.Tools == protocol.ToolsWorkspace
 	withMemory := workspace && cfg.Memory != nil && in.MemoryProject != ""
-	withTools := workspace && len(cfg.ToolsServer) > 0 && in.OutputSchema == ""
+	withTools := workspace && len(cfg.ToolsServer) > 0 && len(in.ServerTools) > 0
 	var sp bytes.Buffer
 	err = systemPrompt.Execute(&sp, map[string]any{
 		"UserName":  orDefault(in.UserName, "the user"),
@@ -87,7 +88,7 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, emit Emit) 
 		"Goal":      in.Goal,
 		"Exercise":  exercise(in),
 		"News":      in.News,
-		"Interests": withTools,
+		"Interests": withTools && slices.Contains(in.ServerTools, protocol.ServerInterests),
 		"Tools":     orDefault(in.Tools, "workspace"),
 		"Channel":   orDefault(in.Channel, "slack"),
 	})

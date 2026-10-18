@@ -446,7 +446,7 @@ func TestProcessNewsChannel(t *testing.T) {
 	}
 	// The turn gets the interests in its prompt and the tools pinned to the user.
 	for _, want := range []string{"- Positive living", "follow_interest",
-		`"roamind":{"args":["--data","/srv/data","--user","` + owner + `"],"command":"/opt/mcp"`, "mcp__roamind"} {
+		`"roamind":{"args":["--data","/srv/data","--user","` + owner + `","--tools","interests"],"command":"/opt/mcp"`, "mcp__roamind"} {
 		if !strings.Contains(prompt(), want) {
 			t.Errorf("turn lacks %s:\n%s", want, prompt())
 		}

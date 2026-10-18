@@ -19,11 +19,13 @@ func TestSubmitJobLinks(t *testing.T) {
 	if err := st.UpsertSlackUser(ctx, store.User{ID: "h1", Email: "h1@x.com", SlackTeamID: "T1", SlackUserID: "U1"}); err != nil {
 		t.Fatal(err)
 	}
-	connect := func(jobs bool) *mcp.ClientSession {
+	connect := func(sets ...string) *mcp.ClientSession {
 		t.Helper()
 		st1, st2 := mcp.NewInMemoryTransports()
 		server := mcp.NewServer(&mcp.Implementation{Name: "roamind", Version: "v1"}, nil)
-		Register(server, Deps{Store: st, UserID: "h1", Jobs: jobs})
+		if err := Register(server, Deps{Store: st, UserID: "h1"}, sets); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := server.Connect(ctx, st1, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -35,18 +37,18 @@ func TestSubmitJobLinks(t *testing.T) {
 		return cs
 	}
 
-	// Without the job assistant there is no such tool.
-	tools, err := connect(false).ListTools(ctx, nil)
+	// Without the jobs tool set there is no such tool.
+	tools, err := connect(Interests).ListTools(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, tl := range tools.Tools {
 		if tl.Name == "submit_job_links" {
-			t.Fatal("submit_job_links without --jobs")
+			t.Fatal("submit_job_links without the jobs tool set")
 		}
 	}
 
-	cs := connect(true)
+	cs := connect(Interests, Jobs)
 	call := func(urls ...string) (string, bool) {
 		t.Helper()
 		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "submit_job_links", Arguments: map[string]any{"urls": urls}})
@@ -79,5 +81,12 @@ func TestSubmitJobLinks(t *testing.T) {
 	if got, _ := st.TakeLinkRequests(ctx, "h1"); !reflect.DeepEqual(got, []string{link, "https://acme.com/careers/2"}) &&
 		!reflect.DeepEqual(got, []string{"https://acme.com/careers/2", link}) {
 		t.Fatalf("requests = %v", got)
+	}
+}
+
+func TestRegisterUnknown(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "roamind", Version: "v1"}, nil)
+	if err := Register(server, Deps{}, []string{Interests, "shell"}); err == nil {
+		t.Fatal("an unknown tool set was served")
 	}
 }

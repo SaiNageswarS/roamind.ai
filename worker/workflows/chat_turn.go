@@ -181,6 +181,7 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 		Exercise:      exercise,
 		News:          newsRef,
 		Tools:         protocol.ToolsWorkspace,
+		ServerTools:   d.serverTools(ChatTurnName),
 	}, up.Apply)
 
 	note := ""

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"strings"
 
 	"roamind.ai/agent/protocol"
 )
@@ -31,8 +32,8 @@ var memoryDisallowedTools = []string{
 }
 
 // mcpServers returns the mcpServers entries for a turn, with the tools to
-// allow and disallow on them: Basic Memory with memory, Roamind's server
-// with tools.
+// allow and disallow on them: Basic Memory with memory, Roamind's server,
+// serving the turn's tool sets, with tools.
 func mcpServers(cfg Config, in protocol.TurnInput, memory, tools bool) (servers map[string]any, allowed, disallowed []string, err error) {
 	servers = map[string]any{}
 	if memory {
@@ -53,7 +54,8 @@ func mcpServers(cfg Config, in protocol.TurnInput, memory, tools bool) (servers 
 		servers[ToolsServerName] = map[string]any{
 			"type":    "stdio",
 			"command": cfg.ToolsServer[0],
-			"args":    append(cfg.ToolsServer[1:len(cfg.ToolsServer):len(cfg.ToolsServer)], "--user", in.UserID),
+			"args": append(cfg.ToolsServer[1:len(cfg.ToolsServer):len(cfg.ToolsServer)],
+				"--user", in.UserID, "--tools", strings.Join(in.ServerTools, ",")),
 		}
 		allowed = append(allowed, "mcp__"+ToolsServerName)
 	}
