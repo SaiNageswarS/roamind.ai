@@ -49,7 +49,9 @@ const (
 	linkNoResumeSlack = "Share your resume with me, or tell me about your work, first."
 	linkNotURL        = "This doesn't look like a link to a job posting."
 	linkBlocked       = "Postings on this site aren't read."
-	linkUnread        = "Couldn't read this posting: it may have closed, or its page needs a login."
+	linkUnread        = "Couldn't read this posting: its site didn't answer, or the page needs a login."
+	linkGone          = "This posting has closed."
+	linkNoText        = "Couldn't find the posting on this page. Send the link from the company's own careers page instead."
 	linkFailed        = "Drafting this application failed. Send the link again to retry."
 	linkInFlight      = "Being drafted; it will be ready shortly."
 	linkDraftedBy     = "Already drafted."
@@ -182,9 +184,9 @@ func (d Deps) pickLinks(ctx context.Context, in JobLinksInput, r huntResume) (li
 	}
 
 	postings, unread := d.readPostings(ctx, fresh)
-	for _, u := range unread {
+	for u, err := range unread {
 		for _, id := range byURL[u] {
-			out.Failed[id] = linkUnread
+			out.Failed[id] = unreadReason(err)
 		}
 	}
 	if err := reply.fail(ctx, out.Failed); err != nil {
@@ -250,6 +252,17 @@ func (d Deps) pickLinks(ctx context.Context, in JobLinksInput, r huntResume) (li
 		})
 	}
 	return out, nil
+}
+
+// unreadReason tells the user why their posting couldn't be read.
+func unreadReason(err error) string {
+	switch {
+	case errors.Is(err, jobs.ErrGone):
+		return linkGone
+	case errors.Is(err, jobs.ErrNoText):
+		return linkNoText
+	}
+	return linkUnread
 }
 
 // undrafted returns the postings found that have no application for the

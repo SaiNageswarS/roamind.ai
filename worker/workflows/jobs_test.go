@@ -231,6 +231,10 @@ func atsServer(t *testing.T) *jobs.Client {
 		"api.lever.co/v0/postings/palantir/6ed76ce8-4156-4b60-b120-403538bd66cd": "lever.json",
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == "app.example.com" {
+			w.Write([]byte(`<html><body><div id="root"></div><script src="/main.js"></script></body></html>`))
+			return
+		}
 		name, ok := fixtures[r.Host+r.URL.Path]
 		if !ok {
 			http.NotFound(w, r)

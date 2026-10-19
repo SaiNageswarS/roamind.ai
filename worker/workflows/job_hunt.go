@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -347,7 +348,7 @@ func (d Deps) pickJobs(ctx context.Context, in JobHuntInput, r huntResume, f hun
 	}
 	found := d.newPostings(ctx, in.UserID, f.Postings)
 	postings, unread := d.readPostings(ctx, found)
-	out.Unread, out.Candidates = unread, len(postings)
+	out.Unread, out.Candidates = slices.Sorted(maps.Keys(unread)), len(postings)
 	if len(postings) == 0 {
 		return out, d.setSearch(ctx, in.UID, "done", "No new postings today.", 0)
 	}
@@ -462,10 +463,11 @@ func (d Deps) newPostings(ctx context.Context, userID string, found []agent.Foun
 }
 
 // readPostings reads the postings from their sites, a few at a time. It
-// returns those read, in order, and the URLs of those that could not be
-// read or are gone.
-func (d Deps) readPostings(ctx context.Context, found []agent.FoundJob) ([]jobs.Posting, []string) {
+// returns those read, in order, and why each of the others could not be
+// read, by URL.
+func (d Deps) readPostings(ctx context.Context, found []agent.FoundJob) ([]jobs.Posting, map[string]error) {
 	read := make([]*jobs.Posting, len(found))
+	errs := make([]error, len(found))
 	sem := make(chan struct{}, 4)
 	var wg sync.WaitGroup
 	for i, fj := range found {
@@ -477,6 +479,7 @@ func (d Deps) readPostings(ctx context.Context, found []agent.FoundJob) ([]jobs.
 			jp, err := d.Jobs.Fetch(ctx, fj.URL)
 			if err != nil {
 				slog.Info("posting not read", "url", fj.URL, "err", err)
+				errs[i] = err
 				return
 			}
 			jp.URL = fj.URL // the canonical URL the posting is recorded under
@@ -494,10 +497,10 @@ func (d Deps) readPostings(ctx context.Context, found []agent.FoundJob) ([]jobs.
 	}
 	wg.Wait()
 	var out []jobs.Posting
-	var unread []string
+	unread := map[string]error{}
 	for i, jp := range read {
-		if jp == nil || jp.Description == "" {
-			unread = append(unread, found[i].URL)
+		if jp == nil {
+			unread[found[i].URL] = errs[i]
 			continue
 		}
 		out = append(out, *jp)

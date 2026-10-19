@@ -1,6 +1,7 @@
 // Package jobs reads job postings from applicant tracking systems: through
 // the public JSON APIs of Greenhouse, Lever, Ashby and Workday, and as
-// page text from anywhere else.
+// page text from anywhere else, rendered in a browser when the page builds
+// itself with JavaScript.
 package jobs
 
 import (
@@ -9,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -30,14 +32,25 @@ const (
 // MaxDescription is how much of a posting's description is kept.
 const MaxDescription = 12000
 
-// MaxBody caps a response; an Ashby board lists every job of a company.
+// MaxBody caps a response.
 const MaxBody = 8 << 20
+
+// MaxBoard caps an Ashby board, which lists every job of a company with
+// its description; it is read as a stream, so it isn't held in memory.
+const MaxBoard = 64 << 20
+
+// minText is how much text a page needs to pass for a posting; one with
+// less, like a page that fills itself in with JavaScript, is rendered.
+const minText = 300
 
 // ErrGone is returned for a posting its site no longer has.
 var ErrGone = errors.New("the posting is gone")
 
 // ErrBlocked is returned for URLs on the client's blocked domains.
 var ErrBlocked = errors.New("the site is blocked")
+
+// ErrNoText is returned for a page with no posting text, even rendered.
+var ErrNoText = errors.New("the page has no posting text")
 
 // Posting is a job posting.
 type Posting struct {
@@ -130,6 +143,9 @@ type Client struct {
 	HTTP *http.Client
 	// Blocked are domains never read, with their subdomains.
 	Blocked []string
+	// Render, if set, renders the pages whose HTML has too little text or
+	// that refuse a plain request.
+	Render Renderer
 }
 
 // New returns a client that gives up on a request after timeout and
@@ -177,7 +193,16 @@ func (c *Client) Fetch(ctx context.Context, raw string) (*Posting, error) {
 	case Workday:
 		p, err = c.workday(ctx, ref)
 	default:
+		// A company's own careers page on Greenhouse: its API has the
+		// posting, with the form's questions.
+		if p, err = c.greenhouseHosted(ctx, ref); err == nil {
+			ref.Source = Greenhouse
+			break
+		}
 		p, err = c.page(ctx, ref)
+	}
+	if err == nil && strings.TrimSpace(p.Description) == "" {
+		err = ErrNoText
 	}
 	if err != nil {
 		return nil, fmt.Errorf("posting %s: %w", ref.URL, err)
@@ -278,28 +303,61 @@ func (c *Client) lever(ctx context.Context, ref Ref) (*Posting, error) {
 }
 
 func (c *Client) ashby(ctx context.Context, ref Ref) (*Posting, error) {
-	var j struct {
-		Jobs []struct {
-			ID               string `json:"id"`
-			Title            string `json:"title"`
-			Location         string `json:"location"`
-			PublishedAt      string `json:"publishedAt"`
-			JobURL           string `json:"jobUrl"`
-			ApplyURL         string `json:"applyUrl"`
-			DescriptionPlain string `json:"descriptionPlain"`
-		} `json:"jobs"`
+	type job struct {
+		ID               string `json:"id"`
+		Title            string `json:"title"`
+		Location         string `json:"location"`
+		PublishedAt      string `json:"publishedAt"`
+		JobURL           string `json:"jobUrl"`
+		ApplyURL         string `json:"applyUrl"`
+		DescriptionPlain string `json:"descriptionPlain"`
 	}
-	u := "https://" + ref.host + "/posting-api/job-board/" + url.PathEscape(ref.board)
-	if err := c.getJSON(ctx, u, &j); err != nil {
+	resp, err := c.get(ctx, "https://"+ref.host+"/posting-api/job-board/"+url.PathEscape(ref.board), "application/json")
+	if err != nil {
 		return nil, err
 	}
-	for _, job := range j.Jobs {
-		if job.ID == ref.id {
-			return &Posting{URL: job.JobURL, ApplyURL: job.ApplyURL, Title: job.Title, Company: ref.board,
-				Location: job.Location, Posted: isoDate(job.PublishedAt), Description: job.DescriptionPlain}, nil
+	defer resp.Body.Close()
+	// {"jobs": [...], ...}: the jobs are decoded one at a time, up to ours.
+	dec := json.NewDecoder(io.LimitReader(resp.Body, MaxBoard))
+	if err := seekArray(dec, "jobs"); err != nil {
+		return nil, fmt.Errorf("ashby board: %w", err)
+	}
+	for dec.More() {
+		var j job
+		if err := dec.Decode(&j); err != nil {
+			return nil, fmt.Errorf("ashby board: %w", err)
+		}
+		if j.ID == ref.id {
+			return &Posting{URL: j.JobURL, ApplyURL: j.ApplyURL, Title: j.Title, Company: ref.board,
+				Location: j.Location, Posted: isoDate(j.PublishedAt), Description: j.DescriptionPlain}, nil
 		}
 	}
 	return nil, ErrGone
+}
+
+// seekArray reads dec up to the start of the array under key in the
+// top-level object, skipping the values before it.
+func seekArray(dec *json.Decoder, key string) error {
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return fmt.Errorf("not an object: %v", err)
+	}
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if t == key {
+			if t, err := dec.Token(); err != nil || t != json.Delim('[') {
+				return fmt.Errorf("%s is not an array: %v", key, err)
+			}
+			return nil
+		}
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("no %s", key)
 }
 
 func (c *Client) workday(ctx context.Context, ref Ref) (*Posting, error) {
@@ -325,8 +383,30 @@ func (c *Client) workday(ctx context.Context, ref Ref) (*Posting, error) {
 		Location: i.Location, Posted: isoDate(i.StartDate), Description: Text(i.JobDescription)}, nil
 }
 
-// page reads a posting's page as text; its title is the page's.
+// page reads a posting's page as text; its title is the page's. A page
+// with too little text, or that refuses a plain request (bot checks), is
+// rendered when the client has a renderer.
 func (c *Client) page(ctx context.Context, ref Ref) (*Posting, error) {
+	p, err := c.plainPage(ctx, ref)
+	if c.Render == nil || errors.Is(err, ErrGone) || (err == nil && len(p.Description) >= minText) {
+		return p, err
+	}
+	doc, rerr := c.Render.Render(ctx, ref.URL)
+	if rerr != nil {
+		if err != nil {
+			return nil, err
+		}
+		return p, nil // keep what the plain page had
+	}
+	r := pageOf(ref, doc)
+	if err == nil && len(r.Description) <= len(p.Description) {
+		return p, nil
+	}
+	return r, nil
+}
+
+// plainPage reads a page's HTML as sent, without running its scripts.
+func (c *Client) plainPage(ctx context.Context, ref Ref) (*Posting, error) {
 	resp, err := c.get(ctx, ref.URL, "text/html")
 	if err != nil {
 		return nil, err
@@ -336,12 +416,46 @@ func (c *Client) page(ctx context.Context, ref Ref) (*Posting, error) {
 	if err != nil {
 		return nil, err
 	}
-	page := string(body)
+	return pageOf(ref, string(body)), nil
+}
+
+// pageOf is the posting in a page's HTML.
+func pageOf(ref Ref, page string) *Posting {
 	var title string
 	if m := titleRe.FindStringSubmatch(page); m != nil {
 		title = strings.TrimSpace(html.UnescapeString(m[1]))
 	}
-	return &Posting{ApplyURL: ref.URL, Title: title, Description: Text(page)}, nil
+	return &Posting{ApplyURL: ref.URL, Title: title, Description: Text(page)}
+}
+
+// greenhouseHosted reads a posting on a company's own careers page that
+// embeds Greenhouse, from its gh_jid parameter, through Greenhouse's API.
+// The board is guessed from the site's name; a wrong guess is a 404, since
+// a job id belongs to one board.
+func (c *Client) greenhouseHosted(ctx context.Context, ref Ref) (*Posting, error) {
+	u, err := url.Parse(ref.URL)
+	if err != nil {
+		return nil, err
+	}
+	id := u.Query().Get("gh_jid")
+	if !digits.MatchString(id) {
+		return nil, ErrGone
+	}
+	labels := strings.Split(strings.ToLower(u.Hostname()), ".")
+	for len(labels) > 2 && (labels[0] == "www" || labels[0] == "careers" || labels[0] == "jobs") {
+		labels = labels[1:]
+	}
+	// acme-ai.com's board may be acme-ai or acmeai.
+	boards := []string{labels[0]}
+	if b := strings.ReplaceAll(labels[0], "-", ""); b != labels[0] {
+		boards = append(boards, b)
+	}
+	for _, b := range boards {
+		if p, err := c.greenhouse(ctx, Ref{host: "boards-api.greenhouse.io", board: b, id: id}); err == nil {
+			return p, nil
+		}
+	}
+	return nil, ErrGone
 }
 
 func (c *Client) getJSON(ctx context.Context, u string, v any) error {

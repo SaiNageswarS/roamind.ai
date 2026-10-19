@@ -41,11 +41,25 @@ func server(t *testing.T) *Client {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fixture := map[string]string{
 			"boards-api.greenhouse.io/v1/boards/anthropic/jobs/4461450008":           "greenhouse.json",
+			"boards-api.greenhouse.io/v1/boards/acmeai/jobs/4461450008":              "greenhouse.json",
 			"api.lever.co/v0/postings/palantir/6ed76ce8-4156-4b60-b120-403538bd66cd": "lever.json",
 			"api.ashbyhq.com/posting-api/job-board/openai":                           "ashby.json",
 			"nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/Principal-Block-File-Storage-Software-Engineer--Linux---DGX-Cloud_JR2024421": "workday.json",
 		}[r.Host+r.URL.Path]
 		switch {
+		case r.Host == "app.example.com":
+			// Filled in by its script; no text without running it.
+			w.Write([]byte(`<html><head><title>Jobs</title></head><body><div id="root"></div><script src="/main.js"></script></body></html>`))
+		case r.Host == "guarded.example.com":
+			http.Error(w, "checking your browser", http.StatusTooManyRequests)
+		case r.Host == "big.example.com":
+			// An Ashby board larger than MaxBody, our job last.
+			w.Write([]byte(`{"apiVersion":"1","jobs":[`))
+			filler := `{"id":"x","title":"Filler","descriptionPlain":"` + strings.Repeat("a", 1<<20) + `"},`
+			for range 10 {
+				w.Write([]byte(filler))
+			}
+			w.Write([]byte(`{"id":"240d459b-696d-43eb-8497-fab3e56ecd9b","title":"Last","descriptionPlain":"Found."}]}`))
 		case r.Host == "careers.example.com":
 			w.Write([]byte(`<html><head><title>ML Engineer &amp; more</title><script>var x = "<p>no</p>";</script></head>
 				<body><h1>ML Engineer</h1><p>Build <b>models</b>.</p><ul><li>Go</li><li>JAX</li></ul></body></html>`))
@@ -145,5 +159,82 @@ func TestBlocked(t *testing.T) {
 	}
 	if _, err := c.Fetch(context.Background(), "https://jobs.example.org/view/1"); !errors.Is(err, ErrBlocked) {
 		t.Errorf("blocked fetch: %v", err)
+	}
+}
+
+// fakeRender renders every page as html, or fails.
+type fakeRender struct {
+	html string
+	urls []string
+}
+
+func (f *fakeRender) Render(_ context.Context, u string) (string, error) {
+	f.urls = append(f.urls, u)
+	if f.html == "" {
+		return "", errors.New("no browser")
+	}
+	return f.html, nil
+}
+
+func TestRender(t *testing.T) {
+	ctx := context.Background()
+	c := server(t)
+	rendered := `<html><head><title>Data Scientist</title></head><body><h1>Data Scientist</h1><p>` + strings.Repeat("Work on models. ", 30) + `</p></body></html>`
+
+	// Without a renderer, a page that fills itself in has no posting.
+	if _, err := c.Fetch(ctx, "https://app.example.com/job/1"); !errors.Is(err, ErrNoText) {
+		t.Errorf("unrendered: %v", err)
+	}
+	r := &fakeRender{html: rendered}
+	c.Render = r
+	p, err := c.Fetch(ctx, "https://app.example.com/job/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Source != Other || p.Title != "Data Scientist" || !strings.HasPrefix(p.Description, "Data Scientist\nWork on models.") {
+		t.Errorf("rendered = %+v", p)
+	}
+	// A site that refuses a plain request is rendered too.
+	if p, err := c.Fetch(ctx, "https://guarded.example.com/job/2"); err != nil || p.Title != "Data Scientist" {
+		t.Errorf("guarded = %+v, %v", p, err)
+	}
+	// A short page is rendered, in case scripts add to it; a posting its
+	// site says is gone isn't.
+	r.urls = nil
+	c.Fetch(ctx, "https://careers.example.com/jobs/42")
+	c.Fetch(ctx, "https://job-boards.greenhouse.io/anthropic/jobs/1")
+	if !reflect.DeepEqual(r.urls, []string{"https://careers.example.com/jobs/42"}) {
+		t.Errorf("rendered %v", r.urls)
+	}
+	// A failed render keeps the plain page's text, if any.
+	r.html = ""
+	if p, err := c.Fetch(ctx, "https://careers.example.com/jobs/42"); err != nil || p.Description == "" {
+		t.Errorf("failed render = %+v, %v", p, err)
+	}
+	if _, err := c.Fetch(ctx, "https://app.example.com/job/1"); !errors.Is(err, ErrNoText) {
+		t.Errorf("failed render of an empty page: %v", err)
+	}
+}
+
+// A company's careers page that embeds Greenhouse is read through its API.
+func TestGreenhouseHosted(t *testing.T) {
+	p, err := server(t).Fetch(context.Background(), "https://careers.acme-ai.com/open-roles/account-executive?gh_jid=4461450008")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Source != Greenhouse || p.Title != "Account Executive, AI Native" || len(p.Questions) != 10 ||
+		p.URL != "https://careers.acme-ai.com/open-roles/account-executive?gh_jid=4461450008" {
+		t.Errorf("hosted = %+v", p)
+	}
+}
+
+// An Ashby board larger than MaxBody is read as a stream.
+func TestAshbyBigBoard(t *testing.T) {
+	p, err := server(t).ashby(context.Background(), Ref{host: "big.example.com", board: "x", id: "240d459b-696d-43eb-8497-fab3e56ecd9b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Title != "Last" || p.Description != "Found." {
+		t.Errorf("big board = %+v", p)
 	}
 }
