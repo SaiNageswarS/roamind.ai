@@ -1,7 +1,9 @@
 // Package jobs reads job postings from applicant tracking systems: through
-// the public JSON APIs of Greenhouse, Lever, Ashby and Workday, and as
-// page text from anywhere else, rendered in a browser when the page builds
-// itself with JavaScript.
+// the public APIs of Greenhouse, Lever, Ashby and Workday, and of
+// SmartRecruiters, Recruitee, Personio, Workable and Oracle Recruiting
+// Cloud, common in Europe and Hong Kong. Any other page is read from its
+// JobPosting data when it has some, else rendered in a browser and read
+// as text.
 package jobs
 
 import (
@@ -26,7 +28,14 @@ const (
 	Lever      = "lever"
 	Ashby      = "ashby"
 	Workday    = "workday"
-	Other      = "other"
+	// SmartRecruiters, Recruitee, Personio, Workable and Oracle Recruiting
+	// Cloud: common in Europe and Hong Kong.
+	SmartRecruiters = "smartrecruiters"
+	Recruitee       = "recruitee"
+	Personio        = "personio"
+	Workable        = "workable"
+	Oracle          = "oracle"
+	Other           = "other"
 )
 
 // MaxDescription is how much of a posting's description is kept.
@@ -38,10 +47,6 @@ const MaxBody = 8 << 20
 // MaxBoard caps an Ashby board, which lists every job of a company with
 // its description; it is read as a stream, so it isn't held in memory.
 const MaxBoard = 64 << 20
-
-// minText is how much text a page needs to pass for a posting; one with
-// less, like a page that fills itself in with JavaScript, is rendered.
-const minText = 300
 
 // ErrGone is returned for a posting its site no longer has.
 var ErrGone = errors.New("the posting is gone")
@@ -94,6 +99,12 @@ var (
 	idPath = regexp.MustCompile(`^/([^/]+)/([0-9a-f-]{36})`)
 	wdPath = regexp.MustCompile(`^/(?:[a-z]{2}-[A-Z]{2}/)?([^/]+)(/job/.+)$`)
 	digits = regexp.MustCompile(`^\d+$`)
+	srPath = regexp.MustCompile(`^/([^/]+)/(\d+)`)
+	rtPath = regexp.MustCompile(`^/o/([^/]+)`)
+	pePath = regexp.MustCompile(`^/job/(\d+)`)
+	peHost = regexp.MustCompile(`^[a-z0-9-]+\.jobs\.personio\.(de|com)$`)
+	wkPath = regexp.MustCompile(`^/([^/]+)/j/([0-9A-Za-z]+)`)
+	orPath = regexp.MustCompile(`^/hcmUI/CandidateExperience/[^/]+/sites/([^/]+)/job/(\d+)`)
 )
 
 // Parse resolves a posting URL to its site.
@@ -128,6 +139,28 @@ func Parse(raw string) (Ref, error) {
 		if m := idPath.FindStringSubmatch(u.Path); m != nil {
 			return Ref{Source: Ashby, URL: "https://jobs.ashbyhq.com/" + m[1] + "/" + m[2], host: "api.ashbyhq.com", board: m[1], id: m[2]}, nil
 		}
+	case host == "jobs.smartrecruiters.com" || host == "careers.smartrecruiters.com":
+		if m := srPath.FindStringSubmatch(u.Path); m != nil {
+			return Ref{Source: SmartRecruiters, URL: "https://jobs.smartrecruiters.com/" + m[1] + "/" + m[2], host: "api.smartrecruiters.com", board: m[1], id: m[2]}, nil
+		}
+	case strings.HasSuffix(host, ".recruitee.com"):
+		if m := rtPath.FindStringSubmatch(u.Path); m != nil {
+			company, _, _ := strings.Cut(host, ".")
+			return Ref{Source: Recruitee, URL: "https://" + host + "/o/" + m[1], host: host, board: company, id: m[1]}, nil
+		}
+	case peHost.MatchString(host):
+		if m := pePath.FindStringSubmatch(u.Path); m != nil {
+			company, _, _ := strings.Cut(host, ".")
+			return Ref{Source: Personio, URL: "https://" + host + "/job/" + m[1], host: host, board: company, id: m[1]}, nil
+		}
+	case host == "apply.workable.com":
+		if m := wkPath.FindStringSubmatch(u.Path); m != nil {
+			return Ref{Source: Workable, URL: "https://apply.workable.com/" + m[1] + "/j/" + m[2], host: host, board: m[1], id: m[2]}, nil
+		}
+	case strings.HasSuffix(host, ".oraclecloud.com"):
+		if m := orPath.FindStringSubmatch(u.Path); m != nil {
+			return Ref{Source: Oracle, URL: "https://" + host + "/hcmUI/CandidateExperience/en/sites/" + m[1] + "/job/" + m[2], host: host, board: m[1], id: m[2]}, nil
+		}
 	case strings.HasSuffix(host, ".myworkdayjobs.com"):
 		if m := wdPath.FindStringSubmatch(u.Path); m != nil {
 			tenant, _, _ := strings.Cut(host, ".")
@@ -143,8 +176,8 @@ type Client struct {
 	HTTP *http.Client
 	// Blocked are domains never read, with their subdomains.
 	Blocked []string
-	// Render, if set, renders the pages whose HTML has too little text or
-	// that refuse a plain request.
+	// Render, if set, renders every page not read through an API, unless
+	// its HTML carries the posting's JobPosting data.
 	Render Renderer
 }
 
@@ -192,6 +225,16 @@ func (c *Client) Fetch(ctx context.Context, raw string) (*Posting, error) {
 		p, err = c.ashby(ctx, ref)
 	case Workday:
 		p, err = c.workday(ctx, ref)
+	case SmartRecruiters:
+		p, err = c.smartRecruiters(ctx, ref)
+	case Recruitee:
+		p, err = c.recruitee(ctx, ref)
+	case Personio:
+		p, err = c.personio(ctx, ref)
+	case Workable:
+		p, err = c.workable(ctx, ref)
+	case Oracle:
+		p, err = c.oracle(ctx, ref)
 	default:
 		// A company's own careers page on Greenhouse: its API has the
 		// posting, with the form's questions.
@@ -383,30 +426,33 @@ func (c *Client) workday(ctx context.Context, ref Ref) (*Posting, error) {
 		Location: i.Location, Posted: isoDate(i.StartDate), Description: Text(i.JobDescription)}, nil
 }
 
-// page reads a posting's page as text; its title is the page's. A page
-// with too little text, or that refuses a plain request (bot checks), is
-// rendered when the client has a renderer.
+// page reads a posting from its page: from the JobPosting data its HTML
+// carries, else from its text once rendered, so whatever its scripts fill
+// in is there. Without a renderer, or when rendering fails, it reads the
+// HTML as sent. A page the site says is gone isn't rendered.
 func (c *Client) page(ctx context.Context, ref Ref) (*Posting, error) {
-	p, err := c.plainPage(ctx, ref)
-	if c.Render == nil || errors.Is(err, ErrGone) || (err == nil && len(p.Description) >= minText) {
-		return p, err
+	plain, err := c.plainPage(ctx, ref)
+	switch {
+	case errors.Is(err, ErrGone):
+		return nil, err
+	case err == nil && plain.structured:
+		return &plain.Posting, nil
 	}
-	doc, rerr := c.Render.Render(ctx, ref.URL)
-	if rerr != nil {
-		if err != nil {
-			return nil, err
+	if c.Render != nil {
+		if doc, rerr := c.Render.Render(ctx, ref.URL); rerr == nil {
+			if r := pageOf(ref, doc); r.Description != "" {
+				return &r.Posting, nil
+			}
 		}
-		return p, nil // keep what the plain page had
 	}
-	r := pageOf(ref, doc)
-	if err == nil && len(r.Description) <= len(p.Description) {
-		return p, nil
+	if err != nil {
+		return nil, err
 	}
-	return r, nil
+	return &plain.Posting, nil
 }
 
 // plainPage reads a page's HTML as sent, without running its scripts.
-func (c *Client) plainPage(ctx context.Context, ref Ref) (*Posting, error) {
+func (c *Client) plainPage(ctx context.Context, ref Ref) (*pagePosting, error) {
 	resp, err := c.get(ctx, ref.URL, "text/html")
 	if err != nil {
 		return nil, err
@@ -419,13 +465,25 @@ func (c *Client) plainPage(ctx context.Context, ref Ref) (*Posting, error) {
 	return pageOf(ref, string(body)), nil
 }
 
-// pageOf is the posting in a page's HTML.
-func pageOf(ref Ref, page string) *Posting {
+// pagePosting is a posting read from a page; structured when it came from
+// the page's JobPosting data rather than its text.
+type pagePosting struct {
+	Posting
+	structured bool
+}
+
+// pageOf is the posting in a page's HTML: its JobPosting data, else its
+// text under the page's title.
+func pageOf(ref Ref, page string) *pagePosting {
+	if p := ldPosting(page); p != nil {
+		p.ApplyURL = ref.URL
+		return &pagePosting{Posting: *p, structured: true}
+	}
 	var title string
 	if m := titleRe.FindStringSubmatch(page); m != nil {
 		title = strings.TrimSpace(html.UnescapeString(m[1]))
 	}
-	return &Posting{ApplyURL: ref.URL, Title: title, Description: Text(page)}
+	return &pagePosting{Posting: Posting{ApplyURL: ref.URL, Title: title, Description: Text(page)}}
 }
 
 // greenhouseHosted reads a posting on a company's own careers page that

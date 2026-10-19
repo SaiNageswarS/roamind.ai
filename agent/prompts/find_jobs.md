@@ -20,8 +20,11 @@ Their notes on what they look for:
 
 Search applicant tracking sites, where postings link straight to their
 application form: job-boards.greenhouse.io, jobs.lever.co,
-jobs.ashbyhq.com and myworkdayjobs.com, and also companies' own career
-pages. Searches such as `site:job-boards.greenhouse.io "<role>" <region>`
+jobs.ashbyhq.com and myworkdayjobs.com; in Europe and Hong Kong also
+jobs.smartrecruiters.com, recruitee.com, jobs.personio.de,
+apply.workable.com, teamtailor.com and Oracle careers sites
+(oraclecloud.com/hcmUI/CandidateExperience); and also companies' own
+career pages. Searches such as `site:job-boards.greenhouse.io "<role>" <region>`
 work well; try each role in each region. Open a result with WebFetch when
 you need to check that it is still open, in the region, and a match for
 the role.
