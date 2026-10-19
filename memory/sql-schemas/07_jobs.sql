@@ -1,10 +1,6 @@
--- Each job-assistant user's daily search time, spread through the day so
--- no two users' searches run close together.
-CREATE TABLE IF NOT EXISTS job_schedules (
-    user_id     TEXT PRIMARY KEY REFERENCES users(id),
-    at_minute   INTEGER NOT NULL UNIQUE, -- minutes after local midnight
-    last_run_on TEXT -- local YYYY-MM-DD of the last search
-);
+-- Job searches run at fixed hours for every user; the per-user search
+-- times are gone.
+DROP TABLE IF EXISTS job_schedules;
 -- Job postings found for a user. A posting's row is made before its
 -- application is written, and stays, so it is never found twice.
 CREATE TABLE IF NOT EXISTS job_postings (
@@ -13,7 +9,7 @@ CREATE TABLE IF NOT EXISTS job_postings (
     url          TEXT NOT NULL,
     title        TEXT NOT NULL,
     company      TEXT NOT NULL DEFAULT '',
-    source       TEXT NOT NULL, -- greenhouse, lever, ashby, workday, other
+    source       TEXT NOT NULL, -- jobs.Ref.Source: greenhouse, lever, …, other
     status       TEXT NOT NULL, -- picked, published, failed, closed, passed (not a fit)
     found_at     INTEGER NOT NULL,
     published_at INTEGER,

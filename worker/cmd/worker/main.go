@@ -147,6 +147,8 @@ func run() error {
 			"crons_utc", workflows.LocalCrons(loc, workflows.ExerciseHour))
 		slog.Info("news shorts", "tz", loc.String(),
 			"crons_utc", workflows.LocalCrons(loc, workflows.NewsHours...))
+		slog.Info("job searches", "tz", loc.String(),
+			"crons_utc", workflows.LocalCrons(loc, workflows.JobSearchHours...))
 	}
 
 	if listen != nil {

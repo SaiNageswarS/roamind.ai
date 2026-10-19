@@ -319,40 +319,6 @@ func writeSelf(t *testing.T, d Deps, project, note string) {
 	}
 }
 
-func TestPickMinute(t *testing.T) {
-	// Up to five users are always 90 minutes apart: four times block at
-	// most 44 of the 56 grid times.
-	var taken []int
-	for range 5 {
-		m, ok := pickMinute(taken)
-		if !ok || m < jobDayStart || m >= jobDayEnd || m%jobStep != 0 {
-			t.Fatalf("pick %d after %v: %v", m, taken, ok)
-		}
-		for _, o := range taken {
-			if max(m-o, o-m) < jobGap {
-				t.Fatalf("%d is within %d minutes of %d (taken %v)", m, jobGap, o, taken)
-			}
-		}
-		taken = append(taken, m)
-	}
-	// Past that, times are still distinct.
-	for range 45 {
-		m, ok := pickMinute(taken)
-		if !ok || slices.Contains(taken, m) {
-			t.Fatalf("crowded pick %d %v", m, ok)
-		}
-		taken = append(taken, m)
-	}
-	for m := jobDayStart; m < jobDayEnd; m += jobStep {
-		if !slices.Contains(taken, m) {
-			taken = append(taken, m)
-		}
-	}
-	if _, ok := pickMinute(taken); ok {
-		t.Fatal("picked from a full day")
-	}
-}
-
 func TestJobSearchDispatch(t *testing.T) {
 	ctx := context.Background()
 	d, fw, in := jobsSetup(t)
@@ -365,46 +331,29 @@ func TestJobSearchDispatch(t *testing.T) {
 	fw.profiles["u3"] = web.Profile{Email: "new@x.com", Name: "New", Paused: true}
 	fw.profiles["u4"] = web.Profile{Name: "No email"}
 
-	out, _, _, err := d.dueHunts(ctx, d.now())
-	if err != nil || out.Profiles != 4 || len(out.Scheduled) != 3 {
-		t.Fatalf("dispatch = %+v, %v", out, err)
+	// Off the search hours, nothing happens.
+	at := func(h int) time.Time { return time.Date(2026, 10, 17, h, 0, 0, 0, d.Location) }
+	if out, hunts, _, err := d.hunts(ctx, at(9)); err != nil || out.Skipped == "" || out.Profiles != 0 || len(hunts) != 0 {
+		t.Fatalf("09:00 = %+v %+v, %v", out, hunts, err)
+	}
+	// At each of them, every profile is brought in and every unpaused user
+	// is hunted, each time.
+	for _, h := range JobSearchHours {
+		out, hunts, _, err := d.hunts(ctx, at(h))
+		if err != nil || out.Skipped != "" || out.Profiles != 4 || len(hunts) != 2 {
+			t.Fatalf("%d:00 = %+v %+v, %v", h, out, hunts, err)
+		}
+		for _, hu := range hunts {
+			if hu.Date != "2026-10-17" || (hu.UID != "u1" && hu.UID != "u2") || (hu.UID == "u1" && hu.UserID != in.UserID) {
+				t.Fatalf("hunt = %+v", hu)
+			}
+		}
 	}
 	if u, _ := d.Store.UserByID(ctx, slackUser.ID); u.Channel != store.ChannelSlack || u.DisplayName != "Kam" {
 		t.Fatalf("slack user = %+v", u)
 	}
 	if u, _ := d.Store.UserByID(ctx, identity.UserID("new@x.com")); u == nil || u.Channel != store.ChannelWeb {
 		t.Fatalf("web user = %+v", u)
-	}
-	minutes, _ := d.Store.ScheduleMinutes(ctx)
-	for i := 1; i < len(minutes); i++ {
-		if minutes[i]-minutes[i-1] < jobGap {
-			t.Fatalf("times too close: %v", minutes)
-		}
-	}
-	// Again: everyone keeps their time.
-	if out, _, _, _ := d.dueHunts(ctx, d.now()); len(out.Scheduled) != 0 {
-		t.Fatalf("rescheduled: %v", out.Scheduled)
-	}
-
-	// At 23:00 every unpaused user is due, once a day.
-	late := time.Date(2026, 10, 17, 23, 0, 0, 0, d.Location)
-	_, due, _, err := d.dueHunts(ctx, late)
-	if err != nil || len(due) != 2 {
-		t.Fatalf("due = %+v, %v", due, err)
-	}
-	for _, h := range due {
-		if h.Date != "2026-10-17" || (h.UID != "u1" && h.UID != "u2") || (h.UID == "u1" && h.UserID != in.UserID) {
-			t.Fatalf("hunt = %+v", h)
-		}
-		if err := d.Store.MarkRan(ctx, h.UserID, h.Date); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, due, _, _ := d.dueHunts(ctx, late); len(due) != 0 {
-		t.Fatalf("due again = %+v", due)
-	}
-	if _, due, _, _ := d.dueHunts(ctx, late.Add(24*time.Hour)); len(due) != 2 {
-		t.Fatalf("due tomorrow = %+v", due)
 	}
 }
 

@@ -15,59 +15,6 @@ func jobsUsers(t *testing.T, s *Store, ids ...string) {
 	}
 }
 
-func TestSchedules(t *testing.T) {
-	ctx := context.Background()
-	s := open(t)
-	jobsUsers(t, s, "a", "b")
-	if _, ok, err := s.ScheduleOf(ctx, "a"); ok || err != nil {
-		t.Fatalf("unscheduled: ok=%v err=%v", ok, err)
-	}
-	if ok, err := s.SaveSchedule(ctx, "a", 600); !ok || err != nil {
-		t.Fatalf("a: ok=%v err=%v", ok, err)
-	}
-	// The minute is a's, and a keeps theirs.
-	if ok, err := s.SaveSchedule(ctx, "b", 600); ok || err != nil {
-		t.Fatalf("b taken: ok=%v err=%v", ok, err)
-	}
-	if ok, err := s.SaveSchedule(ctx, "a", 700); ok || err != nil {
-		t.Fatalf("a again: ok=%v err=%v", ok, err)
-	}
-	if ok, err := s.SaveSchedule(ctx, "b", 720); !ok || err != nil {
-		t.Fatalf("b: ok=%v err=%v", ok, err)
-	}
-	if ms, _ := s.ScheduleMinutes(ctx); !reflect.DeepEqual(ms, []int{600, 720}) {
-		t.Fatalf("minutes = %v", ms)
-	}
-	if m, ok, _ := s.ScheduleOf(ctx, "b"); !ok || m != 720 {
-		t.Fatalf("b = %d %v", m, ok)
-	}
-
-	due := func(minute int, date string) []string {
-		t.Helper()
-		ids, err := s.DueSchedules(ctx, minute, date)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return ids
-	}
-	if ids := due(599, "2026-10-17"); len(ids) != 0 {
-		t.Fatalf("early: %v", ids)
-	}
-	if ids := due(650, "2026-10-17"); !reflect.DeepEqual(ids, []string{"a"}) {
-		t.Fatalf("10:50: %v", ids)
-	}
-	if err := s.MarkRan(ctx, "a", "2026-10-17"); err != nil {
-		t.Fatal(err)
-	}
-	// Once a day: a is done today, b is due later, and both run tomorrow.
-	if ids := due(800, "2026-10-17"); !reflect.DeepEqual(ids, []string{"b"}) {
-		t.Fatalf("13:20: %v", ids)
-	}
-	if ids := due(800, "2026-10-18"); !reflect.DeepEqual(ids, []string{"a", "b"}) {
-		t.Fatalf("tomorrow: %v", ids)
-	}
-}
-
 func TestJobPostings(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
