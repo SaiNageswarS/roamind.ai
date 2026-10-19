@@ -45,7 +45,7 @@ Written by the worker, one per posting; `{id}` is the hash of the posting's URL.
 | `title`, `company`, `location` | string | The posting's. |
 | `url` | string | The posting's page. |
 | `apply_url` | string | Where to apply. |
-| `source` | string | `greenhouse`, `lever`, `ashby`, `workday` or `other`. |
+| `source` | string | `greenhouse`, `lever`, `ashby`, `workday`, `smartrecruiters`, `recruitee`, `personio`, `workable`, `oracle` or `other`. |
 | `posted_at` | string | ISO date, or empty. |
 | `fit` | map | `score` (0 to 10) and `reasons` (string array): why it suits the user, and what's missing. |
 | `cover_letter_md` | string | The cover letter, in Markdown. |

@@ -1,6 +1,9 @@
 // Package jobs reads job postings from applicant tracking systems: through
-// the public JSON APIs of Greenhouse, Lever, Ashby and Workday, and as
-// page text from anywhere else.
+// the public APIs of Greenhouse, Lever, Ashby and Workday, and of
+// SmartRecruiters, Recruitee, Personio, Workable and Oracle Recruiting
+// Cloud, common in Europe and Hong Kong. Any other page is read from its
+// JobPosting data when it has some, else rendered in a browser and read
+// as text.
 package jobs
 
 import (
@@ -24,13 +27,20 @@ const (
 	Lever      = "lever"
 	Ashby      = "ashby"
 	Workday    = "workday"
-	Other      = "other"
+	// SmartRecruiters, Recruitee, Personio, Workable and Oracle Recruiting
+	// Cloud: common in Europe and Hong Kong.
+	SmartRecruiters = "smartrecruiters"
+	Recruitee       = "recruitee"
+	Personio        = "personio"
+	Workable        = "workable"
+	Oracle          = "oracle"
+	Other           = "other"
 )
 
 // MaxDescription is how much of a posting's description is kept.
 const MaxDescription = 12000
 
-// MaxBody caps a response; an Ashby board lists every job of a company.
+// MaxBody caps a response.
 const MaxBody = 8 << 20
 
 // ErrGone is returned for a posting its site no longer has.
@@ -38,6 +48,9 @@ var ErrGone = errors.New("the posting is gone")
 
 // ErrBlocked is returned for URLs on the client's blocked domains.
 var ErrBlocked = errors.New("the site is blocked")
+
+// ErrNoText is returned for a page with no posting text, even rendered.
+var ErrNoText = errors.New("the page has no posting text")
 
 // Posting is a job posting.
 type Posting struct {
@@ -70,59 +83,34 @@ type Ref struct {
 	// without tracking parameters or the form's path, so the same posting
 	// found twice has the same URL.
 	URL string
-	// host, board and id address the posting in its site's API: the
-	// Greenhouse board, Lever site, Ashby organization or Workday tenant
-	// and site.
+	// ats is the system the posting is on, nil for any other page; host,
+	// board and id address the posting in its API: the Greenhouse board,
+	// Lever site, Ashby organization, Workday tenant and site, and so on.
+	ats             ATS
 	host, board, id string
 }
 
-var (
-	ghPath = regexp.MustCompile(`^/([^/]+)/jobs/(\d+)`)
-	idPath = regexp.MustCompile(`^/([^/]+)/([0-9a-f-]{36})`)
-	wdPath = regexp.MustCompile(`^/(?:[a-z]{2}-[A-Z]{2}/)?([^/]+)(/job/.+)$`)
-	digits = regexp.MustCompile(`^\d+$`)
-)
-
-// Parse resolves a posting URL to its site.
+// Parse resolves a posting URL to its site: the first of systems to match
+// it, else a page elsewhere.
 func Parse(raw string) (Ref, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
 		return Ref{}, fmt.Errorf("not a web address: %q", raw)
 	}
-	host := strings.ToLower(u.Hostname())
-	switch {
-	case strings.HasSuffix(host, "greenhouse.io"):
-		if m := ghPath.FindStringSubmatch(u.Path); m != nil {
-			api := "boards-api.greenhouse.io"
-			if strings.Contains(host, ".eu.") {
-				api = "boards-api.eu.greenhouse.io"
-			}
-			return Ref{Source: Greenhouse, URL: "https://" + host + "/" + m[1] + "/jobs/" + m[2], host: api, board: m[1], id: m[2]}, nil
-		}
-		if q := u.Query(); u.Path == "/embed/job_app" && q.Get("for") != "" && digits.MatchString(q.Get("token")) {
-			return Ref{Source: Greenhouse, URL: "https://job-boards.greenhouse.io/" + q.Get("for") + "/jobs/" + q.Get("token"),
-				host: "boards-api.greenhouse.io", board: q.Get("for"), id: q.Get("token")}, nil
-		}
-	case host == "jobs.lever.co" || host == "jobs.eu.lever.co":
-		if m := idPath.FindStringSubmatch(u.Path); m != nil {
-			api := "api.lever.co"
-			if host == "jobs.eu.lever.co" {
-				api = "api.eu.lever.co"
-			}
-			return Ref{Source: Lever, URL: "https://" + host + "/" + m[1] + "/" + m[2], host: api, board: m[1], id: m[2]}, nil
-		}
-	case host == "jobs.ashbyhq.com":
-		if m := idPath.FindStringSubmatch(u.Path); m != nil {
-			return Ref{Source: Ashby, URL: "https://jobs.ashbyhq.com/" + m[1] + "/" + m[2], host: "api.ashbyhq.com", board: m[1], id: m[2]}, nil
-		}
-	case strings.HasSuffix(host, ".myworkdayjobs.com"):
-		if m := wdPath.FindStringSubmatch(u.Path); m != nil {
-			tenant, _, _ := strings.Cut(host, ".")
-			return Ref{Source: Workday, URL: "https://" + host + "/" + m[1] + m[2], host: host, board: tenant + "/" + m[1], id: m[2]}, nil
+	for _, s := range systems {
+		if ref, ok := s.Match(u); ok {
+			ref.ats = s
+			return ref, nil
 		}
 	}
-	u.Fragment, u.RawFragment = "", ""
-	return Ref{Source: Other, URL: u.String()}, nil
+	return Ref{Source: Other, URL: withoutFragment(u)}, nil
+}
+
+// withoutFragment is u without its #fragment.
+func withoutFragment(u *url.URL) string {
+	v := *u
+	v.Fragment, v.RawFragment = "", ""
+	return v.String()
 }
 
 // Client fetches postings.
@@ -130,6 +118,9 @@ type Client struct {
 	HTTP *http.Client
 	// Blocked are domains never read, with their subdomains.
 	Blocked []string
+	// Render, if set, renders every page not read through an API, unless
+	// its HTML carries the posting's JobPosting data.
+	Render Renderer
 }
 
 // New returns a client that gives up on a request after timeout and
@@ -155,9 +146,9 @@ func (c *Client) Blocks(raw string) bool {
 	return false
 }
 
-// Fetch reads the posting at raw: from its site's API when it has one,
-// else as the text of its page. It returns ErrGone when the site no longer
-// has the posting.
+// Fetch reads the posting at raw: through the API of the system Parse
+// matched it to, else from its page. It returns ErrGone when the site no
+// longer has the posting.
 func (c *Client) Fetch(ctx context.Context, raw string) (*Posting, error) {
 	ref, err := Parse(raw)
 	if err != nil {
@@ -167,166 +158,56 @@ func (c *Client) Fetch(ctx context.Context, raw string) (*Posting, error) {
 		return nil, fmt.Errorf("posting %s: %w", ref.URL, ErrBlocked)
 	}
 	var p *Posting
-	switch ref.Source {
-	case Greenhouse:
-		p, err = c.greenhouse(ctx, ref)
-	case Lever:
-		p, err = c.lever(ctx, ref)
-	case Ashby:
-		p, err = c.ashby(ctx, ref)
-	case Workday:
-		p, err = c.workday(ctx, ref)
-	default:
+	if ref.ats != nil {
+		p, err = ref.ats.Posting(ctx, c, ref)
+	}
+	if ref.ats == nil || errors.Is(err, errNotHere) {
+		ref.Source = Other
 		p, err = c.page(ctx, ref)
+	}
+	if err == nil && strings.TrimSpace(p.Description) == "" {
+		err = ErrNoText
 	}
 	if err != nil {
 		return nil, fmt.Errorf("posting %s: %w", ref.URL, err)
 	}
-	p.Source, p.Description = ref.Source, cut(p.Description, MaxDescription)
+	if p.Source == "" {
+		p.Source = ref.Source
+	}
+	p.Description = cut(p.Description, MaxDescription)
 	if p.URL == "" {
 		p.URL = ref.URL
 	}
 	return p, nil
 }
 
-func (c *Client) greenhouse(ctx context.Context, ref Ref) (*Posting, error) {
-	var j struct {
-		AbsoluteURL    string `json:"absolute_url"`
-		Title          string `json:"title"`
-		CompanyName    string `json:"company_name"`
-		FirstPublished string `json:"first_published"`
-		Location       struct {
-			Name string `json:"name"`
-		} `json:"location"`
-		Content   string `json:"content"`
-		Questions []struct {
-			Label    string `json:"label"`
-			Required bool   `json:"required"`
-			Fields   []struct {
-				Type   string `json:"type"`
-				Values []struct {
-					Label string `json:"label"`
-				} `json:"values"`
-			} `json:"fields"`
-		} `json:"questions"`
-	}
-	u := "https://" + ref.host + "/v1/boards/" + url.PathEscape(ref.board) + "/jobs/" + ref.id + "?questions=true"
-	if err := c.getJSON(ctx, u, &j); err != nil {
-		return nil, err
-	}
-	p := &Posting{
-		ApplyURL: j.AbsoluteURL, Title: j.Title, Company: j.CompanyName, Location: j.Location.Name,
-		Posted: isoDate(j.FirstPublished), Description: Text(html.UnescapeString(j.Content)),
-	}
-	for _, q := range j.Questions {
-		if len(q.Fields) == 0 {
-			continue
-		}
-		kind, ok := ghKinds[q.Fields[0].Type]
-		if !ok {
-			continue // hidden fields
-		}
-		pq := Question{Label: strings.TrimSpace(q.Label), Required: q.Required, Kind: kind}
-		for _, v := range q.Fields[0].Values {
-			pq.Options = append(pq.Options, v.Label)
-		}
-		p.Questions = append(p.Questions, pq)
-	}
-	return p, nil
-}
-
-// ghKinds maps Greenhouse field types to Question kinds.
-var ghKinds = map[string]string{
-	"input_text": "text", "textarea": "textarea", "input_file": "file",
-	"multi_value_single_select": "select", "multi_value_multi_select": "multiselect",
-}
-
-func (c *Client) lever(ctx context.Context, ref Ref) (*Posting, error) {
-	var j struct {
-		Text       string `json:"text"`
-		HostedURL  string `json:"hostedUrl"`
-		ApplyURL   string `json:"applyUrl"`
-		CreatedAt  int64  `json:"createdAt"`
-		Categories struct {
-			Location string `json:"location"`
-		} `json:"categories"`
-		DescriptionPlain string `json:"descriptionPlain"`
-		Lists            []struct {
-			Text    string `json:"text"`
-			Content string `json:"content"`
-		} `json:"lists"`
-		AdditionalPlain string `json:"additionalPlain"`
-	}
-	u := "https://" + ref.host + "/v0/postings/" + url.PathEscape(ref.board) + "/" + ref.id
-	if err := c.getJSON(ctx, u, &j); err != nil {
-		return nil, err
-	}
-	var b strings.Builder
-	b.WriteString(strings.TrimSpace(j.DescriptionPlain))
-	for _, l := range j.Lists {
-		fmt.Fprintf(&b, "\n\n%s\n%s", strings.TrimSpace(l.Text), Text(l.Content))
-	}
-	if s := strings.TrimSpace(j.AdditionalPlain); s != "" {
-		b.WriteString("\n\n" + s)
-	}
-	p := &Posting{URL: j.HostedURL, ApplyURL: j.ApplyURL, Title: j.Text, Company: ref.board,
-		Location: j.Categories.Location, Description: b.String()}
-	if j.CreatedAt > 0 {
-		p.Posted = time.UnixMilli(j.CreatedAt).UTC().Format(time.DateOnly)
-	}
-	return p, nil
-}
-
-func (c *Client) ashby(ctx context.Context, ref Ref) (*Posting, error) {
-	var j struct {
-		Jobs []struct {
-			ID               string `json:"id"`
-			Title            string `json:"title"`
-			Location         string `json:"location"`
-			PublishedAt      string `json:"publishedAt"`
-			JobURL           string `json:"jobUrl"`
-			ApplyURL         string `json:"applyUrl"`
-			DescriptionPlain string `json:"descriptionPlain"`
-		} `json:"jobs"`
-	}
-	u := "https://" + ref.host + "/posting-api/job-board/" + url.PathEscape(ref.board)
-	if err := c.getJSON(ctx, u, &j); err != nil {
-		return nil, err
-	}
-	for _, job := range j.Jobs {
-		if job.ID == ref.id {
-			return &Posting{URL: job.JobURL, ApplyURL: job.ApplyURL, Title: job.Title, Company: ref.board,
-				Location: job.Location, Posted: isoDate(job.PublishedAt), Description: job.DescriptionPlain}, nil
-		}
-	}
-	return nil, ErrGone
-}
-
-func (c *Client) workday(ctx context.Context, ref Ref) (*Posting, error) {
-	var j struct {
-		JobPostingInfo struct {
-			Title          string `json:"title"`
-			JobDescription string `json:"jobDescription"`
-			Location       string `json:"location"`
-			StartDate      string `json:"startDate"`
-			ExternalURL    string `json:"externalUrl"`
-		} `json:"jobPostingInfo"`
-		HiringOrganization struct {
-			Name string `json:"name"`
-		} `json:"hiringOrganization"`
-	}
-	u := "https://" + ref.host + "/wday/cxs/" + ref.board + ref.id
-	if err := c.getJSON(ctx, u, &j); err != nil {
-		return nil, err
-	}
-	i := j.JobPostingInfo
-	tenant, _, _ := strings.Cut(ref.board, "/")
-	return &Posting{URL: i.ExternalURL, ApplyURL: i.ExternalURL, Title: i.Title, Company: tenant,
-		Location: i.Location, Posted: isoDate(i.StartDate), Description: Text(i.JobDescription)}, nil
-}
-
-// page reads a posting's page as text; its title is the page's.
+// page reads a posting from its page: from the JobPosting data its HTML
+// carries, else from its text once rendered, so whatever its scripts fill
+// in is there. Without a renderer, or when rendering fails, it reads the
+// HTML as sent. A page the site says is gone isn't rendered.
 func (c *Client) page(ctx context.Context, ref Ref) (*Posting, error) {
+	plain, err := c.plainPage(ctx, ref)
+	switch {
+	case errors.Is(err, ErrGone):
+		return nil, err
+	case err == nil && plain.structured:
+		return &plain.Posting, nil
+	}
+	if c.Render != nil {
+		if doc, rerr := c.Render.Render(ctx, ref.URL); rerr == nil {
+			if r := pageOf(ref, doc); r.Description != "" {
+				return &r.Posting, nil
+			}
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &plain.Posting, nil
+}
+
+// plainPage reads a page's HTML as sent, without running its scripts.
+func (c *Client) plainPage(ctx context.Context, ref Ref) (*pagePosting, error) {
 	resp, err := c.get(ctx, ref.URL, "text/html")
 	if err != nil {
 		return nil, err
@@ -336,12 +217,28 @@ func (c *Client) page(ctx context.Context, ref Ref) (*Posting, error) {
 	if err != nil {
 		return nil, err
 	}
-	page := string(body)
+	return pageOf(ref, string(body)), nil
+}
+
+// pagePosting is a posting read from a page; structured when it came from
+// the page's JobPosting data rather than its text.
+type pagePosting struct {
+	Posting
+	structured bool
+}
+
+// pageOf is the posting in a page's HTML: its JobPosting data, else its
+// text under the page's title.
+func pageOf(ref Ref, page string) *pagePosting {
+	if p := ldPosting(page); p != nil {
+		p.ApplyURL = ref.URL
+		return &pagePosting{Posting: *p, structured: true}
+	}
 	var title string
 	if m := titleRe.FindStringSubmatch(page); m != nil {
 		title = strings.TrimSpace(html.UnescapeString(m[1]))
 	}
-	return &Posting{ApplyURL: ref.URL, Title: title, Description: Text(page)}, nil
+	return &pagePosting{Posting: Posting{ApplyURL: ref.URL, Title: title, Description: Text(page)}}
 }
 
 func (c *Client) getJSON(ctx context.Context, u string, v any) error {

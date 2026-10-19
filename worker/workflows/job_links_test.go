@@ -28,11 +28,12 @@ func TestJobLinks(t *testing.T) {
 	fw.addLink("u1", "l4", "https://de.jobs.example.org/view/1")
 	fw.addLink("u1", "l5", "https://job-boards.greenhouse.io/anthropic/jobs/1") // gone
 	fw.addLink("u1", "l6", lever)
+	fw.addLink("u1", "l7", "https://app.example.com/job/1") // no text
 	d.Agent.BlockedDomains, d.Jobs.Blocked = []string{"jobs.example.org"}, []string{"jobs.example.org"}
 
 	// The listener claims the queued links and starts a run for them.
 	claimed := listenLinks(t, d, fw, "u1")
-	if len(claimed) != 1 || len(claimed[0].Links) != 6 || claimed[0].UserID != hunt.UserID || claimed[0].Date != hunt.Date {
+	if len(claimed) != 1 || len(claimed[0].Links) != 7 || claimed[0].UserID != hunt.UserID || claimed[0].Date != hunt.Date {
 		t.Fatalf("claimed = %+v", claimed)
 	}
 	in := claimed[0]
@@ -60,7 +61,7 @@ func TestJobLinks(t *testing.T) {
 		!reflect.DeepEqual(pick.Picked[0].LinkIDs, []string{"l1", "l2"}) || pick.Picked[1].Score != 4 {
 		t.Fatalf("pick = %+v", pick)
 	}
-	if want := map[string]string{"l3": linkNotURL, "l4": linkBlocked, "l5": linkUnread}; !reflect.DeepEqual(pick.Failed, want) {
+	if want := map[string]string{"l3": linkNotURL, "l4": linkBlocked, "l5": linkGone, "l7": linkNoText}; !reflect.DeepEqual(pick.Failed, want) {
 		t.Fatalf("failed = %v", pick.Failed)
 	}
 	if s := fw.link("u1", "l4"); s.Status != web.LinkFailed || s.Reason != linkBlocked {

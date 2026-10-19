@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -105,6 +106,19 @@ func run() error {
 	}
 	jobsClient := jobs.New(20 * time.Second)
 	jobsClient.Blocked = blocked
+	// Chrome renders posting pages that fill themselves in with JavaScript;
+	// ROAMIND_CHROME_BIN=off reads them as sent.
+	if path := chromeBin(); path != "" {
+		chrome, err := jobs.NewChrome(path, 45*time.Second, 2)
+		if err != nil {
+			return err
+		}
+		defer chrome.Close()
+		jobsClient.Render = chrome
+		slog.Info("job pages rendered", "chrome", path)
+	} else {
+		slog.Warn("no Chrome; job pages that need JavaScript can't be read")
+	}
 
 	c, err := client.HatchetClient()
 	if err != nil {
@@ -197,4 +211,20 @@ func envOr(k, d string) string {
 		return v
 	}
 	return d
+}
+
+// chromeBin is ROAMIND_CHROME_BIN, else the first Chrome on PATH, or "".
+func chromeBin() string {
+	if v := os.Getenv("ROAMIND_CHROME_BIN"); v != "" {
+		if v == "off" {
+			return ""
+		}
+		return v
+	}
+	for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
+		if path, err := exec.LookPath(name); err == nil {
+			return path
+		}
+	}
+	return ""
 }
