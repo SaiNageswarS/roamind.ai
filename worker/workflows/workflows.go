@@ -10,8 +10,7 @@
 //   - news-shorts: once a day, a news-digest run per user.
 //   - news-digest: check-skip → build-context → draft-digest → post.
 //   - news-reaction: reactions to digests, as feedback.
-//   - job-search: every quarter-hour, a job-hunt run per web user whose
-//     daily time has come.
+//   - job-search: at JobSearchHours, a job-hunt run per web user.
 //   - job-hunt: check-skip → resume, find → pick → spawn.
 //   - job-links: resume → pick → spawn, for the postings a user linked to,
 //     started by the web app's listener (web_listen.go) or after a chat

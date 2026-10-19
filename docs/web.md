@@ -69,13 +69,13 @@ A posting the user linked to. The web app creates it, with only `url`, `status: 
 
 ## How the daily search uses them
 
-- Every user gets a daily search time, between 08:00 and 22:00 server time, with users' times kept at least 90 minutes apart. Nothing runs at sign-up: a new profile waits for its time.
+- Searches run for every user at 08:00, 12:00, 16:00 and 20:00 server time. Nothing runs at sign-up: a new profile waits for the next one.
 - **Reviews gate new applications.** A search runs only when the user has no open applications: every `ready` one must be marked `applied` or `dismissed` first, unless its posting has disappeared from its site, which closes it. Until then, `search.status` is `skipped`, with a reason saying how many are waiting.
 - A search writes at most `ROAMIND_JOBS_PER_RUN` applications (default 5), for the postings that fit best. A posting is never shown twice.
 
 ## How links are drafted
 
-- The worker listens for `queued` links (a collection-group query on `links`) and takes them up within seconds, 20 at a time, oldest first, marking them `processing` in a transaction. It doesn't wait for the user's daily search time or reviews, and it drafts links even while the daily search is paused. A link left `processing` for an hour, by a worker that stopped mid-claim, is queued again.
+- The worker listens for `queued` links (a collection-group query on `links`) and takes them up within seconds, 20 at a time, oldest first, marking them `processing` in a transaction. It doesn't wait for a search or for reviews, and it drafts links even while searches are paused. A link left `processing` for an hour, by a worker that stopped mid-claim, is queued again at the next search.
 - In Slack, the agent submits the job links of the user's message with its `submit_job_links` tool. After the turn, the worker adds those that appear in the message to the user's profile as `queued` links, which then go the same way.
 - Links to the same posting are drafted once, and all of them point at its application. A posting that already has an application isn't drafted again: its links are `done` and point at that application, even when it was reviewed. A posting that was passed over or failed before is drafted again.
 - Every posting the user linked to gets an application, whatever its fit; the fit score and reasons are still shown.
