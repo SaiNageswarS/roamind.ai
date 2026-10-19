@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -244,7 +245,7 @@ func TestGreenhouseHosted(t *testing.T) {
 
 // An Ashby board larger than MaxBody is read as a stream.
 func TestAshbyBigBoard(t *testing.T) {
-	p, err := server(t).ashby(context.Background(), Ref{host: "big.example.com", board: "x", id: "240d459b-696d-43eb-8497-fab3e56ecd9b"})
+	p, err := (ashby{}).Posting(context.Background(), server(t), Ref{host: "big.example.com", board: "x", id: "240d459b-696d-43eb-8497-fab3e56ecd9b"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,5 +301,62 @@ func TestJobPostingData(t *testing.T) {
 	if p.Source != Other || p.Title != "UK Account Executive - SMB" || p.Company != "Teamtailor" || p.Posted != "2026-07-24" ||
 		!strings.Contains(p.Location, "London") || len(p.Description) < 1000 || strings.Contains(p.Description, "<") || len(r.urls) != 0 {
 		t.Errorf("teamtailor = %+v, rendered %v", p, r.urls)
+	}
+}
+
+// fakeATS matches careers.example.com/ats/<id> and reads its posting itself.
+type fakeATS struct{ read []string }
+
+func (f *fakeATS) Match(u *url.URL) (Ref, bool) {
+	if hostOf(u) != "careers.example.com" || !strings.HasPrefix(u.Path, "/ats/") {
+		return Ref{}, false
+	}
+	return Ref{Source: "fake", URL: "https://careers.example.com" + u.Path, id: strings.TrimPrefix(u.Path, "/ats/")}, true
+}
+
+func (f *fakeATS) Posting(_ context.Context, _ *Client, ref Ref) (*Posting, error) {
+	f.read = append(f.read, ref.id)
+	if ref.id == "elsewhere" {
+		return nil, errNotHere
+	}
+	return &Posting{Title: "Job " + ref.id, Description: "From the API."}, nil
+}
+
+// Parse tries systems in order; the first to match reads the posting, and
+// a URL none matches, or one its system disowns, is read from its page.
+func TestSystems(t *testing.T) {
+	f := &fakeATS{}
+	old := systems
+	systems = append(slices.Clone(old), f)
+	t.Cleanup(func() { systems = old })
+	c := server(t)
+	r := &fakeRender{html: `<title>Rendered</title><p>` + strings.Repeat("Rendered text. ", 30) + `</p>`}
+	c.Render = r
+
+	p, err := c.Fetch(context.Background(), "https://careers.example.com/ats/7?utm=x")
+	if err != nil || p.Source != "fake" || p.Title != "Job 7" || p.URL != "https://careers.example.com/ats/7" || len(r.urls) != 0 {
+		t.Errorf("matched = %+v, %v, rendered %v", p, err, r.urls)
+	}
+	// Disowned: read as a page, by its canonical URL.
+	p, err = c.Fetch(context.Background(), "https://careers.example.com/ats/elsewhere")
+	if err != nil || p.Source != Other || p.Title != "Rendered" {
+		t.Errorf("disowned = %+v, %v", p, err)
+	}
+	if !reflect.DeepEqual(f.read, []string{"7", "elsewhere"}) {
+		t.Errorf("read %v", f.read)
+	}
+	// Each system's own URLs are matched by it first, not by another.
+	for raw, want := range map[string]ATS{
+		"https://job-boards.greenhouse.io/anthropic/jobs/4461450008":                 greenhouse{},
+		"https://jobs.smartrecruiters.com/Ubisoft2/744000156377199":                  smartRecruiters{},
+		"https://bunq.recruitee.com/o/head-of-product-6?gh_jid=1":                    recruitee{},
+		"https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/X/job/1": oracle{},
+		"https://helsing.ai/jobs/4516967101?gh_jid=4516967101":                       greenhouseHosted{},
+		"https://careers.example.com/ats/1":                                          f,
+	} {
+		ref, _ := Parse(raw)
+		if ref.ats != want {
+			t.Errorf("%s matched by %T, want %T", raw, ref.ats, want)
+		}
 	}
 }
