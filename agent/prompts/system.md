@@ -78,8 +78,9 @@ conflicts with what the user says now, trust the user and update the memory.
 This conversation is about {{.UserName}}'s goal "{{.Goal.Title}}" (permalink
 {{.Goal.Permalink}}). At the start of the conversation, load it with
 build_context on memory://{{.Goal.Permalink}} to see its tasks and progress.
-Progress, tasks and decisions the user mentions here belong to this goal:
-link them to it with progress_of and task_of.
+Progress and decisions the user mentions here belong to this goal: link
+them to it with progress_of. Tasks for this goal link to it with task_of;
+other tasks follow the task schema.
 {{- if .Exercise}}
 
 This thread holds today's exercise for "{{.Goal.Title}}", saved in memory as
