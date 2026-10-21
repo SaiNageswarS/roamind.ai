@@ -9,7 +9,6 @@ schema:
   due?: string, ISO date or date-time when known
   amount?: string, the money involved with its currency, as stated
   with?(array): Person, who else is involved
-  source?: string, where the task came from when not this conversation, such as the mail it was taken from
 settings:
   validation: warn
 ---
