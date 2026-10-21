@@ -178,7 +178,7 @@ func (d Deps) checkSkip(ctx context.Context, in ExerciseInput) (checkOutput, err
 			return out, nil
 		}
 	}
-	out.ChannelID, out.GoalTitle = gc.ChannelID, gc.GoalTitle
+	out.ChannelID, out.GoalTitle = gc.ChannelID, gc.Title
 	return out, nil
 }
 
@@ -319,10 +319,10 @@ permalink: %s
 }
 
 // goalChannel is the channel of the user's goal, or nil.
-func (d Deps) goalChannel(ctx context.Context, in ExerciseInput) (*store.GoalChannel, error) {
-	gcs, err := d.Store.GoalChannels(ctx)
+func (d Deps) goalChannel(ctx context.Context, in ExerciseInput) (*store.Channel, error) {
+	gcs, err := d.Store.Channels(ctx, store.KindGoal)
 	for _, gc := range gcs {
-		if gc.UserID == in.UserID && gc.GoalPermalink == in.GoalPermalink {
+		if gc.UserID == in.UserID && gc.Ref == in.GoalPermalink {
 			return &gc, nil
 		}
 	}

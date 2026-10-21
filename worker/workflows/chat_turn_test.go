@@ -117,7 +117,7 @@ func TestProcessGoalChannel(t *testing.T) {
 	}
 
 	// First contact creates and sets up the owner; their next message is a
-	// turn. Then their goal gets channel G1.
+	// turn. Then their goal gets channel GOAL.
 	for _, ts := range []string{"0.5", "1.0"} {
 		if _, err := d.Process(ctx, "r0", mention("Ev"+ts, "U1", ts, "")); err != nil {
 			t.Fatal(err)
@@ -127,9 +127,9 @@ func TestProcessGoalChannel(t *testing.T) {
 		t.Fatalf("AfterTurn calls = %v", after)
 	}
 	owner := identity.UserID("owner@x.com")
-	err := d.Store.SaveGoalChannel(ctx, store.GoalChannel{
-		UserID: owner, GoalPermalink: "bm-u-test-u1-1/goals/learn-jax", GoalTitle: "Learn JAX",
-		ChannelID: "G1",
+	err := d.Store.SaveChannel(ctx, store.Channel{Kind: store.KindGoal,
+		UserID: owner, Ref: "bm-u-test-u1-1/goals/learn-jax", Title: "Learn JAX",
+		ChannelID: "GOAL",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -140,29 +140,29 @@ func TestProcessGoalChannel(t *testing.T) {
 			Type: "message", ChannelType: "group", User: user, Text: "finished the vmap chapter", Channel: channel, TS: ts,
 		}}
 	}
-	inGoal := func(m slack.Envelope) slack.Envelope { m.Event.Channel = "G1"; return m }
+	inGoal := func(m slack.Envelope) slack.Envelope { m.Event.Channel = "GOAL"; return m }
 	cases := []struct {
 		name string
 		env  slack.Envelope
 		skip string // "" means a turn runs
 	}{
-		{"owner message in goal channel", msg("Ev1", "U1", "G1", "2.0"), ""},
+		{"owner message in goal channel", msg("Ev1", "U1", "GOAL", "2.0"), ""},
 		{"owner mention in goal channel", inGoal(mention("Ev2", "U1", "2.1", "")), "handled as its message"},
-		{"other user's message in goal channel", msg("Ev3", "U2", "G1", "2.2"), "not addressed"},
+		{"other user's message in goal channel", msg("Ev3", "U2", "GOAL", "2.2"), "not addressed"},
 		{"other user's mention in goal channel", inGoal(mention("Ev4", "U2", "2.3", "")), ""},
 		{"message in another private channel", msg("Ev5", "U1", "G9", "2.4"), "not addressed"},
-		{"member's message with their own goal in a shared channel", msg("Ev6", "U2", "G1", "2.5"), ""},
+		{"member's message with their own goal in a shared channel", msg("Ev6", "U2", "GOAL", "2.5"), ""},
 	}
-	// U2 joins G1 with the same goal in their own memory, for the last case.
+	// U2 joins GOAL with the same goal in their own memory, for the last case.
 	if _, err := d.Process(ctx, "r0", mention("Ev00", "U2", "1.1", "")); err != nil {
 		t.Fatal(err)
 	}
 	other := identity.UserID("other@x.com")
 	for _, c := range cases {
 		if c.env.EventID == "Ev6" {
-			if err := d.Store.SaveGoalChannel(ctx, store.GoalChannel{
-				UserID: other, GoalPermalink: "bm-u-test-u2-1/goals/learn-jax", GoalTitle: "Learn JAX",
-				ChannelID: "G1",
+			if err := d.Store.SaveChannel(ctx, store.Channel{Kind: store.KindGoal,
+				UserID: other, Ref: "bm-u-test-u2-1/goals/learn-jax", Title: "Learn JAX",
+				ChannelID: "GOAL",
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -193,19 +193,19 @@ func TestProcessExerciseAnswer(t *testing.T) {
 	}
 	owner := identity.UserID("owner@x.com")
 	goal := "bm-u-test-u1-1/goals/learn-german"
-	if err := d.Store.SaveGoalChannel(ctx, store.GoalChannel{
-		UserID: owner, GoalPermalink: goal, GoalTitle: "Learn German", ChannelID: "G1",
+	if err := d.Store.SaveChannel(ctx, store.Channel{Kind: store.KindGoal,
+		UserID: owner, Ref: goal, Title: "Learn German", ChannelID: "GOAL",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Store.SaveExercise(ctx, store.Exercise{
-		UserID: owner, GoalPermalink: goal, ChannelID: "G1", ThreadTS: "5.0", NotePermalink: "bm-u-test-u1-1/exercises/learn-german/2026-10-12", PostedAt: time.Now(),
+		UserID: owner, GoalPermalink: goal, ChannelID: "GOAL", ThreadTS: "5.0", NotePermalink: "bm-u-test-u1-1/exercises/learn-german/2026-10-12", PostedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	reply := func(id, user, ts, threadTS string) slack.Envelope {
 		return slack.Envelope{TeamID: "T1", EventID: id, Event: slack.Event{
-			Type: "message", ChannelType: "group", User: user, Text: "Ich gehe in den Park.", Channel: "G1", TS: ts, ThreadTS: threadTS,
+			Type: "message", ChannelType: "group", User: user, Text: "Ich gehe in den Park.", Channel: "GOAL", TS: ts, ThreadTS: threadTS,
 		}}
 	}
 	exercisePrompt := func() bool {

@@ -182,7 +182,7 @@ func (d Deps) checkDigest(ctx context.Context, in DigestInput) (digestCheck, err
 		out.Skip = "no such user"
 		return out, nil
 	}
-	ch, err := d.Store.NewsChannelOf(ctx, u.ID)
+	ch, err := d.Store.Channel(ctx, u.ID, store.KindNews, "")
 	if err != nil {
 		return out, err
 	}

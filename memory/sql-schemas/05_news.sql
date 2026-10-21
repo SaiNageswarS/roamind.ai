@@ -1,9 +1,3 @@
--- Each user's private news-shorts channel, where digests are posted.
-CREATE TABLE IF NOT EXISTS news_channels (
-    user_id    TEXT PRIMARY KEY REFERENCES users(id),
-    channel_id TEXT NOT NULL UNIQUE,
-    created_at INTEGER NOT NULL
-);
 -- Digests posted in news channels, one per user and slot. A digest's row is
 -- made before it is posted, to reserve its slot, and completed after.
 CREATE TABLE IF NOT EXISTS digests (

@@ -7,34 +7,6 @@ import (
 	"time"
 )
 
-// NewsChannelOf returns the user's news channel, or "".
-func (s *Store) NewsChannelOf(ctx context.Context, userID string) (string, error) {
-	var ch string
-	err := s.db.QueryRowContext(ctx, `SELECT channel_id FROM news_channels WHERE user_id = ?`, userID).Scan(&ch)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	return ch, err
-}
-
-// IsNewsChannelOf reports whether channelID is the news channel of the
-// Slack user slackUserID.
-func (s *Store) IsNewsChannelOf(ctx context.Context, channelID, slackUserID string) (bool, error) {
-	var n int
-	err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM news_channels n JOIN users u ON u.id = n.user_id
-		WHERE n.channel_id = ? AND u.slack_user_id = ?`, channelID, slackUserID).Scan(&n)
-	return n > 0, err
-}
-
-// SaveNewsChannel records the user's news channel.
-func (s *Store) SaveNewsChannel(ctx context.Context, userID, channelID string) error {
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO news_channels (user_id, channel_id, created_at) VALUES (?, ?, ?)`,
-		userID, channelID, time.Now().Unix())
-	return err
-}
-
 // Digest is one news digest posted in a user's news channel.
 type Digest struct {
 	ID            int64

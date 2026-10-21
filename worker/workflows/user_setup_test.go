@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"roamind.ai/channels/identity"
+	"roamind.ai/memory/store"
 	"roamind.ai/memory/store/notes"
 )
 
@@ -65,7 +66,7 @@ func TestProcessSetsUpNewUser(t *testing.T) {
 	if err != nil || u == nil || u.MemoryProject == "" || !d.Memory.Ready(u.MemoryProject) {
 		t.Fatalf("user = %+v %v", u, err)
 	}
-	if ch, _ := d.Store.NewsChannelOf(ctx, u.ID); ch == "" || len(fs.created) != 1 {
+	if ch, _ := d.Store.Channel(ctx, u.ID, store.KindNews, ""); ch == "" || len(fs.created) != 1 {
 		t.Fatalf("news channel %q, created %v", ch, fs.created)
 	}
 

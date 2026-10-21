@@ -7,6 +7,7 @@ import (
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
 
+	"roamind.ai/memory/store"
 	"roamind.ai/memory/store/notes"
 )
 
@@ -63,7 +64,7 @@ func LocalCrons(loc *time.Location, at time.Time, hours ...int) []string {
 
 // dueGoals returns the active learning goals with a channel.
 func (d Deps) dueGoals(ctx context.Context) ([]ExerciseInput, error) {
-	gcs, err := d.Store.GoalChannels(ctx)
+	gcs, err := d.Store.Channels(ctx, store.KindGoal)
 	if err != nil {
 		return nil, err
 	}
@@ -82,8 +83,8 @@ func (d Deps) dueGoals(ctx context.Context) ([]ExerciseInput, error) {
 			}
 		}
 		for _, g := range goals[gc.UserID] {
-			if g.Permalink == gc.GoalPermalink && g.Active() && g.Kind == "learn" {
-				due = append(due, ExerciseInput{UserID: gc.UserID, GoalPermalink: gc.GoalPermalink})
+			if g.Permalink == gc.Ref && g.Active() && g.Kind == "learn" {
+				due = append(due, ExerciseInput{UserID: gc.UserID, GoalPermalink: gc.Ref})
 			}
 		}
 	}

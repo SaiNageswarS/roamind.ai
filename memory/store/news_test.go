@@ -21,22 +21,6 @@ func TestNews(t *testing.T) {
 		t.Fatalf("users = %v %v", us, err)
 	}
 
-	// News channels: one per user, routed by its owner only.
-	if ch, err := s.NewsChannelOf(ctx, "h1"); err != nil || ch != "" {
-		t.Fatalf("before: %q %v", ch, err)
-	}
-	if err := s.SaveNewsChannel(ctx, "h1", "G1"); err != nil {
-		t.Fatal(err)
-	}
-	if ch, _ := s.NewsChannelOf(ctx, "h1"); ch != "G1" {
-		t.Fatalf("channel = %q", ch)
-	}
-	for slackUser, want := range map[string]bool{"U1": true, "U2": false} {
-		if got, err := s.IsNewsChannelOf(ctx, "G1", slackUser); err != nil || got != want {
-			t.Errorf("%s: %v %v", slackUser, got, err)
-		}
-	}
-
 	// Digests: a slot is reserved once, then completed with its items, links
 	// and stories; a released reservation frees the slot.
 	now := time.Now()
