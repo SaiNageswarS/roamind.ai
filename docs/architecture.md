@@ -73,7 +73,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
   - `subject` is an enum: food, travel, fitness, health, work, tech, communication, shopping, entertainment, home, finance, other.
   - `evidence` is an enum: stated, inferred, observed or corrected. The source and date go in its context, e.g. `- [evidence] stated (slack, 2026-10-11)`.
 - **What `schema_validate` checks:** that required fields are present and enum values are allowed, with warnings rather than errors. It doesn't check types, formats (dates, coordinates), cardinality or the target type of a relation; the prompt carries those rules.
-- **Required fields:** a person's `relationship` (`self` for the user's own note, exactly one per project), a place's `kind`, an event's `date` (as precise as known), a goal's `status` and `outcome`, and a task's `task_of` and `status`.
+- **Required fields:** a person's `relationship` (`self` for the user's own note, exactly one per project), a place's `kind`, an event's `date` (as precise as known), a goal's `status` and `outcome`, and a task's `status`.
 - **Person** is kept small: `relationship`, `contact`, `works_at` (a link to a Place), and the career fields `experience`, `education` and `interest`.
   - The user's own resume goes on their `self` note.
   - Each role or degree is one line in a fixed format, so its parts stay together, e.g. `- [experience] Postdoctoral researcher, ETH Zurich, 2021-09 to present: highlights (stated, slack, 2026-10-11)`.
@@ -82,8 +82,10 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
 - **Goals, progress and tasks:** a Goal note (`goals/`) is anything worked on over time: a project being built (`kind build`), something being learned (`kind learn`) or another aim (`kind personal`).
   - It holds only what defines the goal: `status`, `outcome`, `kind`, `target_date`, `why`, `link`, `with` and, for learning goals, `exercise_preference`.
   - **Progress:** each update is its own note in `progress/<goal>/` (`date`, `summary`, `next`, `blocker`), linked back with `progress_of`.
-  - **Tasks:** optional. Each task is a note in `tasks/<goal>/` (`status`, `due`, `with`) that must belong to exactly one goal via `task_of`; the agent asks which goal when none fits.
-  - Both link to the goal, so a goal accumulates updates and tasks without its own note growing.
+  - **Tasks:** optional. A task linked to a goal via `task_of` is a note in `tasks/<goal>/` (`status`, `due`, `amount`, `with`); a task with no fitting goal goes in `tasks/`. A bill or invoice to pay is a task titled "Pay <payee> <invoice number>" with `due` and `amount`.
+  - Progress and goal tasks link to the goal, so a goal accumulates updates and tasks without its own note growing.
+- **Events** are one note per dated thing, in `events/<YYYY>/` by the year of their `date`. Their `kind` covers appointments, travel, stays, tickets, meetings, deliveries (an order, dated by its expected delivery, with its tracking `link`), milestones and other. An event whose date moves to another year is moved to that year's folder. Bookings and orders keep their reference in `confirmation`.
+  - **Checklists:** an event's `checklist` lists what to bring or prepare. It starts from the user's reusable lists, which are preferences ("what I always pack for a flight" is one preference, with the whole list comma-separated in its `preference` line).
 - **Links between types:** people link to workplaces with `works_at`. Events link to people and places with `with` and `at`, and goals link to people with `with`.
 - **Other notes** (people, places, events) are one note per thing. Each fact ends with its evidence as Basic Memory observation context, e.g. `- [interest] oscillatory neural networks (stated, slack, 2026-10-11)`. bm stores that context in the observation's `context` field.
 - **Links between notes** are relations written as `- works_at [[places/ibm-research-zurich]]`, using the target's permalink so the link is exact.
