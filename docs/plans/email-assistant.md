@@ -1,22 +1,24 @@
-# Email assistant (plan, not built)
+# Email assistant (plan; schemas built)
 
 Status: drafted 2026-10-21 and revised 2026-10-22, to revisit. The `channels` table it relies on is live (PR #6, deployed 2026-10-21): the inbox channel is one more kind in it, so this plan adds no channel table. The 2026-10-22 revision made three changes:
 - Item state (whether it is due, and whether it is still open) moved out of the notes and into an `items` table, and `status` was removed from Task (see "Why an items table").
 - The planned Bill, Order and Checklist schemas were folded into the existing Task, Event and Preference schemas (see section 6), so the plan adds no schema.
 - The automatic return-window reminders were dropped.
 
+The schema part shipped first, in PR #8 (merged and deployed 2026-10-22), without a `renewal` event kind or `source` fields. Everything else is still to build.
+
 ## Context
-Roamind should read the user's Gmail (several accounts per user) and turn mail into structured Basic Memory notes: tasks, reminders, events/appointments, bills and renewals, travel bookings, orders and deliveries, people, and checklists of things to carry. A morning digest in a private `#inbox-<name>` Slack channel then shows what is due. This also delivers the roadmap's pending "reminders" item. Reminders are not a type of their own: they are rows of the `items` table, added for tasks and events, including tasks saved from chat.
+Roamind should read the user's Gmail (several accounts per user) and turn mail into structured Basic Memory notes: tasks, reminders, events/appointments, bills, travel bookings, orders and deliveries, people, and checklists of things to carry. A morning digest in a private `#inbox-<name>` Slack channel then shows what is due. This also delivers the roadmap's pending "reminders" item. Reminders are not a type of their own: they are rows of the `items` table, added for tasks and events, including tasks saved from chat.
 
 Decided with the user:
 - Connecting accounts is **offline and manual for now** (an operator task).
 - New mail is **polled by a Hatchet cron**.
 - Due items go to a **morning digest in `#inbox-<name>`**.
-- Mail is captured for **bills & renewals, travel & bookings, orders & deliveries, people & contacts, appointments**, plus checklists.
+- Mail is captured for **bills, travel & bookings, orders & deliveries, people & contacts, appointments**, plus checklists.
 - **Active items are tracked in SQLite**, and the details stay in Basic Memory.
 - **No new schemas**:
   - a bill is a Task;
-  - a booking, delivery or renewal is an Event;
+  - a booking or delivery is an Event;
   - a checklist is a field of its Event;
   - a reusable packing list is a Preference.
 
@@ -83,10 +85,10 @@ items(user_id, key,       -- key: stable title, or the confirmation/order/invoic
   | Mail | Note | Row |
   |---|---|---|
   | A bill or invoice to pay | Task "Pay \<payee> \<invoice number>", with `due` and `amount` | `remind_on` is `due` minus 3 days, set by extraction; the row closes as done when paid |
-  | A subscription or renewal that is charged automatically | Event, `kind: renewal` | shows the day before, so it can still be cancelled |
   | An order | Event, `kind: delivery`, dated by the expected delivery, with the tracking `link` | closes as done when delivered, or as cancelled |
   | A flight, train, stay, ticket or appointment | Event with its `kind`, `confirmation` and `checklist` | closes as cancelled when cancelled |
   | A commitment ("I'll send it by Friday") | Task | |
+- **Automatic renewals aren't captured for now.** Event has no `renewal` kind (dropped in PR #8); a renewal that needs action, such as cancelling a subscription in time, is a task.
 - **Return windows get no reminder.** Most orders aren't returned, so one reminder per order would be mostly noise. The delivery event's body records the window ("returnable until 2026-11-20"). When the user says they want to return something, the agent creates a task due that day.
 - **Closed rows are kept as history.** They answer "was that order delivered?" or "did I pay the insurance?", together with `closed_at`.
 - **Lead times and expiry** are set in the harness (`InboxLeads`), so `show_from` and `until` are computed once, when the row is written:
@@ -125,7 +127,7 @@ items(user_id, key,       -- key: stable title, or the confirmation/order/invoic
   3. **`save`**: for each item, the harness does two writes.
      - **The note.** It writes the item as Markdown with `notes.WriteNote`, through bm's CLI, as exercise `post` does.
        - Notes are titled by `key`, so a later mail about the same booking or order (rescheduled, shipped, cancelled) overwrites its note with the latest details.
-       - Each note gets a `source` line with the account, the message's Gmail link and the subject. Its evidence is `(observed, email, <date>)`.
+       - Task and Event have no `source` field (removed in PR #8). The note's opening text names the account, the message's Gmail link and the subject, and the row's `source` column records the message id. Its evidence is `(observed, email, <date>)`.
        - Person items are written only when no note in `people/` already lists that address as a `contact`. This is a disk read in `memory/store/notes`.
      - **The rows.** For each task and event, it calls `PutItem` with the note's permalink.
        - Extraction reports the state the mail shows: a cancelled booking, a paid bill, a delivered or cancelled order. `save` sets the row's `state` from it.
@@ -172,7 +174,7 @@ This is a new tool set next to `interests` and `jobs`, named `protocol.ServerIte
 ### 6. Basic Memory schemas (`memory/basic-memory-schemas/`)
 The bodies are prose only: no `- ` lines, no `[[ ]]`, no "e.g.", and values containing `: ` are quoted. The existing schema tests enforce this.
 
-**Built in PR #8**, ahead of the rest of the plan, so items shared in chat use it already. Task keeps `status` until the `items` table is built, and the rest of this section lands with it.
+**Built and deployed in PR #8** (merged 2026-10-22), ahead of the rest of the plan, so items shared in chat already use it. Existing event notes were migrated to `events/<YYYY>/` with `kind`, `confirmation` and `checklist`. What is still to do lands with the `items` table: removing Task's `status`, and the schema text about the `items` tools. The fields below are as built.
 
 **No new schemas.** The existing types were reviewed against what mail produces:
 - **A bill is a Task.** It is something to do by a date. "Paid" is closing its row. Its amount goes in `amount`, and the payee goes in the title.
@@ -192,26 +194,23 @@ Without Bill and Order types, "what did I pay this year" is a search over tasks 
 
 **Past items stay in memory as history.** In chat, the model never loads them wholesale. It looks them up on demand with `search_notes` or `build_context`, for questions such as "when did I last see the dentist?", "what was my booking reference?" or "is that order still returnable?". Year folders keep each folder small.
 - **Task.md (changed)**:
-  - `task_of` becomes optional. Tasks linked to a goal stay in `tasks/<goal>/`, and tasks with no fitting goal (most tasks from mail, and "remind me to…" from chat) go in `tasks/`.
-  - Removes `status`.
-  - Adds `amount?: string, the money involved, with its currency` (a bill to pay, a refund to claim, a deposit) and `source?: string, the mail it came from`.
-  - There is no `remind_on` field, because the reminder lives in the item row.
-  - The text "ask which goal" is replaced with "link a goal when one fits", and "Update its status as it moves along" with the `items` rule. `docs/architecture.md` is updated to match.
+  - Built: `task_of` is optional. Tasks linked to a goal stay in `tasks/<goal>/`, and tasks with no fitting goal (most tasks from mail, and "remind me to…" from chat) go in `tasks/`. Adds `amount?: string, the money involved with its currency, as stated`. A bill is a task titled Pay followed by the payee and the invoice number. In goal threads, `system.md` links only that goal's tasks with `task_of`.
+  - With the `items` table: remove `status`, and replace "Update its status as it moves along" with the `items` rule. There is no `remind_on` field, because the reminder lives in the item row.
   - Existing task notes are left as they are, and their `[status]` lines just become plain observations. No backfill is done while bootstrapping.
 - **Event.md (changed)**:
-  - Adds these fields:
-    - `kind?(enum): [appointment, travel, stay, ticket, meeting, delivery, renewal, milestone, other]`;
+  - Built, with these fields added:
+    - `kind?(enum): [appointment, travel, stay, ticket, meeting, delivery, milestone, other]`;
     - `end?: string, ISO date or date-time when it ends`;
     - `confirmation?: string, booking reference, order number or ticket number`;
-    - `link?(array): string, related URLs such as tracking or the booking page`, as Goal has;
-    - `checklist?(array): string, one thing to bring or do beforehand per line`;
-    - `source?`.
-  - Saved in `events/<YYYY>/`.
-  - Appointments and travel bookings link to a Place with `at` and to a Person with `with`.
-  - A shipping mail updates the delivery event's date and `link`.
+    - `link?(array): string, related URLs such as the booking page or tracking`, as Goal has;
+    - `checklist?(array): string, one thing to bring or do beforehand per line`.
+  - Saved in `events/<YYYY>/`, and moved with `move_note` when a new date changes the year.
+  - The venue is a Place linked with `at`, and the people involved are linked with `with`.
   - The body says that a checklist starts from the user's preferences for that kind of event, such as their travel preferences.
+  - A shipping mail updates the delivery event's date and `link`.
   - Extraction proposes a checklist for travel, stays and appointments ("bring insurance card, referral letter").
-- Person, Place, Preference: unchanged. An email address goes in `contact`, and a reusable packing list is a Preference.
+- Person, Place: unchanged. An email address goes in `contact`.
+- Preference: built. A reusable list (what the user always packs for a flight) is one preference, with the whole list comma-separated in its `preference` line.
 
 ### 7. Prompt and agent code
 - `agent/mail.go`: `MailBatch` input, `ExtractMailPrompt`, `ExtractedMailSchema` (JSON schema, descriptions carry the field formats), and Go types, following `agent/jobs.go`.
@@ -230,7 +229,7 @@ Without Bill and Order types, "what did I pay this year" is a search over tasks 
   - The `{{if .Inbox}}` block.
 - `extract_mail.md` and `ExtractedMailSchema`:
   - Each item carries a `state` (`open`, `done` or `cancelled`), taken from what the mail shows.
-  - The prompt says how mail maps to the two types, as in the table in section 2: a bill to pay is a task with `remind_on` three days before `due`, an order is a delivery event, and an automatic renewal is a renewal event.
+  - The prompt says how mail maps to the two types, as in the table in section 2: a bill to pay is a task with `remind_on` three days before `due`, and an order is a delivery event.
 
 ### 8. Docs, config
 - `docs/architecture.md`: new "Email assistant" section with a flow diagram (mail → notes + items → digest). The Memory section's required fields (a task no longer requires `status`) and Task rule are updated, along with a note that `items` owns item state. The schema list is unchanged.
@@ -263,7 +262,7 @@ New:
 - `worker/workflows/{mail_sync.go,mail_account.go,inbox_digest.go}` and their tests, with `testdata/{extract_mail.jsonl,inbox_digest.jsonl}`
 
 Changed:
-- `Task.md`, `Event.md`
+- `Task.md` (remove `status`, add the `items` rule) and `Event.md` (the `items` rule); the rest of both was built in PR #8
 - `worker/workflows/{workflows.go,user_setup.go,chat_turn.go,turn_tools.go}`
 - `memory/store/channels.go` (`KindInbox`) and the `kind` comment in `memory/sql-schemas/08_channels.sql`
 - `mcp/tools/tools.go` (the `items` set), `agent/protocol/turn.go`, `agent/mcp_servers.go`
