@@ -13,7 +13,6 @@ schema:
   confirmation?: string, booking reference, order number or ticket number
   link?(array): string, related URLs such as the booking page or parcel tracking
   checklist?(array): string, one thing to bring or do beforehand per line
-  source?: string, where the event came from when not this conversation, such as the mail it was taken from
 settings:
   validation: warn
 ---
