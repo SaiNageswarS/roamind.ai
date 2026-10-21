@@ -1,6 +1,6 @@
 # Email assistant (plan, not built)
 
-Status: drafted 2026-10-21, to revisit. The unified `channels` table it relies on is built: the inbox channel is a `channels` row with `kind = 'inbox'`, opened with `openChannel`.
+Status: drafted 2026-10-21, to revisit. The `channels` table it relies on is live (PR #6, deployed 2026-10-21): the inbox channel is one more kind in it, so this plan adds no channel table and no migration.
 
 ## Context
 Roamind should read the user's Gmail (several accounts per user) and turn mail into structured Basic Memory notes: tasks, reminders, events/appointments, bills and renewals, travel bookings, orders and deliveries, people, and checklists of things to carry. A morning digest in a private `#inbox-<name>` Slack channel then shows what is due. This also delivers the roadmap's pending "reminders" item. Reminders are not a type of their own: they come from dates on tasks, events, bills and orders, including tasks saved from chat.
@@ -28,7 +28,10 @@ Research findings that shape the design:
 ### 2. Data: `memory/sql-schemas/09_mail.sql` + `memory/store/mail.go` (+ `mail_test.go`)
 - `mail_accounts(address PK, user_id, history_id, status active|failed, error, connected_at, synced_at)`
 - `mail_messages(address, message_id, user_id, status picked|done|skipped|failed, received_at, done_at, PK(address, message_id))`. Every message seen is recorded before it is read, so none is extracted twice. This follows the `job_postings` pattern.
-- The inbox channel is a `channels` row with `kind = 'inbox'`: add `store.KindInbox`. It has no table of its own.
+- **The inbox channel is a row of the existing `channels` table** (`memory/sql-schemas/08_channels.sql`, `memory/store/channels.go`), with `kind = 'inbox'` and `ref = ''`. Each user has one inbox channel, and the empty `ref` in the primary key `(user_id, kind, ref)` enforces that, as for news.
+  - Add `store.KindInbox = "inbox"` next to `KindGoal` and `KindNews`, and add `inbox` to the `kind` comment in `08_channels.sql`. `kind` is free text, so the table doesn't change and needs no migration.
+  - Lookups use the existing API: `Store.Channel(ctx, userID, store.KindInbox, "")` for a user's channel, and `Store.Channels(ctx, store.KindInbox)` for every user's.
+  - An inbox channel can't also be a user's goal or news channel, because of `UNIQUE (channel_id, user_id)`.
 - `inbox_digests(user_id, day, channel_id, ts, posted_at, UNIQUE(user_id, day))`. The slot is reserved, then the message posted, then the slot completed, as `digests` does.
 - Store functions keep the repo's short names: `MailAccounts`, `SetHistory`, `FailAccount`, `PickMessages`, `PendingMessages`, `FinishMessage`, `ReserveInbox`, `CompleteInbox`.
 
@@ -44,12 +47,12 @@ Research findings that shape the design:
 - **`mail-sync`** (cron `*/15 * * * *`): for each `active` account, starts a `mail-account` child run. Its output lists accounts whose run couldn't start, as `news-shorts` does.
 - **`mail-account`** DAG, serialized per user (concurrency key `user_id`, so one user's bm writes never overlap):
   1. **`fetch`**: open the account and call `Changes` from `history_id`. With no history id, or on `ErrHistoryGone`, call `Recent`. Apply the pre-filter and `PickMessages` (new ids only), *then* save the new `history_id`. Return up to 20 picked messages, oldest first, read with `Message`. Leftovers stay `picked` for the next run. On an auth failure, call `FailAccount`.
-  2. **`extract`**: one `ToolsNone` turn over the batch (`agent/prompts/extract_mail.md`), with structured output. The mail is third-party text, so the turn gets no tools and no memory, as news ranking and job tailoring do. Input: the user's name, email, timezone and today's date; their active goals (title and permalink, from `notes.Goals`) so tasks can be linked; and each message's headers, text and JSON-LD. Output: per message, `skip` with a reason (newsletter, notification, OTP or security code) or a list of items. Each item has a `kind` (task, reminder, event, bill, order, person, checklist) and fields matching that schema. Each item also carries a `key`, a stable title: a confirmation, order or invoice number when there is one. Retried once.
+  2. **`extract`**: one `ToolsNone` turn over the batch (`agent/prompts/extract_mail.md`), with structured output. The mail is third-party text, so the turn gets no tools and no memory, as news ranking and job tailoring do. Input: the user's name, email, timezone and today's date; their active goals (title and permalink, from `notes.Goals`) so tasks can be linked; and each message's headers, text and JSON-LD. Output: per message, `skip` with a reason (newsletter, notification, OTP or security code) or a list of items. Each item has a `kind` (task, event, bill, order, person, checklist) and fields matching that schema. Each item also carries a `key`, a stable title: a confirmation, order or invoice number when there is one. Retried once.
   3. **`save`**: the harness writes each item as Markdown with `notes.WriteNote`, through bm's CLI, as exercise `post` does. Notes are titled by `key`, so a later mail about the same booking or order (rescheduled, shipped, cancelled) overwrites its note with the latest state. Each note gets a `source` line with the account, the message's Gmail link and the subject, and its evidence is `(observed, email, <date>)`. Person items are written only when no note in `people/` already lists that address as a `contact`; this is a disk read in `memory/store/notes`. No extra reminder notes are written: the dates on the items themselves drive the digest. Then `FinishMessage(done)`. Messages that only skip are marked `skipped`. Retries are safe because writes overwrite by title.
   - An on-failure task marks the batch `failed`, so it doesn't block later runs.
 - **`inbox-digest`** (cron at 08:00 in `ROAMIND_TZ`, through `LocalCrons` as learning exercises use; `InboxHours`):
   - It runs for every Slack user with memory, because reminders also come from chat.
-  - Users without an inbox channel get a `user-setup` run.
+  - Users whose `Store.Channel(…, store.KindInbox, "")` is empty get a `user-setup` run, as `news-shorts` does for news. The digest is posted to that channel, and `inbox_digests` records the posted message's `channel_id` and `ts`, as `digests` does.
   - It is harness code, with no LLM. A new `notes.Agenda(project, day)` reads only the dated lines (`due`, `remind_on`, `date`, `expected`, `return_by`) and statuses of the notes in `tasks/`, `events/<this year and next>/`, `bills/<…>/` and `orders/<…>/`. Past items drop out by date, so history never grows the digest. The year folders bound the scan, so its cost doesn't grow with years of history. The lead times are per kind, set in the harness (`InboxLeads`). The digest lists:
     - open tasks whose `remind_on` or `due` is today or overdue, or whose `due` is tomorrow;
     - events (appointments, flights, stays, tickets) that are not cancelled and fall today or tomorrow, each with its checklist;
@@ -57,8 +60,8 @@ Research findings that shape the design:
     - orders arriving today, and return windows closing within 3 days;
     - accounts that need reconnecting.
   - It reserves the slot, posts, then completes the slot. Nothing is posted when nothing is due.
-- **`user-setup`** gets an `inbox-channel` task (parent `bm-setup`), next to `news-channel`. Both call `openChannel` (`worker/workflows/channels.go`) with their kind, name and intro.
-- **Chat in the inbox channel**: a reply in a digest's thread is a chat turn that is given the digest text, as news-digest replies are. The agent marks items done (reminder `status done`, task `done`, bill `paid`) with `edit_note`. Routing is added next to the news-channel routing in `chat_turn.go`, and an `{{if .Inbox}}` block is added to `agent/prompts/system.md`.
+- **`user-setup`** gets an `inbox-channel` task (parent `bm-setup`), next to `news-channel`. `SyncInbox` calls `openChannel(ctx, u, store.Channel{Kind: store.KindInbox}, InboxChannelName(u.DisplayName), intro)` (`worker/workflows/channels.go`). That one call creates the channel with a `-n` suffix if the name is taken, records the row first, invites the user and posts the intro. `InboxChannelName` is `channelName("inbox", userName, 40)`. `chat-turn`'s `setUp` also starts user-setup when the inbox channel is missing, as it does for news.
+- **Chat in the inbox channel**: a reply in a digest's thread is a chat turn that is given the digest text, as news-digest replies are. The agent marks items done (task `done`, bill `paid`, event `cancelled`) with `edit_note`. Routing needs no new lookup: `route` in `chat_turn.go` already reads the channel's kind with one `ChannelOf` call. The change is that `route` returns that `*store.Channel` instead of its current `news bool`, so `Process` can set the goal, news or inbox part of the turn from the kind. The owner's plain messages are then inbox turns, and an `{{if .Inbox}}` block is added to `agent/prompts/system.md`. The skip reason for a mention changes from "own goal or news channel" to "own channel".
 - Wiring goes in `workflows.go` `Register` (only with Memory), in the package doc list, and in `Deps.Mail` (the credentials dir, `data/secrets/mail`).
 
 ### 5. Basic Memory schemas (`memory/basic-memory-schemas/`)
@@ -111,6 +114,7 @@ New:
 Changed:
 - `Task.md`, `Event.md`
 - `worker/workflows/{workflows.go,user_setup.go,chat_turn.go}`
+- `memory/store/channels.go` (`KindInbox`) and the `kind` comment in `memory/sql-schemas/08_channels.sql`
 - `worker/cmd/worker/main.go`
 - `agent/prompts/system.md`
 - `Taskfile.yml`, `docs/*`, `README.md`, `.env.example`
@@ -119,7 +123,7 @@ Changed:
 Reused:
 - `notes.WriteNote` and `notes.Goals` (`memory/store/notes/`)
 - the reserve/complete pattern of `digests` (`memory/store/news.go`)
-- `SyncNews` for channel creation (`user_setup.go`)
+- `openChannel`, `channelName` and the `channels` store API (`Channel`, `Channels`, `ChannelOf`) for the inbox channel (`worker/workflows/channels.go`, `memory/store/channels.go`)
 - `LocalCrons`, and the skip pattern of the `learning-exercise` DAG
 - `ToolsNone` structured turns (`agent/jobs.go`, `worker/workflows/job_application.go`)
 - `storetest` for the store tests
@@ -140,5 +144,5 @@ All work goes in one branch and one PR.
    - Trigger `mail-sync` with the Hatchet CLI (`hatchet` skill: trigger-and-watch).
    - Check `mail_messages` statuses and the new notes under `data/memory/users/<p>/notes/{tasks,events,bills,orders,checklists,people}`.
    - Run bm `schema_validate` on them.
-4. **Digest:** trigger `inbox-digest` by hand. The `#inbox-sai` channel should be created and the digest posted. Reply "done" to an item and check that the note's status changes.
+4. **Digest:** trigger `inbox-digest` by hand. The `#inbox-sai` channel should be created, with a `channels` row of `kind = 'inbox'`, and the digest posted. Reply "done" to an item and check that the note's status changes.
 5. **Failure path:** revoke an account's access in its Google account settings. The next sync should mark it `failed`, and the digest should say it needs reconnecting.
