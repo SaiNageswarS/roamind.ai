@@ -20,7 +20,6 @@ const ExerciseHour = 9
 
 // dispatchOutput lists the goals given a learning-exercise run.
 type dispatchOutput struct {
-	Skipped string   `json:"skipped,omitempty"`
 	Started []string `json:"started,omitempty"` // goal permalinks
 }
 
@@ -28,7 +27,8 @@ type dispatchOutput struct {
 // per goal, as child runs.
 func LearningExercises(c *hatchet.Client, d Deps, exercise *hatchet.Workflow) *hatchet.StandaloneTask {
 	return c.NewStandaloneTask(LearningExercisesName, func(ctx hatchet.Context, _ struct{}) (dispatchOutput, error) {
-		out, due, err := d.dueGoals(ctx, d.now())
+		due, err := d.dueGoals(ctx)
+		var out dispatchOutput
 		if err != nil {
 			return out, err
 		}
@@ -41,45 +41,31 @@ func LearningExercises(c *hatchet.Client, d Deps, exercise *hatchet.Workflow) *h
 		return out, nil
 	},
 		hatchet.WithWorkflowDescription(fmt.Sprintf("Each day at %d:00 %s, start an exercise for every learning goal", ExerciseHour, d.Location)),
-		hatchet.WithWorkflowCron(LocalCrons(d.Location, ExerciseHour)...),
+		hatchet.WithWorkflowCron(LocalCrons(d.Location, time.Now(), ExerciseHour)...),
 		hatchet.WithRetries(1),
 		hatchet.WithExecutionTimeout(time.Minute),
 	)
 }
 
-// LocalCrons are UTC cron expressions for each hour:00 in loc. Hatchet
-// crons run in UTC, so a zone with daylight saving time gets one for each
-// offset, and the run that is not at one of the hours local time does
-// nothing.
-func LocalCrons(loc *time.Location, hours ...int) []string {
+// LocalCrons are UTC cron expressions for each hour:00 in loc, at loc's
+// offset on the day of at. Hatchet crons run in UTC, so in a zone with
+// daylight saving time the runs are an hour off after a change of offset
+// until the worker is started again.
+func LocalCrons(loc *time.Location, at time.Time, hours ...int) []string {
 	var crons []string
-	seen := map[string]bool{}
-	year := time.Now().Year()
+	at = at.In(loc)
 	for _, hour := range hours {
-		for _, m := range []time.Month{time.January, time.July} {
-			t := time.Date(year, m, 1, hour, 0, 0, 0, loc).UTC()
-			c := fmt.Sprintf("%d %d * * *", t.Minute(), t.Hour())
-			if !seen[c] {
-				seen[c] = true
-				crons = append(crons, c)
-			}
-		}
+		t := time.Date(at.Year(), at.Month(), at.Day(), hour, 0, 0, 0, loc).UTC()
+		crons = append(crons, fmt.Sprintf("%d %d * * *", t.Minute(), t.Hour()))
 	}
 	return crons
 }
 
-// dueGoals returns the active learning goals with a channel, when it is
-// ExerciseHour local time.
-func (d Deps) dueGoals(ctx context.Context, now time.Time) (dispatchOutput, []ExerciseInput, error) {
-	var out dispatchOutput
-	local := now.In(d.Location)
-	if local.Hour() != ExerciseHour {
-		out.Skipped = fmt.Sprintf("it is %s in %s, not %d:00", local.Format("15:04"), d.Location, ExerciseHour)
-		return out, nil, nil
-	}
+// dueGoals returns the active learning goals with a channel.
+func (d Deps) dueGoals(ctx context.Context) ([]ExerciseInput, error) {
 	gcs, err := d.Store.GoalChannels(ctx)
 	if err != nil {
-		return out, nil, err
+		return nil, err
 	}
 	var due []ExerciseInput
 	goals := map[string][]notes.Goal{} // by user
@@ -87,11 +73,11 @@ func (d Deps) dueGoals(ctx context.Context, now time.Time) (dispatchOutput, []Ex
 		if _, ok := goals[gc.UserID]; !ok {
 			u, err := d.Store.UserByID(ctx, gc.UserID)
 			if err != nil {
-				return out, nil, err
+				return nil, err
 			}
 			if u != nil && u.MemoryProject != "" {
 				if goals[gc.UserID], err = d.Memory.Goals(u.MemoryProject); err != nil {
-					return out, nil, err
+					return nil, err
 				}
 			}
 		}
@@ -101,5 +87,5 @@ func (d Deps) dueGoals(ctx context.Context, now time.Time) (dispatchOutput, []Ex
 			}
 		}
 	}
-	return out, due, nil
+	return due, nil
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"time"
 
@@ -31,7 +30,6 @@ func newsTimes() string {
 
 // newsDispatchOutput lists the runs started.
 type newsDispatchOutput struct {
-	Skipped string   `json:"skipped,omitempty"`
 	Slot    string   `json:"slot,omitempty"`
 	Digests []string `json:"digests,omitempty"` // user ids
 	Setups  []string `json:"setups,omitempty"`  // user ids
@@ -69,7 +67,7 @@ func NewsShorts(c *hatchet.Client, d Deps, digest, setup *hatchet.Workflow) *hat
 		return out, nil
 	},
 		hatchet.WithWorkflowDescription(fmt.Sprintf("Every day at %s %s, start a news digest for every user", newsTimes(), d.Location)),
-		hatchet.WithWorkflowCron(LocalCrons(d.Location, NewsHours...)...),
+		hatchet.WithWorkflowCron(LocalCrons(d.Location, time.Now(), NewsHours...)...),
 		hatchet.WithRetries(1),
 		hatchet.WithExecutionTimeout(time.Minute),
 	)
@@ -80,16 +78,10 @@ func (d Deps) newsSlot(t time.Time) string {
 	return t.In(d.Location).Format("2006-01-02 15")
 }
 
-// dueNews returns, at one of NewsHours local time, a digest input for each
-// user with a news channel, and a user-setup input for each user without
-// one.
+// dueNews returns a digest input for each user with a news channel, for
+// the slot of now, and a user-setup input for each user without one.
 func (d Deps) dueNews(ctx context.Context, now time.Time) (newsDispatchOutput, []DigestInput, []UserSetupInput, error) {
 	var out newsDispatchOutput
-	local := now.In(d.Location)
-	if !slices.Contains(NewsHours, local.Hour()) {
-		out.Skipped = fmt.Sprintf("it is %s in %s, not %s", local.Format("15:04"), d.Location, newsTimes())
-		return out, nil, nil, nil
-	}
 	out.Slot = d.newsSlot(now)
 	users, err := d.Store.Users(ctx)
 	if err != nil {

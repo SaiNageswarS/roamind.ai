@@ -144,11 +144,11 @@ func run() error {
 	})
 	if mem != nil {
 		slog.Info("daily exercises", "tz", loc.String(),
-			"crons_utc", workflows.LocalCrons(loc, workflows.ExerciseHour))
+			"crons_utc", workflows.LocalCrons(loc, time.Now(), workflows.ExerciseHour))
 		slog.Info("news shorts", "tz", loc.String(),
-			"crons_utc", workflows.LocalCrons(loc, workflows.NewsHours...))
+			"crons_utc", workflows.LocalCrons(loc, time.Now(), workflows.NewsHours...))
 		slog.Info("job searches", "tz", loc.String(),
-			"crons_utc", workflows.LocalCrons(loc, workflows.JobSearchHours...))
+			"crons_utc", workflows.LocalCrons(loc, time.Now(), workflows.JobSearchHours...))
 	}
 
 	if listen != nil {

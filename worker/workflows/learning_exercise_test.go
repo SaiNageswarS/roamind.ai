@@ -16,21 +16,25 @@ import (
 func TestLocalCrons(t *testing.T) {
 	berlin, _ := time.LoadLocation("Europe/Berlin")
 	kolkata, _ := time.LoadLocation("Asia/Kolkata")
+	winter := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	summer := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
 	cases := []struct {
 		loc  *time.Location
+		at   time.Time
 		want []string
 	}{
-		{berlin, []string{"0 8 * * *", "0 7 * * *"}},
-		{time.UTC, []string{"0 9 * * *"}},
-		{kolkata, []string{"30 3 * * *"}},
+		{berlin, winter, []string{"0 8 * * *"}},
+		{berlin, summer, []string{"0 7 * * *"}},
+		{time.UTC, summer, []string{"0 9 * * *"}},
+		{kolkata, summer, []string{"30 3 * * *"}},
 	}
 	for _, c := range cases {
-		if got := LocalCrons(c.loc, 9); !reflect.DeepEqual(got, c.want) {
-			t.Errorf("%s: %v, want %v", c.loc, got, c.want)
+		if got := LocalCrons(c.loc, c.at, 9); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s on %s: %v, want %v", c.loc, c.at.Format(time.DateOnly), got, c.want)
 		}
 	}
-	want := []string{"0 7 * * *", "0 6 * * *", "0 19 * * *", "0 18 * * *"}
-	if got := LocalCrons(berlin, 8, 20); !reflect.DeepEqual(got, want) {
+	want := []string{"0 6 * * *", "0 18 * * *"}
+	if got := LocalCrons(berlin, summer, 8, 20); !reflect.DeepEqual(got, want) {
 		t.Errorf("8 and 20 in Berlin: %v, want %v", got, want)
 	}
 }
@@ -93,12 +97,9 @@ func TestLearningExercise(t *testing.T) {
 	}
 	in := ExerciseInput{UserID: u.ID, GoalPermalink: german}
 
-	// The dispatcher: at 9:00 only, every active learning goal with a channel.
-	if out, due, err := d.dueGoals(ctx, nine.Add(-time.Hour)); err != nil || len(due) != 0 || out.Skipped == "" {
-		t.Fatalf("8:00: out=%+v due=%v err=%v", out, due, err)
-	}
-	if _, due, err := d.dueGoals(ctx, nine); err != nil || !reflect.DeepEqual(due, []ExerciseInput{in}) {
-		t.Fatalf("9:00: due=%+v err=%v", due, err)
+	// The dispatcher: every active learning goal with a channel.
+	if due, err := d.dueGoals(ctx); err != nil || !reflect.DeepEqual(due, []ExerciseInput{in}) {
+		t.Fatalf("due=%+v err=%v", due, err)
 	}
 
 	// check-skip
