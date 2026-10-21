@@ -1,6 +1,6 @@
 # Email assistant (plan, not built)
 
-Status: drafted 2026-10-21 and revised 2026-10-22, to revisit. The `channels` table it relies on is live (PR #6, deployed 2026-10-21): the inbox channel is one more kind in it, so this plan adds no channel table. The 2026-10-22 revision moved the "what is due" state out of the notes and into an `items` table (see "Why an items table").
+Status: drafted 2026-10-21 and revised 2026-10-22, to revisit. The `channels` table it relies on is live (PR #6, deployed 2026-10-21): the inbox channel is one more kind in it, so this plan adds no channel table. The 2026-10-22 revision moved item state (whether it is due, and whether it is still open) out of the notes and into an `items` table, and removed `status` from the item schemas (see "Why an items table").
 
 ## Context
 Roamind should read the user's Gmail (several accounts per user) and turn mail into structured Basic Memory notes: tasks, reminders, events/appointments, bills and renewals, travel bookings, orders and deliveries, people, and checklists of things to carry. A morning digest in a private `#inbox-<name>` Slack channel then shows what is due. This also delivers the roadmap's pending "reminders" item. Reminders are not a type of their own: they are rows of the `items` table, added for dated tasks, events, bills and orders, including tasks saved from chat.
@@ -15,15 +15,13 @@ Research findings that shape the design:
 - **Basic Memory can't answer "what is due".** bm's metadata filters (`search_notes --filter` with `$gte`/`$lte`) see only frontmatter. In our schemas a field is an observation category, so `due` is a `- [due] <date>` line in the note body, which no bm query can range over. The alternative is to scan the note files on disk and parse those lines.
 
 ## Why an items table
-Active items live in SQLite, in one `items` row per date to surface, and Basic Memory keeps everything else.
+Item state lives in SQLite, in `items` rows, and Basic Memory keeps everything else.
 - **The table answers "what is due today" with one indexed query.** The digest doesn't scan notes, and its cost doesn't grow with years of history.
-- **The table is the only owner of an item's reminder state:** when it shows, when it expires, and whether it is still open. The notes keep their dates and statuses as the record ("when did I last see the dentist?", "was that order delivered?"). When a note and its row disagree, the row decides what the digest shows.
-- **Every write to that state goes through code that writes the row:**
-  - mail `save` (harness code), which writes the note and the row from the same extracted item;
+- **The table is the only owner of state.** It holds when an item shows, when it expires, and whether it is open, done or cancelled. The Task, Event, Bill and Order notes have no `status` field. Because state is stored in one place, a note and a row can't disagree about it.
+- **Every write to state goes through code that writes the row:**
+  - mail `save` (harness code), which writes the note and the rows from the same extracted item;
   - the `items` tools of Roamind's MCP server, in chat.
-  
-  bm's `edit_note` changes only the note. The system prompt tells the agent that reminders and statuses go through the `items` tools.
-- **Basic Memory keeps the details and the links:** the booking's provider and confirmation, the people, the checklist, the related goal. The digest turn reads them from there.
+- **Basic Memory keeps the details and the links:** the booking's provider and confirmation, the dates, the people, the checklist, the related goal. The digest turn reads them from there.
 
 ## Design
 
@@ -56,16 +54,20 @@ items(user_id, key,       -- key: stable title, or the confirmation/order/invoic
       kind,               -- task|event|bill|delivery|return
       note,               -- permalink of the bm note it comes from
       title,              -- one line for the digest
-      at,                 -- the date itself: due, departure, check-in, delivery, return_by
-      show_from,          -- first day it shows: remind_on, or at minus the kind's lead time
+      at,                 -- the date itself: due, departure, check-in, delivery, return_by; NULL if undated
+      show_from,          -- first day it shows: remind_on, or at minus the kind's lead time; NULL never shows
       until,              -- last day it shows; NULL = until it is closed
       state,              -- open|done|cancelled
       source,             -- 'mail:<address>/<message id>' or 'chat'
-      updated_at,
+      updated_at, closed_at,
       PRIMARY KEY (user_id, key),
       INDEX (user_id, state, show_from))
 ```
-- **One row per date to surface, and only dated things get a row.** An undated task stays a note only. An order with both a delivery date and a return window gets two rows, keyed `<order key>` and `<order key> return`.
+- **Every task, event, bill and order note has a row, because its state is kept there.**
+  - An undated task gets a row with `at` and `show_from` both NULL. It never shows in the digest, and the row still records whether it is open or done.
+  - An order gets two rows, `<order key>` for the delivery and `<order key> return` for the return window. The `delivery` row closes as done when the order is delivered. The `return` row closes as done when the order is returned. Cancelling the order closes both rows as cancelled.
+  - A bill on autopay is saved with `done` already set.
+- **Closed rows are kept as history.** They answer "was that order delivered?" or "did I pay the insurance?", together with `closed_at`.
 - **Lead times and expiry per kind** are set in the harness (`InboxLeads`), so `show_from` and `until` are computed once, when the row is written:
 
   | kind | shows from | until |
@@ -77,9 +79,9 @@ items(user_id, key,       -- key: stable title, or the confirmation/order/invoic
   | return | `at` minus 3 days | `at` |
 - **Store functions:**
   - `PutItem` upserts by key. A later mail that reschedules an item moves its dates, and one that cancels it sets its `state`.
-  - `CloseItem(userID, key, state)`.
+  - `CloseItem(userID, key, state)` sets `closed_at`. It also reopens an item when `state` is `open`.
   - `DueItems(userID, day)` returns `state = 'open' AND show_from <= day AND (until IS NULL OR until >= day)`.
-  - `Items(userID, from, to)` returns open items whose `at` falls in a range, for chat.
+  - `Items(userID, filter)` serves chat. The filter can select by state, by an `at` range, by key, or by note folder (such as `tasks/<goal>/` for a goal's tasks).
 
 ### 3. Connector: `connectors/mail` (Gmail, `google.golang.org/api/gmail/v1`)
 - `Open(ctx, credPath) (*Account, error)`, `Profile`, `Changes(ctx, historyID) (ids, newHistoryID, error)` (returns `ErrHistoryGone` on 404), `Recent(ctx, days, max)` (the full sync: `newer_than:14d`, at most 50 messages), and `Message(ctx, id) (*Message, error)`.
@@ -99,12 +101,12 @@ items(user_id, key,       -- key: stable title, or the confirmation/order/invoic
      - Retried once.
   3. **`save`**: for each item, the harness does two writes.
      - **The note.** It writes the item as Markdown with `notes.WriteNote`, through bm's CLI, as exercise `post` does.
-       - Notes are titled by `key`, so a later mail about the same booking or order (rescheduled, shipped, cancelled) overwrites its note with the latest state.
+       - Notes are titled by `key`, so a later mail about the same booking or order (rescheduled, shipped, cancelled) overwrites its note with the latest details.
        - Each note gets a `source` line with the account, the message's Gmail link and the subject. Its evidence is `(observed, email, <date>)`.
        - Person items are written only when no note in `people/` already lists that address as a `contact`. This is a disk read in `memory/store/notes`.
-     - **The rows.** For each date of the item, it calls `PutItem` with the note's permalink.
-       - A cancelled event or order, or a paid bill, sets `state`.
-       - A delivered order closes its `delivery` row.
+     - **The rows.** For each task, event, bill and order, it calls `PutItem` with the note's permalink. Orders get two rows.
+       - Extraction reports the state the mail shows: a cancelled booking, a paid bill, a delivered or returned order. `save` sets the row's `state` from it.
+       - The note gets no status.
      
      Then it calls `FinishMessage(done)`. Messages that only skip are marked `skipped`. Retries are safe, because notes overwrite by title and rows upsert by key.
   - An on-failure task marks the batch `failed`, so it doesn't block later runs.
@@ -125,8 +127,9 @@ items(user_id, key,       -- key: stable title, or the confirmation/order/invoic
   - `chat-turn`'s `setUp` also starts user-setup when the inbox channel is missing, as it does for news.
 - **Chat and items:** `chat-turn` gets the `items` tool set (`TurnTools` in `turn_tools.go`) in every channel, so "remind me to…" works anywhere.
 - **Chat in the inbox channel:** a reply in a digest's thread is a chat turn that is given the digest text, as news-digest replies are. The digest text carries each item's key.
-  - A reply such as "paid", "done" or "cancelled" closes the row with `close_item`, and updates the note's status with `edit_note`.
+  - A reply such as "paid", "done" or "cancelled" closes the row with `close_item`. The note doesn't change.
   - "Moved to Tuesday" re-saves the row with `save_item` and edits the note's date.
+- **Tasks in goal channels:** a goal's tasks are read through the items tools, with `list_items(folder: tasks/<goal>/)`. The goal paragraph of `system.md` points there for task state, next to `build_context` for the goal. Marking a task done is `close_item` in every channel.
 - **Routing needs no new lookup:** `route` in `chat_turn.go` already reads the channel's kind with one `ChannelOf` call.
   - The change is that `route` returns that `*store.Channel` instead of its current `news bool`, so `Process` can set the goal, news or inbox part of the turn from the kind.
   - The owner's plain messages are then inbox turns, and an `{{if .Inbox}}` block is added to `agent/prompts/system.md`.
@@ -135,11 +138,12 @@ items(user_id, key,       -- key: stable title, or the confirmation/order/invoic
 
 ### 5. Roamind MCP server: `items` tool set (`mcp/tools/items.go`)
 This is a new tool set next to `interests` and `jobs`, named `protocol.ServerItems`. It is pinned to the turn's user, as the others are.
-- **`save_item(key, kind, note, title, at, remind_on?, until?)`:** adds or reschedules a row through `PutItem`. The tool fills in `show_from` and `until` from `InboxLeads`, so the model gives only the dates.
+- **`save_item(key, kind, note, title, at?, remind_on?, until?)`:** adds or reschedules a row through `PutItem`. The tool fills in `show_from` and `until` from `InboxLeads`, so the model gives only the dates.
   - The agent first writes or edits the note, then saves the row with the note's permalink.
+  - Every new task, event, bill or order note gets a row, dated or not.
   - `InboxLeads` moves to `memory/store`, so the worker and the server share it.
-- **`close_item(key, state)`:** `state` is `done` or `cancelled`.
-- **`list_items(from?, to?)`:** open items in a date range, for "what's on this week?".
+- **`close_item(key, state)`:** `state` is `done`, `cancelled` or `open` (to reopen an item).
+- **`list_items(state?, from?, to?, folder?, key?)`:** with no arguments, it returns the open items. The arguments cover questions such as "what's on this week?", "which tasks are left on this goal?" and "did that order arrive?".
 - `kind` and `state` are checked with `oneOf`. Dates must parse as ISO dates or date-times.
 
 ### 6. Basic Memory schemas (`memory/basic-memory-schemas/`)
@@ -147,23 +151,25 @@ The bodies are prose only: no `- ` lines, no `[[ ]]`, no "e.g.", and values cont
 
 **There is no separate Reminder type.** A reminder is a row in `items`. It comes either from something to do, which is a Task note with a row, or from a dated thing, which is that thing's note with a row whose lead time comes from its kind.
 
-**Status in a note is the record; the row decides what is shown.** Nothing has an active/closed status: an event in the past is over. A note's status records what happened outside time: done or cancelled for a task, paid for a bill, the shipping state of an order, a cancelled event. The schema bodies say that a reminder or a status change is also saved with the `items` tools, which keeps the rule with the types.
+**Task, Event, Bill and Order notes have no status.** The note says what the thing is, and its `items` row says whether it is open, done or cancelled. Each of these schema bodies says that the note is tracked with the `items` tools: `save_item` when it is created or rescheduled, and `close_item` when it is done, paid, delivered, returned or cancelled. This keeps the rule with the types. Goal keeps its `status`, since goals aren't items and goal channels read it (`notes.Goals`).
 
 **Past items stay in memory as history.** In chat, the model never loads them wholesale. It looks them up on demand with `search_notes` or `build_context`, for questions such as "when did I last see the dentist?", "what was my booking reference?" or "is that order still returnable?". Year folders keep each folder small.
 - **Task.md (changed)**:
   - `task_of` becomes optional. Tasks linked to a goal stay in `tasks/<goal>/`, and tasks with no fitting goal (most tasks from mail, and "remind me to…" from chat) go in `tasks/`.
+  - Removes `status`.
   - Adds `source?`. There is no `remind_on` field, because the reminder lives in the item row.
-  - The text "ask which goal" is replaced with "link a goal when one fits". `docs/architecture.md` is updated to match.
+  - The text "ask which goal" is replaced with "link a goal when one fits", and "Update its status as it moves along" with the `items` rule. `docs/architecture.md` is updated to match.
+  - Existing task notes are left as they are, and their `[status]` lines just become plain observations. No backfill is done while bootstrapping.
 - **Event.md (changed)**:
-  - Adds `kind?(enum): [appointment, flight, train, stay, ticket, reservation, meeting, trip, milestone, other]`, `end?`, `provider?` (airline, clinic, venue), `confirmation?`, `status?(enum): [confirmed, cancelled]` (absent means confirmed) and `source?`.
+  - Adds `kind?(enum): [appointment, flight, train, stay, ticket, reservation, meeting, trip, milestone, other]`, `end?`, `provider?` (airline, clinic, venue), `confirmation?` and `source?`.
   - Saved in `events/<YYYY>/`.
   - Appointments and travel bookings are Events, linked to Place with `at` and to Person with `with`.
 - **Bill.md (new)**:
-  - Fields: `payee`, `amount` (with its currency), `due`, `status(enum): [due, paid, autopay]`, `kind(enum): [bill, invoice, subscription, renewal]`, `recurring?` and `source?`.
+  - Fields: `payee`, `amount` (with its currency), `due`, `kind(enum): [bill, invoice, subscription, renewal]`, `payment?(enum): [manual, autopay]` (how it gets paid, a fact rather than a state), `recurring?` and `source?`.
   - Saved in `bills/<YYYY>/`.
-  - Autopay bills get no row.
 - **Order.md (new)**:
-  - Fields: `merchant`, `order_number?`, `status(enum): [ordered, shipped, delivered, returned, cancelled]`, `expected?`, `tracking?` (URL), `return_by?` and `source?`.
+  - Fields: `merchant`, `order_number?`, `expected?`, `tracking?` (URL), `return_by?` and `source?`.
+  - A shipping mail updates `expected` and `tracking`. Delivery, return and cancellation close rows.
   - Saved in `orders/<YYYY>/`.
 - **Checklist.md (new)**:
   - Fields: `kind(enum): [packing, documents, preparation, shopping, other]`, `checklist_for?: the Event, Task or Goal it serves`, `item(array)` (one thing to carry or do per line) and `done?(array)` (items ticked off, moved from item).
@@ -184,10 +190,14 @@ The bodies are prose only: no `- ` lines, no `[[ ]]`, no "e.g.", and values cont
   - The input is the due rows and the accounts to reconnect, plus the user's name, timezone and today's date.
   - The prompt says to read each item's note and related notes for what the user needs today, and to write a short digest grouped as overdue, today and tomorrow. Each item is given with its key.
 - `agent/protocol`: `ToolsRecall` (bm read tools only, no saved session) and `ServerItems`. `agent/mcp_servers.go` allows only bm's read tools for `ToolsRecall`.
-- `agent/prompts/system.md`: one line saying that reminders and statuses are saved with the `items` tools, next to the note. There is also the `{{if .Inbox}}` block.
+- `agent/prompts/system.md`:
+  - One line saying that tasks, events, bills and orders are tracked with the `items` tools. Their state lives there, not in the note.
+  - The goal paragraph reads the goal's tasks with `list_items`.
+  - The `{{if .Inbox}}` block.
+- `extract_mail.md` and `ExtractedMailSchema`: each item carries a `state` (`open`, `done` or `cancelled`), taken from what the mail shows. Orders carry a state for the delivery and one for the return.
 
 ### 8. Docs, config
-- `docs/architecture.md`: new "Email assistant" section with a flow diagram (mail → notes + items → digest). The Memory section's schema list and Task rule are updated, along with a note that `items` owns the reminder state.
+- `docs/architecture.md`: new "Email assistant" section with a flow diagram (mail → notes + items → digest). The Memory section's schema list, required fields (a task no longer requires `status`) and Task rule are updated, along with a note that `items` owns item state.
 - `docs/deployment.md`: GCP setup, oauth2l, `task mail-connect`.
 - `README.md`: feature line, plus a design principle: "Used Google's oauth2l to connect mail accounts offline…" (per README voice).
 - `.env.example`: `ROAMIND_MAIL_DIR` (default `data/secrets/mail`).
@@ -241,6 +251,7 @@ All work goes in one branch and one PR.
    - Run bm `schema_validate` on the notes.
 4. **Digest:**
    - Trigger `inbox-digest` by hand. The `#inbox-sai` channel should be created, with a `channels` row of `kind = 'inbox'`. The digest is posted, with each event's checklist pulled from memory.
-   - Reply "done" to an item. The row's `state` and the note's status should both change, and the item shouldn't appear the next day.
+   - Reply "done" to an item. The row's `state` should change, and the item shouldn't appear the next day.
    - In any channel, say "remind me to call the bank on Friday". A task note and a row should be created, and the item shows in Friday's digest.
+   - In a goal channel, add an undated task and then mark it done. Its row should go from open to done, and `list_items` for the goal's folder should show that.
 5. **Failure path:** revoke an account's access in its Google account settings. The next sync should mark it `failed`, and the digest should say it needs reconnecting.
