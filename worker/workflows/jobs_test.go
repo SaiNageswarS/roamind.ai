@@ -331,16 +331,12 @@ func TestJobSearchDispatch(t *testing.T) {
 	fw.profiles["u3"] = web.Profile{Email: "new@x.com", Name: "New", Paused: true}
 	fw.profiles["u4"] = web.Profile{Name: "No email"}
 
-	// Off the search hours, nothing happens.
+	// At any hour, every profile is brought in and every unpaused user is
+	// hunted, each time.
 	at := func(h int) time.Time { return time.Date(2026, 10, 17, h, 0, 0, 0, d.Location) }
-	if out, hunts, _, err := d.hunts(ctx, at(9)); err != nil || out.Skipped == "" || out.Profiles != 0 || len(hunts) != 0 {
-		t.Fatalf("09:00 = %+v %+v, %v", out, hunts, err)
-	}
-	// At each of them, every profile is brought in and every unpaused user
-	// is hunted, each time.
-	for _, h := range JobSearchHours {
+	for _, h := range append([]int{9}, JobSearchHours...) {
 		out, hunts, _, err := d.hunts(ctx, at(h))
-		if err != nil || out.Skipped != "" || out.Profiles != 4 || len(hunts) != 2 {
+		if err != nil || out.Profiles != 4 || len(hunts) != 2 {
 			t.Fatalf("%d:00 = %+v %+v, %v", h, out, hunts, err)
 		}
 		for _, hu := range hunts {

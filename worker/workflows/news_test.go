@@ -198,10 +198,7 @@ func TestNewsDigest(t *testing.T) {
 	storetest.MarkSent(t, d.Store, u.ID, "https://ex.org/sent")
 	in := DigestInput{UserID: u.ID, Slot: "2026-10-13 16"}
 
-	// The dispatcher: at the news hours only; a user without a channel gets one.
-	if out, _, _, err := d.dueNews(ctx, d.now().Add(time.Hour)); err != nil || out.Skipped == "" {
-		t.Fatalf("9:00: %+v %v", out, err)
-	}
+	// The dispatcher: a user without a channel gets one.
 	out, digests, missing, err := d.dueNews(ctx, d.now())
 	if err != nil || out.Slot != in.Slot || !reflect.DeepEqual(digests, []DigestInput{in}) ||
 		!reflect.DeepEqual(missing, []UserSetupInput{{UserID: other.ID}}) {

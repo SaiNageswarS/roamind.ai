@@ -2,9 +2,7 @@ package workflows
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"slices"
 	"time"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
@@ -31,9 +29,6 @@ const staleClaim = time.Hour
 
 // jobSearchOutput lists what a dispatch did.
 type jobSearchOutput struct {
-	// Skipped says why the run did nothing: it isn't one of JobSearchHours
-	// local time.
-	Skipped  string   `json:"skipped,omitempty"`
 	Profiles int      `json:"profiles"`
 	Hunts    []string `json:"hunts,omitempty"`    // user ids
 	Requeued int      `json:"requeued,omitempty"` // links left processing, queued again
@@ -48,7 +43,7 @@ type jobSearchOutput struct {
 func JobSearch(c *hatchet.Client, d Deps, hunt *hatchet.Workflow) *hatchet.StandaloneTask {
 	return c.NewStandaloneTask(JobSearchName, func(ctx hatchet.Context, _ struct{}) (jobSearchOutput, error) {
 		out, hunts, users, err := d.hunts(ctx, d.now())
-		if err != nil || out.Skipped != "" {
+		if err != nil {
 			return out, err
 		}
 		for _, in := range hunts {
@@ -70,7 +65,7 @@ func JobSearch(c *hatchet.Client, d Deps, hunt *hatchet.Workflow) *hatchet.Stand
 		return out, nil
 	},
 		hatchet.WithWorkflowDescription("A few times a day, start a job hunt for every job-assistant user"),
-		hatchet.WithWorkflowCron(LocalCrons(d.Location, JobSearchHours...)...),
+		hatchet.WithWorkflowCron(LocalCrons(d.Location, time.Now(), JobSearchHours...)...),
 		hatchet.WithRetries(1),
 		hatchet.WithExecutionTimeout(time.Minute),
 	)
@@ -78,14 +73,9 @@ func JobSearch(c *hatchet.Client, d Deps, hunt *hatchet.Workflow) *hatchet.Stand
 
 // hunts brings in every profile of the web app as a user, and returns a
 // job-hunt input for each user whose search isn't paused, and the profiles
-// by user id; when it is one of JobSearchHours local time.
+// by user id.
 func (d Deps) hunts(ctx context.Context, now time.Time) (jobSearchOutput, []JobHuntInput, map[string]web.Profile, error) {
 	var out jobSearchOutput
-	local := now.In(d.Location)
-	if !slices.Contains(JobSearchHours, local.Hour()) {
-		out.Skipped = fmt.Sprintf("it is %s in %s, not one of %v:00", local.Format("15:04"), d.Location, JobSearchHours)
-		return out, nil, nil, nil
-	}
 	profiles, err := d.Web.Profiles(ctx)
 	if err != nil {
 		return out, nil, nil, err
@@ -93,7 +83,7 @@ func (d Deps) hunts(ctx context.Context, now time.Time) (jobSearchOutput, []JobH
 	out.Profiles = len(profiles)
 	byUser := map[string]web.Profile{}
 	var hunts []JobHuntInput
-	date := local.Format(time.DateOnly)
+	date := now.In(d.Location).Format(time.DateOnly)
 	for _, p := range profiles {
 		email := identity.NormalizeEmail(p.Email)
 		if email == "" {
