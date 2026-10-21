@@ -128,7 +128,7 @@ func TestSyncNews(t *testing.T) {
 		!strings.Contains(fs.texts[0], "Every day at 16:00 (Europe/Berlin)") || strings.Contains(fs.texts[0], "Read") {
 		t.Fatalf("invites=%v posts=%v texts=%q", fs.invites, fs.postsTo, fs.texts)
 	}
-	if ch, _ := d.Store.NewsChannelOf(ctx, u.ID); ch != "G1" {
+	if ch, _ := d.Store.Channel(ctx, u.ID, store.KindNews, ""); ch != "G1" {
 		t.Fatalf("channel = %q", ch)
 	}
 	ins, err := d.Store.ActiveInterests(ctx, u.ID)
@@ -411,7 +411,7 @@ func TestProcessNewsChannel(t *testing.T) {
 	}
 	owner := identity.UserID("owner@x.com")
 	// user-setup gave them their news channel at first contact.
-	ch, err := d.Store.NewsChannelOf(ctx, owner)
+	ch, err := d.Store.Channel(ctx, owner, store.KindNews, "")
 	if err != nil || ch == "" {
 		t.Fatalf("news channel %q, %v", ch, err)
 	}

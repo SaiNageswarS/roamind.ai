@@ -223,29 +223,22 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 // Elsewhere, and for anyone else, private-channel messages start a turn only
 // through their @mention copy.
 func (d Deps) route(ctx context.Context, ev slack.Event) (*protocol.GoalRef, bool, string, error) {
-	var gc *store.GoalChannel
-	news := false
+	var c *store.Channel
 	if ev.ChannelType == "group" || ev.Type == "app_mention" {
 		var err error
-		if gc, err = d.Store.GoalChannelOf(ctx, ev.Channel, ev.User); err != nil {
+		if c, err = d.Store.ChannelOf(ctx, ev.Channel, ev.User); err != nil {
 			return nil, false, "", err
 		}
-		if gc == nil {
-			if news, err = d.Store.IsNewsChannelOf(ctx, ev.Channel, ev.User); err != nil {
-				return nil, false, "", err
-			}
-		}
 	}
-	own := gc != nil || news
 	switch {
-	case ev.Type == "message" && ev.ChannelType == "group" && !own:
+	case ev.Type == "message" && ev.ChannelType == "group" && c == nil:
 		return nil, false, "not addressed to the agent", nil
-	case ev.Type == "app_mention" && own:
+	case ev.Type == "app_mention" && c != nil:
 		return nil, false, "mention in own goal or news channel, handled as its message", nil
-	case gc != nil:
-		return &protocol.GoalRef{Title: gc.GoalTitle, Permalink: gc.GoalPermalink}, false, "", nil
+	case c != nil && c.Kind == store.KindGoal:
+		return &protocol.GoalRef{Title: c.Title, Permalink: c.Ref}, false, "", nil
 	}
-	return nil, news, "", nil
+	return nil, c != nil && c.Kind == store.KindNews, "", nil
 }
 
 // resolveUser maps the Slack sender to a user, creating it from the Slack
@@ -302,7 +295,7 @@ func (d Deps) setUp(ctx context.Context, ev slack.Event, u *store.User) (string,
 	}
 	memory := u.MemoryProject != "" && d.Memory.Ready(u.MemoryProject)
 	if memory {
-		ch, err := d.Store.NewsChannelOf(ctx, u.ID)
+		ch, err := d.Store.Channel(ctx, u.ID, store.KindNews, "")
 		if err != nil || ch != "" {
 			return "", err
 		}

@@ -8,8 +8,8 @@ import (
 	"time"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
-	slackapi "github.com/slack-go/slack"
 
+	"roamind.ai/memory/store"
 	"roamind.ai/memory/store/notes"
 )
 
@@ -111,41 +111,23 @@ func (d Deps) SyncNews(ctx context.Context, userID string) (NewsChannelOutput, e
 	if err != nil || u == nil || u.MemoryProject == "" || u.SlackUserID == "" {
 		return out, err
 	}
-	have, err := d.Store.NewsChannelOf(ctx, u.ID)
+	defaults, err := d.Store.DefaultInterests(ctx)
 	if err != nil {
 		return out, err
 	}
-	var ch *slackapi.Channel
-	if have == "" {
-		if ch, err = d.createChannel(ctx, NewsChannelName(u.DisplayName)); err != nil {
-			return out, err
-		}
-		// Record the channel first: if a later step fails, the retry finds
-		// it instead of creating a second one.
-		if err := d.Store.SaveNewsChannel(ctx, u.ID, ch.ID); err != nil {
-			return out, err
-		}
-		have, out.Created = ch.ID, ch.Name
+	names := make([]string, len(defaults))
+	for i, in := range defaults {
+		names[i] = in.Name
 	}
-	if _, err := d.Slack.InviteUsersToConversationContext(ctx, have, u.SlackUserID); err != nil && !isSlackErr(err, "already_in_channel") {
-		return out, fmt.Errorf("invite: %w", err)
+	c := store.Channel{Kind: store.KindNews}
+	if _, out.Created, err = d.openChannel(ctx, u, c, NewsChannelName(u.DisplayName), d.newsIntro(names)); err != nil {
+		return out, err
 	}
 	if out.Seeded, err = d.Store.FollowDefaults(ctx, u.ID); err != nil {
 		return out, err
 	}
-	if ch != nil {
-		defaults, err := d.Store.DefaultInterests(ctx)
-		if err != nil {
-			return out, err
-		}
-		names := make([]string, len(defaults))
-		for i, in := range defaults {
-			names[i] = in.Name
-		}
-		if _, _, err := d.Slack.PostMessageContext(ctx, ch.ID, slackapi.MsgOptionText(d.newsIntro(names), false)); err != nil {
-			return out, fmt.Errorf("intro: %w", err)
-		}
-		slog.Info("news channel created", "user", u.ID, "channel", ch.Name)
+	if out.Created != "" {
+		slog.Info("news channel created", "user", u.ID, "channel", out.Created)
 	}
 	return out, nil
 }
@@ -164,12 +146,5 @@ func (d Deps) newsIntro(defaults []string) string {
 // news-shorts-<slug of their name>. Channel names are unique across the
 // workspace, private ones included.
 func NewsChannelName(userName string) string {
-	s := strings.Trim(nonName.ReplaceAllString(strings.ToLower(userName), "-"), "-")
-	if len(s) > 40 {
-		s = strings.TrimRight(s[:40], "-")
-	}
-	if s == "" {
-		return "news-shorts"
-	}
-	return "news-shorts-" + s
+	return channelName("news-shorts", userName, 40)
 }

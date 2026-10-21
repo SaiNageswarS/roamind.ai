@@ -6,53 +6,6 @@ import (
 	"time"
 )
 
-func TestGoalChannels(t *testing.T) {
-	ctx := context.Background()
-	s := open(t)
-	if err := s.UpsertSlackUser(ctx, User{ID: "h1", Email: "a@x.com", SlackTeamID: "T1", SlackUserID: "U1"}); err != nil {
-		t.Fatal(err)
-	}
-	if u, err := s.UserByID(ctx, "h1"); err != nil || u == nil || u.SlackUserID != "U1" {
-		t.Fatalf("UserByID = %+v %v", u, err)
-	}
-	if gc, err := s.GoalChannelOf(ctx, "G1", "U1"); err != nil || gc != nil {
-		t.Fatalf("gc=%v err=%v", gc, err)
-	}
-	gc := GoalChannel{UserID: "h1", GoalPermalink: "p/goals/jax", GoalTitle: "Learn JAX", ChannelID: "G1"}
-	if err := s.SaveGoalChannel(ctx, gc); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SaveGoalChannel(ctx, gc); err == nil {
-		t.Fatal("duplicate goal channel saved")
-	}
-	got, err := s.GoalChannelOf(ctx, "G1", "U1")
-	gc.OwnerSlackUserID = "U1"
-	if err != nil || got == nil || *got != gc {
-		t.Fatalf("got=%+v err=%v", got, err)
-	}
-	// Another user shares the channel with a goal in their own memory.
-	if gc, err := s.GoalChannelOf(ctx, "G1", "U2"); err != nil || gc != nil {
-		t.Fatalf("non-member: gc=%v err=%v", gc, err)
-	}
-	if err := s.UpsertSlackUser(ctx, User{ID: "h2", Email: "b@x.com", SlackTeamID: "T1", SlackUserID: "U2"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SaveGoalChannel(ctx, GoalChannel{UserID: "h2", GoalPermalink: "q/goals/jax", GoalTitle: "JAX too", ChannelID: "G1"}); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := s.GoalChannelOf(ctx, "G1", "U2"); err != nil || got == nil || got.UserID != "h2" || got.GoalPermalink != "q/goals/jax" {
-		t.Fatalf("shared: got=%+v err=%v", got, err)
-	}
-	have, err := s.GoalsWithChannel(ctx, "h1")
-	if err != nil || len(have) != 1 || !have["p/goals/jax"] {
-		t.Fatalf("have=%v err=%v", have, err)
-	}
-	all, err := s.GoalChannels(ctx)
-	if err != nil || len(all) != 2 || all[0] != gc {
-		t.Fatalf("all=%+v err=%v", all, err)
-	}
-}
-
 func TestExercises(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)

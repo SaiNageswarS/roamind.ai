@@ -8,6 +8,7 @@ import (
 	"time"
 
 	hatchet "github.com/hatchet-dev/hatchet/sdks/go"
+	"roamind.ai/memory/store"
 )
 
 // NewsShortsName is the cron workflow that, at each of NewsHours, starts a
@@ -90,7 +91,7 @@ func (d Deps) dueNews(ctx context.Context, now time.Time) (newsDispatchOutput, [
 	var digests []DigestInput
 	var missing []UserSetupInput
 	for _, u := range users {
-		ch, err := d.Store.NewsChannelOf(ctx, u.ID)
+		ch, err := d.Store.Channel(ctx, u.ID, store.KindNews, "")
 		if err != nil {
 			return out, nil, nil, err
 		}

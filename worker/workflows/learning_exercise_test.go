@@ -90,7 +90,7 @@ func TestLearningExercise(t *testing.T) {
 	build := writeGoal(t, mem, p, "Ship chip", "ship-chip", "active", "- [kind] build")
 	piano := writeGoal(t, mem, p, "Learn piano", "learn-piano", "active", "- [kind] learn") // no channel
 	for i, g := range []string{german, paused, build} {
-		if err := d.Store.SaveGoalChannel(ctx, store.GoalChannel{UserID: u.ID, GoalPermalink: g, GoalTitle: "title of " + g,
+		if err := d.Store.SaveChannel(ctx, store.Channel{Kind: store.KindGoal, UserID: u.ID, Ref: g, Title: "title of " + g,
 			ChannelID: []string{"G0", "G1", "G2"}[i]}); err != nil {
 			t.Fatal(err)
 		}
