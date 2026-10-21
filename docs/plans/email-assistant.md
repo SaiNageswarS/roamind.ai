@@ -172,6 +172,8 @@ This is a new tool set next to `interests` and `jobs`, named `protocol.ServerIte
 ### 6. Basic Memory schemas (`memory/basic-memory-schemas/`)
 The bodies are prose only: no `- ` lines, no `[[ ]]`, no "e.g.", and values containing `: ` are quoted. The existing schema tests enforce this.
 
+**Built in PR #8**, ahead of the rest of the plan, so items shared in chat use it already. Task keeps `status` until the `items` table is built, and the rest of this section lands with it.
+
 **No new schemas.** The existing types were reviewed against what mail produces:
 - **A bill is a Task.** It is something to do by a date. "Paid" is closing its row. Its amount goes in `amount`, and the payee goes in the title.
 - **An order is an Event with `kind: delivery`.** Once status is gone, an order is a dated arrival with a merchant, an order number (`confirmation`) and a tracking `link`.
@@ -236,6 +238,20 @@ Without Bill and Order types, "what did I pay this year" is a search over tasks 
 - `README.md`: feature line, plus a design principle: "Used Google's oauth2l to connect mail accounts offline…" (per README voice).
 - `.env.example`: `ROAMIND_MAIL_DIR` (default `data/secrets/mail`).
 - Privacy note in the docs: mail text is sent to Claude for extraction, and only extracted items are stored. The raw mail is not stored.
+
+## Considered: Gmail push through Pub/Sub
+Gmail can push new-mail notifications through Pub/Sub to a webhook, which could trigger a Hatchet workflow. The plan keeps the 15-minute poll instead:
+- **A push carries no mail.** It is `{emailAddress, historyId}`, base64-encoded, so the triggered run still calls `history.list` and `messages.get`, as `fetch` does.
+- **It removes no parts:**
+  - `users.watch` expires after 7 days, so a cron is still needed to renew it.
+  - Google recommends a periodic history sync anyway, because notifications can be delayed or dropped.
+- **It adds setup:** a Pub/Sub topic, a publish grant for `gmail-api-push@system.gserviceaccount.com`, and a push subscription.
+- **The endpoint couldn't be authenticated.** Pub/Sub push signs each request with a new OIDC token. Hatchet's inbound webhooks check basic auth, a fixed API key or HMAC, and none of those can verify the token. Hatchet also has no Google or Pub/Sub source.
+- **The gain is invisible.** Mail would be handled within seconds instead of within 15 minutes, but the output is an 08:00 digest.
+
+Push is worth adding if Roamind sends instant alerts, such as a gate change or a cancelled appointment within the hour. It would be a small change:
+- A Hatchet webhook (event key `gmail`) starts the same `mail-account` run, for the address in the payload.
+- `mail-sync` stays, as the watch-renewal and fallback cron.
 
 ## Files
 New:
