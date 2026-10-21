@@ -22,3 +22,7 @@ preference).
 
 When a preference changes, update its note, evidence included, rather than
 adding a second one.
+
+A list the user reuses, such as what they always pack for a kind of trip,
+is one preference holding the whole list, which an event's checklist starts
+from.
