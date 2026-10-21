@@ -38,7 +38,8 @@ tasks:
 
   worker:
     desc: Build bin/worker
-    sources: ['agent/**/*.go', 'channels/**/*.go', 'connectors/**/*.go', 'memory/**/*.go', 'worker/**/*.go', '**/go.mod', '**/go.sum']
+    # agent/prompts/*.md are embedded in the binary.
+    sources: ['agent/**/*.go', 'agent/prompts/*.md', 'channels/**/*.go', 'connectors/**/*.go', 'memory/**/*.go', 'worker/**/*.go', '**/go.mod', '**/go.sum']
     generates: [bin/worker]
     cmds: [go build -o bin/worker ./worker/cmd/worker]
 
