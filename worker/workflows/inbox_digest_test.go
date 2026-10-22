@@ -106,13 +106,13 @@ func TestInboxDigest(t *testing.T) {
 		t.Fatalf("draft = %+v %v", dr, err)
 	}
 	args, _ := os.ReadFile(argsLog)
-	for _, want := range []string{"--json-schema", `"--project","bm-u-h1-1"`, "--tools WebSearch --",
+	for _, want := range []string{"--json-schema", `"--project","bm-u-h1-1"`, "--tools WebSearch --", "mcp__memory__write_note --system-prompt",
 		"--allowedTools WebSearch,mcp__memory__read_note,mcp__memory__build_context,mcp__memory__search_notes "} {
 		if !strings.Contains(string(args), want) {
 			t.Fatalf("draft args lack %q: %s", want, args)
 		}
 	}
-	for _, deny := range []string{"--no-session-persistence", "mcp__roamind", "Bash", "WebFetch", "mcp__memory,"} {
+	for _, deny := range []string{"--no-session-persistence", "mcp__roamind", "Bash", "WebFetch", "mcp__memory,", "write_note on your own"} {
 		if strings.Contains(string(args), deny) {
 			t.Fatalf("draft args have %q: %s", deny, args)
 		}

@@ -36,6 +36,28 @@ var memoryDisallowedTools = []string{
 // reads notes, and can't change them.
 var RecallTools = []string{"read_note", "build_context", "search_notes"}
 
+// memoryTools are the tools bm's server serves (bm 0.23.2). A ToolsRecall
+// turn sees only RecallTools: the others are hidden, so their
+// descriptions aren't in its context. A tool a later bm adds is listed
+// until it is added here, and refused when called all the same.
+var memoryTools = []string{
+	"basic_memory_diagnostics", "build_context", "create_memory_project", "delete_note", "delete_project",
+	"edit_note", "fetch", "list_directory", "list_memory_projects", "list_workspaces", "move_note",
+	"read_content", "read_note", "recent_activity", "schema_diff", "schema_infer", "schema_validate",
+	"search", "search_notes", "view_note", "write_note",
+}
+
+// recallHiddenTools hides every bm tool but RecallTools.
+var recallHiddenTools = func() []string {
+	var hidden []string
+	for _, t := range memoryTools {
+		if !slices.Contains(RecallTools, t) {
+			hidden = append(hidden, "mcp__"+MemoryServerName+"__"+t)
+		}
+	}
+	return hidden
+}()
+
 // mcpServers returns the mcpServers entries for a turn, with the tools to
 // allow and disallow on them: Basic Memory with memory (only RecallTools
 // for ToolsRecall turns), Roamind's server, serving the turn's tool sets,
@@ -54,14 +76,16 @@ func mcpServers(cfg Config, in protocol.TurnInput, memory, tools bool) (servers 
 			"env": map[string]string{"BASIC_MEMORY_CONFIG_DIR": cfg.Memory.ConfigDir(in.MemoryProject)},
 		}
 		if in.Tools == protocol.ToolsRecall {
-			// In dontAsk mode, bm's other tools are refused when called.
+			// In dontAsk mode, bm's other tools are refused when called;
+			// hiding them keeps their descriptions out of the turn.
 			for _, t := range RecallTools {
 				allowed = append(allowed, "mcp__"+MemoryServerName+"__"+t)
 			}
+			disallowed = recallHiddenTools
 		} else {
 			allowed = append(allowed, "mcp__"+MemoryServerName)
+			disallowed = memoryDisallowedTools
 		}
-		disallowed = memoryDisallowedTools
 	}
 	if tools {
 		servers[ToolsServerName] = map[string]any{

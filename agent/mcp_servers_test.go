@@ -3,6 +3,7 @@ package agent
 import (
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
 	"roamind.ai/agent/protocol"
@@ -40,9 +41,19 @@ func TestMCPServers(t *testing.T) {
 	}
 	// A recall turn may call bm's read tools only, and gets no Roamind server.
 	in.Tools = protocol.ToolsRecall
-	_, allowed, _, err = mcpServers(cfg, in, true, false)
+	_, allowed, disallowed, err = mcpServers(cfg, in, true, false)
 	if err != nil || !reflect.DeepEqual(allowed, []string{"mcp__memory__read_note", "mcp__memory__build_context", "mcp__memory__search_notes"}) {
 		t.Fatalf("recall allowed %v %v", allowed, err)
+	}
+	// bm's other tools are hidden, the project tools among them.
+	if len(disallowed) != len(memoryTools)-len(RecallTools) || !slices.Contains(disallowed, "mcp__memory__write_note") ||
+		!slices.Contains(disallowed, "mcp__memory__delete_project") || slices.Contains(disallowed, "mcp__memory__read_note") {
+		t.Fatalf("recall hides %v", disallowed)
+	}
+	for _, tool := range memoryDisallowedTools {
+		if !slices.Contains(disallowed, tool) {
+			t.Fatalf("recall shows %s", tool)
+		}
 	}
 	if servers, allowed, _, _ := mcpServers(cfg, in, false, false); len(servers) != 0 || allowed != nil {
 		t.Fatalf("no servers wanted: %v %v", servers, allowed)
