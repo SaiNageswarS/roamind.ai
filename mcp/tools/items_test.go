@@ -93,6 +93,23 @@ func TestItems(t *testing.T) {
 	if out := list(map[string]any{"folder": "tasks/roamind/"}); len(out.Items) != 1 || out.Items[0].Key != "Write tests" {
 		t.Fatalf("goal's tasks = %+v", out)
 	}
+	// Basic Memory starts permalinks with the project; folders match after it.
+	project, err := st.AssignMemoryProject(ctx, "h1", "bm-u-h1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg, isErr := call("save_item", map[string]any{"key": "Book flights", "kind": "task", "note": project + "/tasks/roamind/book-flights",
+		"title": "Book flights"}); isErr {
+		t.Fatalf("save prefixed = %s", msg)
+	}
+	for folder, want := range map[string]int{"tasks/roamind/": 2, project + "/tasks/roamind/": 1} {
+		if out := list(map[string]any{"folder": folder}); len(out.Items) != want {
+			t.Fatalf("goal's tasks in %s = %+v", folder, out)
+		}
+	}
+	if msg, isErr := call("close_item", map[string]any{"key": "Book flights", "state": "cancelled"}); isErr {
+		t.Fatalf("close prefixed = %s", msg)
+	}
 	if msg, isErr := call("list_items", map[string]any{"from": "2026-11"}); !isErr || !strings.Contains(msg, "ISO dates") {
 		t.Fatalf("month = %s", msg)
 	}

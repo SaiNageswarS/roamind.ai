@@ -111,34 +111,43 @@ func dayOf(t time.Time) string {
 // PutItem adds the user's item, or updates the one with its key: its kind,
 // note, title, dates and source, and its state unless it.State is "".
 func (s *Store) PutItem(ctx context.Context, it Item) error {
-	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO items (user_id, key, kind, event_kind, note, title, date, show_from, until, state, source, updated_at, closed_at)
-		VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULLIF(?7, ''), NULLIF(?8, ''), NULLIF(?9, ''), COALESCE(NULLIF(?10, ''), 'open'), ?11, ?12,
-			CASE WHEN COALESCE(NULLIF(?10, ''), 'open') = 'open' THEN NULL ELSE ?12 END)
+		VALUES (:user, :key, :kind, :event_kind, :note, :title, NULLIF(:date, ''), NULLIF(:show_from, ''), NULLIF(:until, ''),
+			COALESCE(NULLIF(:state, ''), 'open'), :source, :now,
+			CASE WHEN :state IN ('', 'open') THEN NULL ELSE :now END)
 		ON CONFLICT (user_id, key) DO UPDATE SET
 			kind = excluded.kind, event_kind = excluded.event_kind, note = excluded.note, title = excluded.title,
 			date = excluded.date, show_from = excluded.show_from, until = excluded.until,
 			source = excluded.source, updated_at = excluded.updated_at,
+			state = COALESCE(NULLIF(:state, ''), items.state),
 			closed_at = CASE
-				WHEN ?10 = '' OR ?10 = items.state THEN items.closed_at
-				WHEN ?10 = 'open' THEN NULL
-				ELSE ?12 END,
-			state = CASE WHEN ?10 = '' THEN items.state ELSE ?10 END`,
-		it.UserID, strings.TrimSpace(it.Key), it.Kind, it.EventKind, it.Note, it.Title,
-		it.Date, it.ShowFrom, it.Until, it.State, it.Source, now)
+				WHEN :state IN ('', items.state) THEN items.closed_at
+				WHEN :state = 'open' THEN NULL
+				ELSE :now
+			END`,
+		sql.Named("user", it.UserID), sql.Named("key", strings.TrimSpace(it.Key)), sql.Named("kind", it.Kind),
+		sql.Named("event_kind", it.EventKind), sql.Named("note", it.Note), sql.Named("title", it.Title),
+		sql.Named("date", it.Date), sql.Named("show_from", it.ShowFrom), sql.Named("until", it.Until),
+		sql.Named("state", it.State), sql.Named("source", it.Source), sql.Named("now", time.Now().Unix()))
 	return err
 }
 
 // CloseItem sets the state of the user's item with key to done or
 // cancelled, or reopens it with open; false when there is no such item.
 func (s *Store) CloseItem(ctx context.Context, userID, key, state string) (bool, error) {
-	now := time.Now().Unix()
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE items SET
-			closed_at = CASE WHEN ?3 = 'open' THEN NULL WHEN state = ?3 THEN closed_at ELSE ?4 END,
-			state = ?3, updated_at = ?4
-		WHERE user_id = ?1 AND key = ?2`, userID, strings.TrimSpace(key), state, now)
+			state = :state,
+			updated_at = :now,
+			closed_at = CASE
+				WHEN :state = 'open' THEN NULL
+				WHEN :state = state THEN closed_at
+				ELSE :now
+			END
+		WHERE user_id = :user AND key = :key`,
+		sql.Named("user", userID), sql.Named("key", strings.TrimSpace(key)), sql.Named("state", state),
+		sql.Named("now", time.Now().Unix()))
 	if err != nil {
 		return false, err
 	}
@@ -146,10 +155,19 @@ func (s *Store) CloseItem(ctx context.Context, userID, key, state string) (bool,
 	return n > 0, err
 }
 
+// itemColumns are the columns scanItems reads, in its order.
+const itemColumns = `user_id, key, kind, event_kind, note, title, COALESCE(date, ''), COALESCE(show_from, ''),
+	COALESCE(until, ''), state, source, updated_at, closed_at`
+
 // DueItems returns the user's open items that show on day, by date.
 func (s *Store) DueItems(ctx context.Context, userID string, day time.Time) ([]Item, error) {
-	d := day.Format(isoDate)
-	return s.items(ctx, `user_id = ? AND state = 'open' AND show_from <= ? AND (until IS NULL OR until >= ?)`, userID, d, d)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT `+itemColumns+` FROM items
+		WHERE user_id = :user AND state = 'open'
+			AND show_from <= :day AND (until IS NULL OR until >= :day)
+		ORDER BY date IS NULL, date, title`,
+		sql.Named("user", userID), sql.Named("day", day.Format(isoDate)))
+	return scanItems(rows, err)
 }
 
 // ItemFilter selects items for Items; its zero value selects open items.
@@ -160,7 +178,8 @@ type ItemFilter struct {
 	// left out when either is set.
 	From, To string
 	// Folder is the start of the items' note permalinks, such as
-	// tasks/<goal>/.
+	// tasks/<goal>/, with or without the user's memory project before it,
+	// which Basic Memory puts at the start of permalinks.
 	Folder string
 	Key    string
 }
@@ -169,35 +188,41 @@ type ItemFilter struct {
 const maxItems = 200
 
 // Items returns the user's items that f selects, by date, undated last.
+// Each filter left empty selects every item.
 func (s *Store) Items(ctx context.Context, userID string, f ItemFilter) ([]Item, error) {
-	where, args := []string{"user_id = ?"}, []any{userID}
 	if f.State == "" && f.Key == "" {
 		f.State = ItemOpen
 	}
-	if f.State != "" {
-		where, args = append(where, "state = ?"), append(args, f.State)
-	}
-	if f.Key != "" {
-		where, args = append(where, "key = ?"), append(args, strings.TrimSpace(f.Key))
-	}
-	if f.From != "" {
-		where, args = append(where, "substr(date, 1, 10) >= ?"), append(args, f.From)
-	}
-	if f.To != "" {
-		where, args = append(where, "substr(date, 1, 10) <= ?"), append(args, f.To)
-	}
+	projectFolder := f.Folder
 	if f.Folder != "" {
-		where, args = append(where, "substr(note, 1, length(?)) = ?"), append(args, f.Folder, f.Folder)
+		u, err := s.UserByID(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		if u != nil && u.MemoryProject != "" {
+			projectFolder = u.MemoryProject + "/" + f.Folder
+		}
 	}
-	return s.items(ctx, strings.Join(where, " AND "), args...)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT `+itemColumns+` FROM items
+		WHERE user_id = :user
+			AND (:state = '' OR state = :state)
+			AND (:key = '' OR key = :key)
+			AND (:from = '' OR substr(date, 1, 10) >= :from)
+			AND (:to = '' OR substr(date, 1, 10) <= :to)
+			AND (:folder = ''
+				OR substr(note, 1, length(:folder)) = :folder
+				OR substr(note, 1, length(:project_folder)) = :project_folder)
+		ORDER BY date IS NULL, date, title
+		LIMIT :limit`,
+		sql.Named("user", userID), sql.Named("state", f.State), sql.Named("key", strings.TrimSpace(f.Key)),
+		sql.Named("from", f.From), sql.Named("to", f.To),
+		sql.Named("folder", f.Folder), sql.Named("project_folder", projectFolder), sql.Named("limit", maxItems))
+	return scanItems(rows, err)
 }
 
-func (s *Store) items(ctx context.Context, where string, args ...any) ([]Item, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT user_id, key, kind, event_kind, note, title, COALESCE(date, ''), COALESCE(show_from, ''),
-			COALESCE(until, ''), state, source, updated_at, closed_at
-		FROM items WHERE `+where+`
-		ORDER BY date IS NULL, date, title LIMIT ?`, append(args, maxItems)...)
+// scanItems reads rows of itemColumns.
+func scanItems(rows *sql.Rows, err error) ([]Item, error) {
 	if err != nil {
 		return nil, err
 	}
