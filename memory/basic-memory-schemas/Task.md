@@ -20,6 +20,6 @@ tasks/ otherwise. A bill or invoice is a task titled Pay followed by the
 payee and the invoice number when there is one, due when payment is due,
 with its amount.
 
-The note has no status. While the task is still to do, track it with the
-items tools: save_item when it is written or its due date moves, and close_item when it is done or cancelled;
+The note has no status. Track it with the items tools: save_item when it is
+written or its due date moves, and close_item when it is done or cancelled;
 a paid bill is done.

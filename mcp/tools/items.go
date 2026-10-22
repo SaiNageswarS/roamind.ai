@@ -66,9 +66,8 @@ func items(s *mcp.Server, d Deps) {
 	st, userID := d.Store, d.UserID
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "save_item",
-		Description: "Track an active task or event note, a task still to do (dated or not) or an event still ahead: add it, " +
-			"or change its dates when it moves. Tasks already done and past events need no item. Write or edit the note first, " +
-			"then save its item with the note's permalink. The item holds the state " +
+		Description: "Track a task or event note: add it, or change its dates when it moves. Every task and event note has an item, " +
+			"dated or not; write or edit the note first, then save its item with the note's permalink. The item holds the state " +
 			"the note doesn't: it is open until close_item, and the user is reminded of it from the day before its date " +
 			"(on the day for deliveries, from remind_on when given); open tasks stay until done.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in SaveItemInput) (*mcp.CallToolResult, Done, error) {
