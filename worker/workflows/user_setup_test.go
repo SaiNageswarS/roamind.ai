@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -35,7 +36,10 @@ func runUserSetup(ctx context.Context, d Deps, userID string) error {
 	if _, err := d.setUpMemory(p); err != nil {
 		return err
 	}
-	_, err = d.SyncNews(ctx, userID)
+	if _, err := d.SyncNews(ctx, userID); err != nil {
+		return err
+	}
+	_, err = d.SyncInbox(ctx, userID)
 	return err
 }
 
@@ -66,8 +70,10 @@ func TestProcessSetsUpNewUser(t *testing.T) {
 	if err != nil || u == nil || u.MemoryProject == "" || !d.Memory.Ready(u.MemoryProject) {
 		t.Fatalf("user = %+v %v", u, err)
 	}
-	if ch, _ := d.Store.Channel(ctx, u.ID, store.KindNews, ""); ch == "" || len(fs.created) != 1 {
-		t.Fatalf("news channel %q, created %v", ch, fs.created)
+	news, _ := d.Store.Channel(ctx, u.ID, store.KindNews, "")
+	inbox, _ := d.Store.Channel(ctx, u.ID, store.KindInbox, "")
+	if news == "" || inbox == "" || !reflect.DeepEqual(fs.created, []string{"news-shorts-test-u1", "inbox-test-u1"}) {
+		t.Fatalf("news channel %q, inbox channel %q, created %v", news, inbox, fs.created)
 	}
 
 	if out, err := d.Process(ctx, "r1", mention("Ev1", "U1", "2.0", "")); err != nil || out.Skipped != "" || out.SessionID == "" {

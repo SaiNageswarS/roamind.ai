@@ -27,8 +27,8 @@ type TurnInput struct {
 	Exercise *ExerciseRef `json:"exercise,omitempty"`
 	// News is set for turns in the user's news-shorts channel.
 	News *NewsRef `json:"news,omitempty"`
-	// Tools is the set of tools the turn gets: ToolsWorkspace, ToolsWeb or
-	// ToolsNone.
+	// Tools is the set of tools the turn gets: ToolsWorkspace, ToolsWeb,
+	// ToolsRecall or ToolsNone.
 	Tools string `json:"tools,omitempty"`
 	// ServerTools are the tool sets of Roamind's MCP server the turn gets,
 	// by name (ServerInterests and the rest), as configured for its task.
@@ -59,6 +59,13 @@ const (
 	// ToolsWeb is WebSearch and WebFetch only, in the user's workspace
 	// directory, so the session can be resumed from a chat turn.
 	ToolsWeb = "web"
+	// ToolsRecall is WebSearch and Basic Memory's read tools only
+	// (RecallTools), in the user's workspace directory with the session
+	// saved: for unattended turns that read notes, which may hold
+	// third-party text, and whose session a chat turn resumes later with
+	// its own tools. It can't write memory, files or Roamind's data, and,
+	// without WebFetch, can't send what it reads to a web page.
+	ToolsRecall = "recall"
 	// ToolsNone is no tools at all, in a throwaway directory, with no saved
 	// session: for turns whose whole input is third-party text, so nothing
 	// in it can steer the turn at the user's files or the web.

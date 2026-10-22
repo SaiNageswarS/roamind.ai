@@ -13,6 +13,9 @@ const (
 	KindGoal = "goal"
 	// KindNews is the user's news-shorts channel.
 	KindNews = "news"
+	// KindInbox is the user's inbox channel, where their daily inbox
+	// digest is posted.
+	KindInbox = "inbox"
 )
 
 // Channel is a Slack channel the harness made for a user, for one purpose.

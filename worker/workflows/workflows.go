@@ -6,10 +6,14 @@
 //   - learning-exercises: each morning, a learning-exercise run per
 //     learning goal.
 //   - learning-exercise: check-skip → build-context → draft-exercise → post.
-//   - user-setup: memory-project → bm-setup → news-channel, for a new user.
+//   - user-setup: memory-project → bm-setup → news-channel, inbox-channel,
+//     for a new user.
 //   - news-shorts: once a day, a news-digest run per user.
 //   - news-digest: check-skip → build-context → draft-digest → post.
 //   - news-reaction: reactions to digests, as feedback.
+//   - inbox-digests: each morning, an inbox-digest run per user.
+//   - inbox-digest: check-skip → draft → post, the user's items that are
+//     due, with what they need for each from memory.
 //   - job-search: at JobSearchHours, a job-hunt run per web user.
 //   - job-hunt: check-skip → resume, find → pick → spawn.
 //   - job-links: resume → pick → spawn, for the postings a user linked to,
@@ -88,8 +92,8 @@ type Deps struct {
 	Jobs *jobs.Client
 	// JobsPerRun caps the postings a job hunt picks; 0 means JobsPerRun.
 	JobsPerRun int
-	// Location is the timezone of the daily exercises, news shorts and job
-	// searches.
+	// Location is the timezone of the daily exercises, news shorts, inbox
+	// digests and job searches.
 	Location *time.Location
 	// Now defaults to time.Now.
 	Now func() time.Time
@@ -156,9 +160,11 @@ func Register(c *hatchet.Client, d Deps) (wfs []hatchet.WorkflowBase, listen fun
 	}
 	exercise := LearningExercise(c, d)
 	digest := NewsDigest(c, d)
+	inbox := InboxDigest(c, d)
 	return append(wfs,
 		ChatTurn(c, d), setup, goals, exercise, LearningExercises(c, d, exercise),
 		digest, NewsShorts(c, d, digest, setup), NewsReaction(c, d),
+		inbox, InboxDigests(c, d, inbox, setup),
 	), listen
 }
 

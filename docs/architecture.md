@@ -24,7 +24,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
 | `agent` | `claude -p` runner and stream-json decoder; packet translation; Go port of onyx's citation processor; `cmd/turn` dev CLI. `agent/protocol` is the contract with the Slack layer: packet types (onyx-style), turn input/output and the snapshot accumulator. It's a separate package with no dependencies, so the Slack updater imports it without the agent runtime. `mcp_servers.go` builds the turn's `--mcp-config` (Basic Memory's `bm mcp`, pinned to the user's project, and Roamind's `bin/mcp`) with the tools allowed and disallowed on them |
 | `channels` | Where users talk to Roamind: Slack (`slack`: event types, mrkdwn renderer, streaming updater), the web app (`web`: its Firestore and Storage), and the email-hash identity they share (`identity`) |
 | `connectors` | What pulls content in from outside, one package per kind, after Onyx's connectors: the RSS/Atom feed reader (`feeds`), job postings from applicant tracking systems (`jobs`: one file per ATS implementing `jobs.ATS`, `Match` and `Posting`; `Parse` tries the `systems` list in order, and a URL none matches is read from its page), and the public-only HTTP client both use for URLs that come from the agent or the web (`safehttp`), with a public-only proxy for the headless Chrome that renders posting pages. It depends on no other Roamind module |
-| `worker` | The Hatchet worker, laid out like Hatchet's Go quickstart: `cmd/worker`, `cmd/setup-webhook`, `client` (the Hatchet client) and `workflows`, one file per workflow with its tasks and wiring: `chat-turn`, `goal-channels`, `learning-exercises`, `learning-exercise`, `user-setup`, `news-shorts`, `news-digest`, `news-reaction`, `job-search`, `job-hunt`, `job-application` |
+| `worker` | The Hatchet worker, laid out like Hatchet's Go quickstart: `cmd/worker`, `cmd/setup-webhook`, `client` (the Hatchet client) and `workflows`, one file per workflow with its tasks and wiring: `chat-turn`, `goal-channels`, `learning-exercises`, `learning-exercise`, `user-setup`, `news-shorts`, `news-digest`, `news-reaction`, `inbox-digests`, `inbox-digest`, `job-search`, `job-hunt`, `job-application` |
 | `memory` | Roamind's data: the files below, `store` (the Go code that reads and writes the SQLite database) and `store/notes` (users' Basic Memory notes) |
 | `mcp` | Roamind's MCP server, which claude starts per chat turn over stdio, pinned to the turn's user: `cmd/mcp` (`bin/mcp`) and `tools`, one file per tool set (`interests.go`: following and adding news interests; `jobs.go`: asking the job assistant to draft applications), served by name with `--tools`. Built on the official Go MCP SDK |
 
@@ -40,7 +40,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
 ## Design rules
 - Conversation history lives only in claude's session files (`~/.claude/projects/<cwd>`). SQLite maps each thread to its session id and stores nothing else about the conversation.
 - Chat turns run in `data/users/<user_id>/workspace`, so `--resume` can find the session.
-- **A turn gets the tools its input warrants** (`TurnInput.Tools`). Chat turns, exercise drafting and importing a resume uploaded in the web app get the workspace set below (`ToolsWorkspace`): files users upload, in Slack or the web app, are their own. The job assistant's web search gets `ToolsWeb` (WebSearch and WebFetch only, with the blocked domains denied). News ranking and the job assistant's ranking and tailoring, whose input is third-party text, get no tools (`ToolsNone`), in a throwaway directory with no saved session. Which of Roamind's own tool sets a `ToolsWorkspace` turn gets is configured per task (`TurnTools` in `worker/workflows/turn_tools.go`); see below.
+- **A turn gets the tools its input warrants** (`TurnInput.Tools`). Chat turns, exercise drafting and importing a resume uploaded in the web app get the workspace set below (`ToolsWorkspace`): files users upload, in Slack or the web app, are their own. The job assistant's web search gets `ToolsWeb` (WebSearch and WebFetch only, with the blocked domains denied). The inbox digest's draft gets `ToolsRecall`: WebSearch and bm's read tools only (`read_note`, `build_context`, `search_notes`), since it runs unattended over notes that may hold third-party text. bm's other tools are hidden (`--disallowedTools`, listed in `agent/mcp_servers.go`), so their descriptions aren't in its context, and the system prompt leaves out the memory and workspace instructions. Without WebFetch, nothing it reads can be sent to someone else's page. It runs in the workspace directory with its session saved, so a chat turn can resume it later with its own tools. News ranking and the job assistant's ranking and tailoring, whose input is third-party text, get no tools (`ToolsNone`), in a throwaway directory with no saved session. Which of Roamind's own tool sets a `ToolsWorkspace` turn gets is configured per task (`TurnTools` in `worker/workflows/turn_tools.go`); see below.
 - **Each user has a sandboxed workspace.** Claude gets web search and fetch, the file tools and Bash, working in `data/users/<user_id>/workspace`. That directory persists across conversations and is private to the user. See `agent/workspace.go`:
   - **File tools:** `permissions.blockReadsOutsideWorkingDirectories` stops reads outside the workspace. Edits are allowed only by an `Edit(//<workspace>/**)` rule, and in `dontAsk` mode anything not allowed is denied, so a bare `Write`/`Edit` rule would have allowed any path.
   - **Bash** runs in Claude Code's bubblewrap sandbox (`bwrap` and `socat` must be installed). It can write only to the workspace and `$TMPDIR`. It can't read the home directory, which covers other users' workspaces and memory, `data/`, `.env` and `~/.claude`. `allowUnsandboxedCommands: false` and `failIfUnavailable: true` mean nothing ever runs unsandboxed.
@@ -102,21 +102,23 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
 - The agent decides what to save; the rules are in `agent/prompts/system.md`.
 
 ## User setup
-`user-setup` (`worker/workflows/user_setup.go`) sets up one user, in three tasks, each needing the one before:
+`user-setup` (`worker/workflows/user_setup.go`) sets up one user, in four tasks, each needing the work of the one before it:
 
 ```
 memory-project → bm-setup → news-channel
+                          → inbox-channel
 ```
 
 - **memory-project** assigns the user's Basic Memory project name (`users.memory_project`).
 - **bm-setup** creates that project with `notes.Setup`: its folders, its `config.json` from `memory/basic-memory-config.json` and the schema notes from `memory/basic-memory-schemas/`.
 - **news-channel** creates the user's news channel and has them follow the default interests (see News shorts).
+- **inbox-channel** creates the user's inbox channel (see Inbox digest).
 
 Every task is safe to repeat. A user has one run at a time: a run started while one is in flight is cancelled (`CancelNewest`), since that one does its work. Runs are top-level, not children of the run that started them, so every setup shows on its own in the dashboard. Nothing waits for it, so it never holds up a turn or a worker slot:
 
 - `chat-turn` starts it when the user's memory project isn't ready (a new user, a corrupt `config.json`, or a setup that failed or is still running): it replies that it is setting things up, asks them to write again in a minute, and ends the run. If the run can't even be started, it says so instead.
-- When only the news channel is missing, `chat-turn` starts it and still runs the turn.
-- `news-shorts` starts it for users without a news channel.
+- When only the news or inbox channel is missing, `chat-turn` starts it and still runs the turn.
+- `news-shorts` starts it for users without a news channel, and `inbox-digests` for Slack users with memory but no inbox channel.
 
 The environment the projects share (the embedding cache, settings and schema notes of existing projects) is `task init`'s.
 
@@ -176,6 +178,16 @@ The environment the projects share (the embedding cache, settings and schema not
   - **Replies** in a digest's thread are chat turns that also count +1; the turn starts a new session that is given the digest's text, so the agent can discuss the items.
   - In `post`, each net like over the last 30 days moves an interest's items up half a point, up to a point either way.
 - **Slack setup:** nothing new; `reaction_added` and `reactions:read` were already in the manifest.
+
+## Inbox digest
+Each morning, users get a message on what needs their attention, from their items (see Memory): tasks that are due or overdue and events coming up, each with what they need for it.
+
+- **The channel:** user-setup's `inbox-channel` task creates the private `#inbox-<name>` channel with `openChannel` (see Goal channels), as an `inbox` row of `channels`, and posts an intro. Users set up before it existed get theirs from the next `inbox-digests` run, or at their next turn. The owner's plain messages there are ordinary chat turns, no @mention needed.
+- **Scheduling:** the `inbox-digests` cron (`worker/workflows/inbox_digest.go`) runs at 08:00 in the server's zone (`ROAMIND_TZ` overrides it; `InboxHour`). It starts one `inbox-digest` run per Slack user with memory and an inbox channel, and a `user-setup` run for each one without a channel. A run that can't be started is logged and listed in its output; the others still start.
+- **The `inbox-digest` DAG**, serialized per user, with the skip pattern of `learning-exercise`:
+  1. **`check-skip`** picks the user's `DueItems` for the day from SQLite, marking tasks past their date as overdue. The day is skipped, with no agent turn and no post, when nothing is due or its digest is already posted. Most mornings cost nothing.
+  2. **`draft`** is one agent turn (`agent/prompts/inbox_digest.md`), given each due item's key, kind, date and note permalink. It reads the notes and their related notes from memory for what the user needs: the time and place, the booking reference, a bill's amount, an event's checklist with the user's preferences for that kind of event. It returns the digest as structured output, grouped under Overdue, Today and Coming up, each item ending with its key. The turn runs unattended, so it gets `ToolsRecall` (see Design rules): it can read memory and search the web, and can't change notes, files or items. It runs in the workspace directory with a saved session.
+  3. **`post`** reserves the day in `inbox_digests` (unique per user and day), posts the digest in the inbox channel, and records it with its message and text. The day is given back if the post fails. The digest's thread is saved with the drafting session, so a reply ("done", "paid", "moved to Tuesday") resumes it, knows which item is meant, and changes it with the items tools, which chat turns get.
 
 ## Job assistant (web channel)
 The job assistant is the first feature of the web channel, Roamind's web app, a separate repo on Firebase: users sign in with Google, upload a resume and give roles, regions and notes. The user's resume lives in their memory, as their own Person note: an upload is written there, and a Slack user's chats may have put it there already. The worker finds postings, and takes the links users send in the web app or in Slack; it writes a cover letter and answer sheet for each from that note, and delivers them where the request came from: to Firestore, for review in the web app, or to the Slack thread. A Slack user needn't use the web app, and a user may use both. The user applies on their own. Nothing is submitted or filled in on any site. The data contract, with the security rules, is [web.md](web.md).

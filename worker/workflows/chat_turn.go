@@ -288,15 +288,19 @@ const setupFailedReply = "Sorry, I couldn't start setting things up for you. Ple
 // setUp starts user-setup, without waiting, for a user who is not fully
 // set up. While their memory project is not ready (a new user above all),
 // it tells them so and returns why the turn is skipped; a user missing
-// only their news channel gets their turn.
+// only their news or inbox channel gets their turn.
 func (d Deps) setUp(ctx context.Context, ev slack.Event, u *store.User) (string, error) {
 	if d.SetupUser == nil || d.Memory == nil {
 		return "", nil
 	}
 	memory := u.MemoryProject != "" && d.Memory.Ready(u.MemoryProject)
 	if memory {
-		ch, err := d.Store.Channel(ctx, u.ID, store.KindNews, "")
-		if err != nil || ch != "" {
+		news, err := d.Store.Channel(ctx, u.ID, store.KindNews, "")
+		if err != nil {
+			return "", err
+		}
+		inbox, err := d.Store.Channel(ctx, u.ID, store.KindInbox, "")
+		if err != nil || news != "" && inbox != "" {
 			return "", err
 		}
 	}

@@ -75,6 +75,7 @@ func TestToolSets(t *testing.T) {
 	}{
 		{protocol.ToolsWorkspace, []string{"--tools|Bash,Read,Write,Edit", "Edit(//", "mcp__roamind", "--mcp-config", "and work in"}, []string{"--no-session-persistence"}, true},
 		{protocol.ToolsWeb, []string{"--tools|WebSearch,WebFetch|", "--allowedTools|WebSearch,WebFetch|", "You can search the web and read pages (WebSearch, WebFetch)."}, []string{"Bash", "--mcp-config", "and work in", "--no-session-persistence"}, true},
+		{protocol.ToolsRecall, []string{"--tools|WebSearch|", "--allowedTools|WebSearch|"}, []string{"Bash", "WebFetch", "Write", "--mcp-config", "and work in", "--no-session-persistence", "--settings", "Work only from"}, true},
 		{protocol.ToolsNone, []string{"--tools||", "--no-session-persistence", "Work only from what this message gives you."}, []string{"--allowedTools", "--mcp-config", "WebFetch", "--settings"}, false},
 	}
 	for _, c := range cases {
