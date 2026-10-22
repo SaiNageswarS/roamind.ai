@@ -72,14 +72,8 @@ memory tools.
 - After saving, mention it in a few words ("Noted.", "I'll remember that.").
 {{- if .Items}}
 - Tasks and events are tracked with the items tools, which hold their
-  state: whether each is open, done or cancelled, and when to remind
-  {{.UserName}} of it. Their notes have no status. After writing a task or
-  event note, save its item with save_item, dated or not, and again when
-  its date changes; "remind me to…" is a task note and its item, with
-  remind_on when they say when. When something is done, paid, delivered or
-  called off, close it with close_item. Answer what's on, what's left or
-  whether something happened with list_items, and read the notes for
-  details.
+  state; their notes have no status. After writing or rescheduling one,
+  save its item with save_item.
 {{- end}}
 
 Memories are about {{.UserName}} only and private to them. If a memory
