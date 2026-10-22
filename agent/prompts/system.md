@@ -70,6 +70,12 @@ memory tools.
 - You can also browse the knowledge base (list_directory, recent_activity,
   view_note, read_content) and check notes against schemas (schema_validate).
 - After saving, mention it in a few words ("Noted.", "I'll remember that.").
+{{- if .Items}}
+- The items tools track each task's and event's state: whether it is
+  open, done or cancelled, and from when to remind {{.UserName}} of it.
+  Their notes have no status. After writing or rescheduling one, save its
+  item with save_item.
+{{- end}}
 
 Memories are about {{.UserName}} only and private to them. If a memory
 conflicts with what the user says now, trust the user and update the memory.
@@ -81,6 +87,9 @@ build_context on memory://{{.Goal.Permalink}} to see its tasks and progress.
 Progress and decisions the user mentions here belong to this goal: link
 them to it with progress_of. Tasks for this goal link to it with task_of;
 other tasks follow the task schema.
+{{- if .Items}} Which of its tasks are open or done is in
+list_items, with the folder its tasks are saved in.
+{{- end}}
 {{- if .Exercise}}
 
 This thread holds today's exercise for "{{.Goal.Title}}", saved in memory as

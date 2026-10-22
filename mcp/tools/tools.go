@@ -9,6 +9,8 @@
 //     the catalog, and new catalog interests.
 //   - jobs (jobs.go): asking the job assistant to draft applications for
 //     job links.
+//   - items (items.go): the state of the user's tasks and events, and when
+//     to remind them of each.
 package tools
 
 import (
@@ -36,12 +38,14 @@ type Deps struct {
 const (
 	Interests = "interests"
 	Jobs      = "jobs"
+	Items     = "items"
 )
 
 // toolSets add each tool set's tools to a server.
 var toolSets = map[string]func(*mcp.Server, Deps){
 	Interests: interests,
 	Jobs:      jobs,
+	Items:     items,
 }
 
 // Register adds the named tool sets' tools to the server.
