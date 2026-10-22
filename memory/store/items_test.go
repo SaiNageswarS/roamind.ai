@@ -73,6 +73,12 @@ func TestItems(t *testing.T) {
 	put(Item{Key: "Write tests", Kind: ItemTask, Note: "tasks/roamind/write-tests", Title: "Write tests", Date: "2026-11-12"})
 	put(Item{Key: "112-3456", Kind: ItemEvent, EventKind: DeliveryKind, Note: "events/2026/headphones", Title: "Headphones arrive", Date: "2026-11-10"})
 	put(Item{Key: "XK7Q2P", Kind: ItemEvent, EventKind: "travel", Note: "events/2026/flight-to-lisbon", Title: "Flight to Lisbon", Date: "2026-11-11T06:40"})
+	// Basic Memory starts permalinks with the project.
+	project, err := s.AssignMemoryProject(ctx, "a", "bm-u-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	put(Item{Key: "Book flights", Kind: ItemTask, Note: project + "/tasks/roamind/book-flights", Title: "Book flights"})
 	put(Item{UserID: "b", Key: "B's task", Kind: ItemTask, Note: "tasks/b", Title: "B's task", Date: "2026-11-10"})
 
 	if got := keys(s.DueItems(ctx, "a", day("2026-11-08"))); got != "" {
@@ -122,11 +128,13 @@ func TestItems(t *testing.T) {
 		f    ItemFilter
 		want string
 	}{
-		{ItemFilter{}, "112-3456;XK7Q2P;Write tests;Call the bank;"},
+		{ItemFilter{}, "112-3456;XK7Q2P;Write tests;Book flights;Call the bank;"},
 		{ItemFilter{State: ItemDone}, "Pay Acme INV-7;"},
 		{ItemFilter{From: "2026-11-11", To: "2026-11-12"}, "XK7Q2P;Write tests;"},
-		{ItemFilter{Folder: "tasks/roamind/"}, "Write tests;"},
-		{ItemFilter{Folder: "tasks/"}, "Write tests;Call the bank;"},
+		{ItemFilter{Folder: "tasks/roamind/"}, "Write tests;Book flights;"},
+		{ItemFilter{Folder: project + "/tasks/roamind/"}, "Book flights;"},
+		{ItemFilter{Folder: "tasks/"}, "Write tests;Book flights;Call the bank;"},
+		{ItemFilter{Folder: "roamind/"}, ""},
 		{ItemFilter{Key: "nothing"}, ""},
 	} {
 		if got := keys(s.Items(ctx, "a", c.f)); got != c.want {

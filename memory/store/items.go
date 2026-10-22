@@ -160,7 +160,8 @@ type ItemFilter struct {
 	// left out when either is set.
 	From, To string
 	// Folder is the start of the items' note permalinks, such as
-	// tasks/<goal>/.
+	// tasks/<goal>/, with or without the user's memory project before it,
+	// which Basic Memory puts at the start of permalinks.
 	Folder string
 	Key    string
 }
@@ -187,7 +188,19 @@ func (s *Store) Items(ctx context.Context, userID string, f ItemFilter) ([]Item,
 		where, args = append(where, "substr(date, 1, 10) <= ?"), append(args, f.To)
 	}
 	if f.Folder != "" {
-		where, args = append(where, "substr(note, 1, length(?)) = ?"), append(args, f.Folder, f.Folder)
+		u, err := s.UserByID(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		folders := []string{f.Folder}
+		if u != nil && u.MemoryProject != "" && !strings.HasPrefix(f.Folder, u.MemoryProject+"/") {
+			folders = append(folders, u.MemoryProject+"/"+f.Folder)
+		}
+		var or []string
+		for _, folder := range folders {
+			or, args = append(or, "substr(note, 1, length(?)) = ?"), append(args, folder, folder)
+		}
+		where = append(where, "("+strings.Join(or, " OR ")+")")
 	}
 	return s.items(ctx, strings.Join(where, " AND "), args...)
 }
