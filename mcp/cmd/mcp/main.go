@@ -3,7 +3,7 @@
 // to the turn's user and serving the tool sets the turn's task gets (see
 // agent.Config.ToolsServer):
 //
-//	mcp --data DIR --user ID --tools interests,jobs
+//	mcp --data DIR --user ID --tools interests,jobs,items
 package main
 
 import (
@@ -36,7 +36,7 @@ func run(args []string) error {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	dataDir := fs.String("data", "./data", "data directory holding roamind.db")
 	user := fs.String("user", "", "the user the tools serve")
-	sets := fs.String("tools", "", "the tool sets to serve, comma-separated: interests, jobs")
+	sets := fs.String("tools", "", "the tool sets to serve, comma-separated: interests, jobs, items")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

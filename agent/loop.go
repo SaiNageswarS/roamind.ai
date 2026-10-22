@@ -89,6 +89,7 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, emit Emit) 
 		"Exercise":  exercise(in),
 		"News":      in.News,
 		"Interests": withTools && slices.Contains(in.ServerTools, protocol.ServerInterests),
+		"Items":     withTools && slices.Contains(in.ServerTools, protocol.ServerItems),
 		"Tools":     orDefault(in.Tools, "workspace"),
 		"Channel":   orDefault(in.Channel, "slack"),
 	})

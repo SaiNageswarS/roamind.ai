@@ -73,6 +73,8 @@ const (
 	// ServerJobs is asking the job assistant to draft applications for job
 	// links.
 	ServerJobs = "jobs"
+	// ServerItems is tracking the state of the user's tasks and events.
+	ServerItems = "items"
 )
 
 // NewsRef is the context of a turn in the user's news-shorts channel.

@@ -28,6 +28,10 @@ Link the venue with at and the people involved with with. When it moves,
 update its date rather than writing a second note, and move it with
 move_note when its year changes.
 
+The note has no status. Track it with the items tools: save_item when it is
+written or its date moves, and close_item when it is cancelled, or done
+when a delivery arrives.
+
 Checklist holds what to bring or prepare. Start it from the user's
 preferences for that kind of event, then add what this one needs. When the
 user ticks items off, remove them from the list.

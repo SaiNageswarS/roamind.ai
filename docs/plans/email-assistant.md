@@ -5,7 +5,7 @@ Status: drafted 2026-10-21 and revised 2026-10-22, to revisit. The `channels` ta
 - The planned Bill, Order and Checklist schemas were folded into the existing Task, Event and Preference schemas (see section 6), so the plan adds no schema.
 - The automatic return-window reminders were dropped.
 
-The schema part shipped first, in PR #8 (merged and deployed 2026-10-22), without a `renewal` event kind or `source` fields. Everything else is still to build.
+The schema part shipped first, in PR #8 (merged and deployed 2026-10-22), without a `renewal` event kind or `source` fields. The `items` table shipped second (2026-10-22): `09_items.sql` and `memory/store/items.go` with `InboxLeads` in the store, the `items` tool set of Roamind's MCP server given to chat turns, Task's `status` removed, the `items` rule in the Task and Event schemas, and the `system.md` lines (the items paragraph and the goal's tasks through `list_items`). Mail, the inbox channel and the digest are still to build; the mail tables move to `10_mail.sql`.
 
 ## Context
 Roamind should read the user's Gmail (several accounts per user) and turn mail into structured Basic Memory notes: tasks, reminders, events/appointments, bills, travel bookings, orders and deliveries, people, and checklists of things to carry. A morning digest in a private `#inbox-<name>` Slack channel then shows what is due. This also delivers the roadmap's pending "reminders" item. Reminders are not a type of their own: they are rows of the `items` table, added for tasks and events, including tasks saved from chat.
@@ -51,7 +51,7 @@ Item state lives in SQLite, in `items` rows, and Basic Memory keeps everything e
 - The worker turns the file into a token source with `golang.org/x/oauth2/google.CredentialsFromJSON`, so Roamind has no OAuth code of its own. When a refresh fails (`invalid_grant`), the account is marked `failed` with the error, and the digest says it needs reconnecting.
 
 ### 2. Data
-**Mail: `memory/sql-schemas/09_mail.sql` + `memory/store/mail.go` (+ `mail_test.go`)**
+**Mail: `memory/sql-schemas/10_mail.sql` + `memory/store/mail.go` (+ `mail_test.go`)**
 - `mail_accounts(address PK, user_id, history_id, status active|failed, error, connected_at, synced_at)`
 - `mail_messages(address, message_id, user_id, status picked|done|skipped|failed, received_at, done_at, PK(address, message_id))`. Every message seen is recorded before it is read, so none is extracted twice. This follows the `job_postings` pattern.
 - **The inbox channel is a row of the existing `channels` table** (`memory/sql-schemas/08_channels.sql`, `memory/store/channels.go`), with `kind = 'inbox'` and `ref = ''`. Each user has one inbox channel, and the empty `ref` in the primary key `(user_id, kind, ref)` enforces that, as for news.
@@ -61,7 +61,7 @@ Item state lives in SQLite, in `items` rows, and Basic Memory keeps everything e
 - `inbox_digests(user_id, day, channel_id, ts, posted_at, UNIQUE(user_id, day))`. The slot is reserved, then the message posted, then the slot completed, as `digests` does.
 - Store functions keep the repo's short names: `MailAccounts`, `SetHistory`, `FailAccount`, `PickMessages`, `PendingMessages`, `FinishMessage`, `ReserveInbox`, `CompleteInbox`.
 
-**Items: `memory/sql-schemas/10_items.sql` + `memory/store/items.go` (+ `items_test.go`)**
+**Items (built): `memory/sql-schemas/09_items.sql` + `memory/store/items.go` (+ `items_test.go`)**
 
 These are kept separate from mail because chat adds items too.
 ```sql
@@ -161,7 +161,7 @@ items(user_id, key,       -- key: stable title, or the confirmation/order/invoic
   - The skip reason for a mention changes from "own goal or news channel" to "own channel".
 - Wiring goes in `workflows.go` `Register` (only with Memory), in the package doc list, and in `Deps.Mail` (the credentials dir, `data/secrets/mail`).
 
-### 5. Roamind MCP server: `items` tool set (`mcp/tools/items.go`)
+### 5. Roamind MCP server: `items` tool set (`mcp/tools/items.go`, built)
 This is a new tool set next to `interests` and `jobs`, named `protocol.ServerItems`. It is pinned to the turn's user, as the others are.
 - **`save_item(key, kind, event_kind?, note, title, date?, remind_on?, end?)`:** adds or reschedules a row through `PutItem`. The tool fills in `show_from` and `until` from `InboxLeads`, so the model gives only the dates.
   - The agent first writes or edits the note, then saves the row with the note's permalink.
@@ -254,7 +254,7 @@ Push is worth adding if Roamind sends instant alerts, such as a gate change or a
 
 ## Files
 New:
-- `memory/sql-schemas/{09_mail.sql,10_items.sql}`
+- `memory/sql-schemas/{09_items.sql (built),10_mail.sql}`
 - `memory/store/{mail.go,items.go}` and their tests
 - `connectors/mail/{gmail.go,message.go,*_test.go,testdata/}`
 - `agent/{mail.go,inbox.go}`, `agent/prompts/{extract_mail.md,inbox_digest.md}`
