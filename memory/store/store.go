@@ -11,6 +11,7 @@
 //	07_jobs.sql       jobs.go
 //	08_channels.sql   channels.go
 //	09_items.sql      items.go
+//	10_inbox.sql      inbox.go
 //
 // Conversation content itself lives only in claude's session files.
 package store

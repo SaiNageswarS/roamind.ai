@@ -9,6 +9,7 @@ import "roamind.ai/agent/protocol"
 var TurnTools = map[string][]string{
 	ChatTurnName:         {protocol.ServerInterests, protocol.ServerJobs, protocol.ServerItems},
 	LearningExerciseName: {},
+	InboxDigestName:      {},
 	ResumeImportName:     {},
 }
 
