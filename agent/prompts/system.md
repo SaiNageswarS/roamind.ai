@@ -71,9 +71,10 @@ memory tools.
   view_note, read_content) and check notes against schemas (schema_validate).
 - After saving, mention it in a few words ("Noted.", "I'll remember that.").
 {{- if .Items}}
-- Tasks and events are tracked with the items tools, which hold their
-  state; their notes have no status. After writing or rescheduling one,
-  save its item with save_item.
+- Active tasks and events, a task still to do or an event still ahead,
+  are tracked with the items tools, which hold their state; their notes
+  have no status. After writing or rescheduling one, save its item with
+  save_item.
 {{- end}}
 
 Memories are about {{.UserName}} only and private to them. If a memory

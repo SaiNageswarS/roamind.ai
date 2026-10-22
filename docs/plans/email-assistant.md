@@ -79,7 +79,7 @@ items(user_id, key,       -- key: stable title, or the confirmation/order/invoic
       PRIMARY KEY (user_id, key),
       INDEX (user_id, state, show_from))
 ```
-- **Every task and event note has a row, because its state is kept there.** An undated task gets a row with `date` and `show_from` both NULL. It never shows in the digest, and the row still records whether it is open or done.
+- **Every active task and event note has a row, because its state is kept there:** a task still to do, or an event still ahead. An undated task gets a row with `date` and `show_from` both NULL. It never shows in the digest, and the row still records whether it is open or done. A task already done or an event already past when it is noted gets no row; its note is history.
 - **What mail turns into:**
 
   | Mail | Note | Row |
@@ -165,7 +165,7 @@ items(user_id, key,       -- key: stable title, or the confirmation/order/invoic
 This is a new tool set next to `interests` and `jobs`, named `protocol.ServerItems`. It is pinned to the turn's user, as the others are.
 - **`save_item(key, kind, event_kind?, note, title, date?, remind_on?, end?)`:** adds or reschedules a row through `PutItem`. The tool fills in `show_from` and `until` from `InboxLeads`, so the model gives only the dates.
   - The agent first writes or edits the note, then saves the row with the note's permalink.
-  - Every new task or event note gets a row, dated or not.
+  - Every new active task or event note gets a row, dated or not; tasks already done and past events get none.
   - `InboxLeads` moves to `memory/store`, so the worker and the server share it.
 - **`close_item(key, state)`:** `state` is `done`, `cancelled` or `open` (to reopen an item).
 - **`list_items(state?, from?, to?, folder?, key?)`:** with no arguments, it returns the open items. The arguments cover questions such as "what's on this week?", "which tasks are left on this goal?" and "did that order arrive?".
