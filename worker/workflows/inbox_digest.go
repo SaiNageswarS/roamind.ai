@@ -246,9 +246,11 @@ func (d Deps) checkInbox(ctx context.Context, in InboxInput) (inboxCheck, error)
 }
 
 // draftInbox has the agent write the digest from the due items, reading
-// their notes, as structured output. Like an exercise draft, the turn gets
-// the workspace tools and the user's memory, and runs in the workspace
-// directory, so the digest's thread can resume it.
+// their notes, as structured output. The turn runs unattended, over notes
+// that may hold third-party text, so it can only read memory and search
+// the web (ToolsRecall). It runs in the workspace directory with its
+// session saved, so the digest's thread resumes it, as a chat turn with
+// the chat's own tools.
 func (d Deps) draftInbox(ctx context.Context, in InboxInput, chk inboxCheck) (inboxDraft, error) {
 	var out inboxDraft
 	u, err := d.Store.UserByID(ctx, in.UserID)
@@ -271,8 +273,7 @@ func (d Deps) draftInbox(ctx context.Context, in InboxInput, chk inboxCheck) (in
 		UserName:      u.DisplayName,
 		UserEmail:     u.Email,
 		MemoryProject: u.MemoryProject,
-		Tools:         protocol.ToolsWorkspace,
-		ServerTools:   d.serverTools(InboxDigestName),
+		Tools:         protocol.ToolsRecall,
 		OutputSchema:  agent.InboxDigestSchema,
 	}, func(protocol.Packet) {})
 	out.SessionID, out.CostUSD = turn.SessionID, turn.CostUSD

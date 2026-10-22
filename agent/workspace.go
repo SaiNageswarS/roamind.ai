@@ -55,6 +55,10 @@ var workspaceSettings = mustJSON(map[string]any{
 // sandbox.
 var webTools = []string{"WebSearch", "WebFetch"}
 
+// recallTools are the built-in tools of a ToolsRecall turn: no WebFetch,
+// so nothing it reads can be sent to a page of someone else's.
+var recallTools = []string{"WebSearch"}
+
 // webSettings allows WebFetch on any domain but the blocked ones and their
 // subdomains.
 func webSettings(blocked []string) string {

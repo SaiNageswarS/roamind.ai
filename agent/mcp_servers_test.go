@@ -38,6 +38,12 @@ func TestMCPServers(t *testing.T) {
 	if !reflect.DeepEqual(allowed, []string{"mcp__memory", "mcp__roamind"}) || len(disallowed) == 0 {
 		t.Fatalf("allowed %v, disallowed %v", allowed, disallowed)
 	}
+	// A recall turn may call bm's read tools only, and gets no Roamind server.
+	in.Tools = protocol.ToolsRecall
+	_, allowed, _, err = mcpServers(cfg, in, true, false)
+	if err != nil || !reflect.DeepEqual(allowed, []string{"mcp__memory__read_note", "mcp__memory__build_context", "mcp__memory__search_notes"}) {
+		t.Fatalf("recall allowed %v %v", allowed, err)
+	}
 	if servers, allowed, _, _ := mcpServers(cfg, in, false, false); len(servers) != 0 || allowed != nil {
 		t.Fatalf("no servers wanted: %v %v", servers, allowed)
 	}

@@ -55,7 +55,7 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, emit Emit) 
 	if in.UserID == "" {
 		return protocol.TurnOutput{}, errors.New("agent: empty user id")
 	}
-	if in.Tools != protocol.ToolsWorkspace && in.Tools != protocol.ToolsWeb && in.Tools != protocol.ToolsNone {
+	if !slices.Contains([]string{protocol.ToolsWorkspace, protocol.ToolsWeb, protocol.ToolsRecall, protocol.ToolsNone}, in.Tools) {
 		return protocol.TurnOutput{}, fmt.Errorf("agent: unknown tool set %q", in.Tools)
 	}
 	var dir string
@@ -76,7 +76,7 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, emit Emit) 
 		}
 	}
 	workspace := in.Tools == protocol.ToolsWorkspace
-	withMemory := workspace && cfg.Memory != nil && in.MemoryProject != ""
+	withMemory := (workspace || in.Tools == protocol.ToolsRecall) && cfg.Memory != nil && in.MemoryProject != ""
 	withTools := workspace && len(cfg.ToolsServer) > 0 && len(in.ServerTools) > 0
 	var sp bytes.Buffer
 	err = systemPrompt.Execute(&sp, map[string]any{
@@ -109,6 +109,8 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, emit Emit) 
 		opts.Tools, opts.Settings, opts.AllowedTools = workspaceTools, workspaceSettings, allowedWorkspaceTools(dir)
 	case protocol.ToolsWeb:
 		opts.Tools, opts.Settings, opts.AllowedTools = webTools, webSettings(cfg.BlockedDomains), webTools
+	case protocol.ToolsRecall:
+		opts.Tools, opts.AllowedTools = recallTools, recallTools
 	case protocol.ToolsNone:
 		opts.NoSessionPersistence = true
 	}

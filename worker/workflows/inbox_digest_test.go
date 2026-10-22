@@ -99,16 +99,23 @@ func TestInboxDigest(t *testing.T) {
 		t.Fatalf("items = %+v", chk.Items)
 	}
 
-	// draft: structured output from a turn with the user's memory and a
-	// saved session, given the due items.
+	// draft: structured output from a turn that reads the user's memory and
+	// searches the web only, with a saved session, given the due items.
 	dr, err := d.draftInbox(ctx, in, chk)
 	if err != nil || !strings.Contains(dr.Digest, "_7ZMZT6_") || dr.SessionID != "7a1e2b3c-inbox-session" {
 		t.Fatalf("draft = %+v %v", dr, err)
 	}
 	args, _ := os.ReadFile(argsLog)
-	if !strings.Contains(string(args), "--json-schema") || !strings.Contains(string(args), `"--project","bm-u-h1-1"`) ||
-		strings.Contains(string(args), "--no-session-persistence") || strings.Contains(string(args), "mcp__roamind") {
-		t.Fatalf("draft args: %s", args)
+	for _, want := range []string{"--json-schema", `"--project","bm-u-h1-1"`, "--tools WebSearch --",
+		"--allowedTools WebSearch,mcp__memory__read_note,mcp__memory__build_context,mcp__memory__search_notes "} {
+		if !strings.Contains(string(args), want) {
+			t.Fatalf("draft args lack %q: %s", want, args)
+		}
+	}
+	for _, deny := range []string{"--no-session-persistence", "mcp__roamind", "Bash", "WebFetch", "mcp__memory,"} {
+		if strings.Contains(string(args), deny) {
+			t.Fatalf("draft args have %q: %s", deny, args)
+		}
 	}
 	stdin, _ := os.ReadFile(filepath.Join(filepath.Dir(argsLog), "stdin.log"))
 	for _, want := range []string{"today, Thursday 2026-11-12", "key: Pay Acme INV-7; task; 2026-11-11; overdue; note: bm-u-h1-1/notes/Pay Acme INV-7",

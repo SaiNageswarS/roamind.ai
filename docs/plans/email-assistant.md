@@ -86,7 +86,7 @@ Research findings that shape the design:
 - **`inbox-digest`** changes:
   - `check-skip` also picks the user's `failed` mail accounts, and the day is not skipped while one needs reconnecting.
   - The draft prompt lists the accounts to reconnect.
-  - **Revisit the draft turn's tools.** The draft turn now runs like exercise drafting: workspace tools, memory, a saved session that the digest's thread resumes, so a reply closes items with the items tools. Once notes hold text taken from third-party mail, consider a read-only `ToolsRecall` turn (bm's `read_note`, `build_context` and `search_notes` only, no saved session). The thread would then need the digest text, from `inbox_digests.text`, given to its chat turns, as news-digest replies are.
+  - The draft turn already reads notes only (`ToolsRecall`), so notes holding text taken from mail need no change to it.
 - Wiring goes in `workflows.go` `Register` (only with Memory), in the package doc list, and in `Deps.Mail` (the credentials dir, `data/secrets/mail`).
 
 ### 5. Prompt and agent code
