@@ -158,11 +158,8 @@ func TestLearningExercise(t *testing.T) {
 		}
 	}
 
-	// The same day, and every day until it is answered, check-skip stops the run.
-	if chk, _ := d.checkSkip(ctx, in); !strings.Contains(chk.Skip, "already posted") {
-		t.Fatalf("same day: %+v", chk)
-	}
-	for day := 1; day <= 2; day++ {
+	// Until it is answered, the same day or later, check-skip stops the run.
+	for day := 0; day <= 2; day++ {
 		d.Now = func() time.Time { return nine.AddDate(0, 0, day) }
 		if chk, err := d.checkSkip(ctx, in); err != nil || !strings.Contains(chk.Skip, "unanswered") {
 			t.Fatalf("day +%d: %+v %v", day, chk, err)
@@ -174,8 +171,21 @@ func TestLearningExercise(t *testing.T) {
 	if chk, err := d.checkSkip(ctx, in); err != nil || chk.Skip != "" {
 		t.Fatalf("after the answer: %+v %v", chk, err)
 	}
-	// The next draft is calibrated from the posted exercise.
-	if ec, err := d.buildContext(ctx, in); err != nil || len(ec.Exercises) != 1 || !strings.Contains(ec.Exercises[0], "Dative") {
+	// Answered, a run the same day posts another, its note stamped with the time.
+	d.Now = func() time.Time { return nine.Add(13 * time.Hour) }
+	if chk, err := d.checkSkip(ctx, in); err != nil || chk.Skip != "" {
+		t.Fatalf("same day after the answer: %+v %v", chk, err)
+	}
+	dr.Topic = "Accusative prepositions"
+	again, err := d.postExercise(ctx, in, chk, dr)
+	if err != nil || again.NotePermalink != wantNote+"-2200" {
+		t.Fatalf("second exercise: %+v %v", again, err)
+	}
+	if _, err := os.Stat(filepath.Join(mem.Dir, "users", p, "notes", "exercises", "learn-german", "2026-10-12-2200 Accusative prepositions.md")); err != nil {
+		t.Fatal(err)
+	}
+	// The next draft is calibrated from the posted exercises, newest first.
+	if ec, err := d.buildContext(ctx, in); err != nil || len(ec.Exercises) != 2 || !strings.Contains(ec.Exercises[0], "Accusative") || !strings.Contains(ec.Exercises[1], "Dative") {
 		t.Fatalf("next context: %+v %v", ec, err)
 	}
 }

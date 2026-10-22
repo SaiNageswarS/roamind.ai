@@ -140,7 +140,7 @@ func LearningExercise(c *hatchet.Client, d Deps) *hatchet.Workflow {
 
 // checkSkip decides whether the goal gets an exercise today: it must be an
 // active learning goal of the user with a channel, whose latest exercise is
-// answered and not from today.
+// answered. An unanswered one means the user is away, so no turn is spent.
 func (d Deps) checkSkip(ctx context.Context, in ExerciseInput) (checkOutput, error) {
 	var out checkOutput
 	u, err := d.Store.UserByID(ctx, in.UserID)
@@ -167,16 +167,9 @@ func (d Deps) checkSkip(ctx context.Context, in ExerciseInput) (checkOutput, err
 	if err != nil {
 		return out, err
 	}
-	if last != nil {
-		posted := last.PostedAt.In(d.Location).Format(time.DateOnly)
-		switch {
-		case posted == d.now().In(d.Location).Format(time.DateOnly):
-			out.Skip = "today's exercise is already posted"
-			return out, nil
-		case last.AnsweredAt.IsZero():
-			out.Skip = "the exercise of " + posted + " is unanswered"
-			return out, nil
-		}
+	if last != nil && last.AnsweredAt.IsZero() {
+		out.Skip = "the exercise of " + last.PostedAt.In(d.Location).Format(time.DateOnly) + " is unanswered"
+		return out, nil
 	}
 	out.ChannelID, out.GoalTitle = gc.ChannelID, gc.Title
 	return out, nil
@@ -257,7 +250,17 @@ func (d Deps) postExercise(ctx context.Context, in ExerciseInput, chk checkOutpu
 	now := d.now()
 	date := now.In(d.Location).Format(time.DateOnly)
 	folder := notes.ExerciseFolder(in.GoalPermalink)
-	out.NotePermalink = u.MemoryProject + "/" + folder + "/" + date
+	// A second exercise the same day gets the time too, so its note doesn't
+	// replace the first; it still sorts after it.
+	stamp := date
+	last, err := d.Store.LastExercise(ctx, in.UserID, in.GoalPermalink)
+	if err != nil {
+		return out, err
+	}
+	if last != nil && last.PostedAt.In(d.Location).Format(time.DateOnly) == date {
+		stamp = now.In(d.Location).Format("2006-01-02-1504")
+	}
+	out.NotePermalink = u.MemoryProject + "/" + folder + "/" + stamp
 
 	chunks := slack.Split(slack.ToMrkdwn(dr.Exercise), slack.MaxChunk)
 	_, ts, err := d.Slack.PostMessageContext(ctx, chk.ChannelID, slackapi.MsgOptionText(chunks[0], false))
@@ -286,7 +289,7 @@ func (d Deps) postExercise(ctx context.Context, in ExerciseInput, chk checkOutpu
 	}); err != nil {
 		return out, err
 	}
-	title := date + " " + dr.Topic
+	title := stamp + " " + dr.Topic
 	if err := d.Memory.WriteNote(ctx, u.MemoryProject, folder, title, "exercise",
 		exerciseNote(out.NotePermalink, title, date, in.GoalPermalink, dr.DraftedExercise)); err != nil {
 		return out, err
