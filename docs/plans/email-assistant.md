@@ -1,6 +1,6 @@
 # Email assistant (plan; mail still to build)
 
-Status: drafted 2026-10-21, revised 2026-10-22, to revisit. What is left is reading mail. Everything mail feeds into is built and described in `docs/architecture.md`:
+Status: drafted 2026-10-21, revised 2026-10-22, redesigned 2026-11-01 around Google Apps Script. What is left is reading mail. Everything mail feeds into is built and described in `docs/architecture.md`:
 - the Task and Event schemas (PR #8);
 - the `items` table and the `items` tools (PRs #10 and #11);
 - the inbox channel and the morning `inbox-digest` (2026-10-22).
@@ -9,8 +9,9 @@ Status: drafted 2026-10-21, revised 2026-10-22, to revisit. What is left is read
 Roamind should read the user's Gmail (several accounts per user) and turn mail into structured Basic Memory notes, each task and event with its row in `items`: bills, travel bookings, orders and deliveries, appointments, commitments, people, and checklists of things to carry. The morning inbox digest then shows them when they are due, as it already does for items saved in chat.
 
 Decided with the user:
-- Connecting accounts is **offline and manual for now** (an operator task).
-- New mail is **polled by a Hatchet cron**.
+- **Gmail is read by a Google Apps Script** in each Gmail account, not by Roamind through the Gmail API. The script classifies mail broadly with a DeepSeek model on OpenRouter, labels it in Gmail, and sends what's worth keeping to a Hatchet webhook.
+- **Roamind relates mail to memory.** A `claude -p` turn reads the user's notes to tie each mail to the booking, order, person or goal it's about, and decides what to save.
+- Connecting an account is **offline and manual for now** (an operator task).
 - Mail is captured for **bills, travel & bookings, orders & deliveries, people & contacts, appointments**, plus checklists.
 - **No new schemas**:
   - a bill is a Task;
@@ -18,140 +19,198 @@ Decided with the user:
   - a checklist is a field of its Event;
   - a reusable packing list is a Preference.
 
-Research findings that shape the design:
-- **Scope and app status.** `gmail.readonly` is a *restricted* scope. A personal, unverified app is allowed up to 100 users behind a click-through warning. The OAuth consent screen must be **"In production"**: in "Testing" mode, refresh tokens expire after 7 days. Each client/user pair has a cap on refresh tokens (about 50–100), so reconnecting many times silently revokes the oldest token.
-- **Sync model** (Gmail sync guide). Do a full sync with `messages.list` and store the latest `historyId`. After that, call `history.list` from the stored id. A 404 means the history has expired (it is kept for about a week or more), so fall back to a full sync. Pub/Sub only replaces the trigger, and polling is enough here.
-- **schema.org markup.** Many senders embed schema.org JSON-LD in their mail (Gmail markup): FlightReservation, LodgingReservation, EventReservation, ParcelDelivery, Order, Invoice. Pass it to extraction as-is; it is far more reliable than prose.
+Findings that shape the design:
+- **No Gmail OAuth app.** The script runs as the account's owner, authorized once in the Apps Script editor. That avoids what reading Gmail from Roamind needed: an OAuth client, the restricted `gmail.readonly` scope with its consent-screen rules (refresh tokens expire after 7 days in "Testing"; each client/user pair caps refresh tokens), `oauth2l`, and `historyId` sync with its fallback.
+- **The script can reach Hatchet.** Apps Script runs on Google's servers, outside the tailnet. `task funnel` already makes the whole Hatchet webhooks prefix public (`/api/v1/stable/tenants/<tenant>/webhooks`), so a new `gmail` webhook under it needs no Tailscale change. Hatchet's generic webhooks check an HMAC of the raw request body (`api/v1/server/handlers/v1/webhooks/receive.go`, Hatchet v0.110.22), which Apps Script computes with `Utilities.computeHmacSha256Signature`.
+- **Quotas are no concern.** A consumer Google account allows 90 minutes a day of trigger runtime and 20,000 `UrlFetchApp` calls a day. One run handles at most 20 messages, within the 6-minute run limit.
+- **schema.org markup.** Many senders embed schema.org JSON-LD in their mail (Gmail markup): FlightReservation, LodgingReservation, EventReservation, ParcelDelivery, Order, Invoice. The script passes it on as-is; it is far more reliable than prose.
+- **DeepSeek on OpenRouter.** DeepSeek's own API keeps data in China. OpenRouter serves DeepSeek's open models from other hosts too, and `provider: {data_collection: "deny"}` restricts a request to hosts that don't store or train on it.
 - **Prior art.** Inbox Zero (AGPL) does triage, not extraction into a personal knowledge base. Nothing to reuse.
+
+## Flow
+
+```
+Gmail ─▶ Apps Script (time trigger, every 15 min)
+           search new mail ─▶ OpenRouter (DeepSeek): broad category
+           label roamind/<category>
+           POST message + category ─▶ Tailscale Funnel ─▶ Hatchet webhook gmail (event mail:received)
+                                                           ─▶ worker: mail-message
+                                                                check ─▶ relate (claude -p, reads memory) ─▶ save
+                                                           ─▶ notes + items rows ─▶ inbox digest
+```
 
 ## Design
 
-### 1. Connecting an account (offline, operator)
-- **One-time Google Cloud setup** (documented in `docs/deployment.md`): enable the Gmail API, set up the consent screen as External and *In production*, and create a **Desktop** OAuth client. Save it as `data/secrets/google-oauth-client.json`.
-- **`task mail-connect -- <roamind user email>`** (Taskfile, shell, standard tool **oauth2l**, plus a `task oauth2l` install task):
-  1. Run `oauth2l fetch --credentials data/secrets/google-oauth-client.json --scope https://www.googleapis.com/auth/gmail.readonly --output_format refresh_token --cache ""`. This opens the browser through the loopback flow, and the operator picks the Gmail account. The output is an `authorized_user` JSON holding the client id, client secret and refresh token.
-  2. Get the account address with `curl` to `gmail/v1/users/me/profile`, using an access token from the same credentials.
-  3. Save the credentials as `data/secrets/mail/<address>.json` (chmod 600). Then `sqlite3 INSERT OR REPLACE` into `mail_accounts`, with `user_id = sha256(lower(trim(email)))`. The task refuses if no such user exists.
-  4. Run it again for each further account. A user may have many accounts; an address belongs to one user.
-- **`task mail-disconnect -- <address>`** deletes the row and the credentials file.
-- The worker turns the file into a token source with `golang.org/x/oauth2/google.CredentialsFromJSON`, so Roamind has no OAuth code of its own. When a refresh fails (`invalid_grant`), the account is marked `failed` with the error, and the digest says it needs reconnecting.
+### 1. Apps Script: `deploy/apps-script/` (`Code.js`, `appsscript.json`)
+The source lives in the repo. The operator pushes it to each Gmail account with Google's `clasp` CLI (`task mail-script`), or pastes it into the Apps Script editor.
 
-### 2. Data: `memory/sql-schemas/11_mail.sql` + `memory/store/mail.go` (+ `mail_test.go`)
-- `mail_accounts(address PK, user_id, history_id, status active|failed, error, connected_at, synced_at)`
-- `mail_messages(address, message_id, user_id, status picked|done|skipped|failed, received_at, done_at, PK(address, message_id))`. Every message seen is recorded before it is read, so none is extracted twice. This follows the `job_postings` pattern.
-- Store functions keep the repo's short names: `MailAccounts`, `SetHistory`, `FailAccount`, `PickMessages`, `PendingMessages`, `FinishMessage`.
+- **Script properties** (Project settings → Script properties):
+  - `OPENROUTER_API_KEY`;
+  - `OPENROUTER_MODEL`: a DeepSeek model id on OpenRouter;
+  - `WEBHOOK_URL`: printed by `task webhook`;
+  - `WEBHOOK_SECRET`: the `ROAMIND_MAIL_SECRET` of `.env`.
+- **`setup()`**, run once by hand: creates the labels and installs a 15-minute time trigger for `run()`. Running it is also how the owner authorizes the script's Gmail, fetch and trigger scopes.
+- **`run()`**:
+  1. **Find.** `GmailApp.search('in:inbox -category:promotions -category:social -label:roamind/sent -label:roamind/skip newer_than:3d')`, and the same over `in:sent`, because the user's own replies hold commitments ("I'll send it by Friday"). It takes the oldest 20 messages; leftovers wait for the next run.
+  2. **Read.** For each message:
+     - headers (`from`, `to`, `cc`, `date`, `subject`) and the Gmail link;
+     - the plain text, or the HTML converted to text when there is none, capped at 20k characters;
+     - the `application/ld+json` scripts of the HTML body;
+     - attachment names.
+  3. **Classify.** One OpenRouter chat completion per message, with `response_format` set to a JSON schema and `provider: {data_collection: "deny"}`. It is given the subject, sender, the first 4k characters and the JSON-LD.
+     - It returns `{category, summary}`. `category` is one of `bill`, `travel`, `order`, `appointment`, `commitment`, `person`, `other` or `skip`, and `summary` is one line.
+     - `skip` is for newsletters, notifications, one-time and security codes, and promotions the Gmail category missed.
+     - The model only classifies. What to save, and how it relates to memory, is left to Roamind.
+  4. **Label.** Each message gets `roamind/<category>`. A `skip` message also gets `roamind/skip` and isn't sent.
+  5. **Send.** It POSTs `{address, message_id, thread_id, link, from, to, cc, date, subject, category, summary, text, jsonld, attachments}` to `WEBHOOK_URL`. The `X-Roamind-Signature` header is the hex HMAC-SHA256 of the body with `WEBHOOK_SECRET`. On a 200 the message gets `roamind/sent`. Otherwise it is left unlabeled and sent again on the next run, so mail sent while the machine is down is delayed, not lost.
+  6. **Heartbeat.** Once a day, when nothing else was sent that day, it POSTs `{address, heartbeat: true}`.
+- When OpenRouter fails, the message is left for the next run. The run logs to the Apps Script executions page and never throws for one bad message.
+
+### 2. The webhook: `gmail`
+- `worker/cmd/setup-webhook` also creates the `gmail` webhook, when `ROAMIND_MAIL_SECRET` is set. Like the Slack one, it is recreated so the secret follows `.env`. It prints the URL to put in `WEBHOOK_URL`.
+  - The source is `rest.GENERIC`.
+  - Auth is `features.HMACAuth{SigningSecret: ROAMIND_MAIL_SECRET, SignatureHeaderName: "X-Roamind-Signature", Algorithm: rest.SHA256, Encoding: rest.HEX}`.
+  - The event key expression is `'mail:received'`.
+- `task funnel` is unchanged: its path prefix already covers every webhook.
+- There is one secret per deployment, shared by every account's script. The worker accepts only addresses registered in `mail_accounts`.
+- Hatchet's generic HMAC carries no timestamp, so a request could be replayed. A replay is harmless: `check` drops messages already handled.
+
+### 3. Data: `memory/sql-schemas/11_mail.sql` + `memory/store/mail.go` (+ `mail_test.go`)
+- `mail_accounts(address PK, user_id, connected_at, seen_at)`. `seen_at` is updated by every request from the account's script, heartbeats included.
+- `mail_messages(address, message_id, user_id, status picked|done|skipped|failed, category, received_at, done_at, PK(address, message_id))`. A message is recorded before its turn, so a resent message isn't related twice. This follows the `job_postings` pattern.
+- Store functions keep the repo's short names: `MailAccount`, `SeenMail`, `PickMessage`, `FinishMessage`, `StaleMailAccounts`.
+- **`task mail-connect -- <roamind user email> <address>`**: `sqlite3 INSERT OR REPLACE` into `mail_accounts`, with `user_id = sha256(lower(trim(email)))`. The task refuses if no such user exists. A user may have many accounts; an address belongs to one user.
+- **`task mail-disconnect -- <address>`** deletes the row. The operator also removes the script's trigger in that account.
 
 **What mail turns into:**
 
 | Mail | Note | Item row |
 |---|---|---|
-| A bill or invoice to pay | Task "Pay \<payee> \<invoice number>", with `due` and `amount` | `remind_on` is `due` minus 3 days, set by extraction; the row closes as done when paid |
+| A bill or invoice to pay | Task "Pay \<payee> \<invoice number>", with `due` and `amount` | `remind_on` is `due` minus 3 days; the row closes as done when paid |
 | An order | Event, `kind: delivery`, dated by the expected delivery, with the tracking `link` | closes as done when delivered, or as cancelled |
 | A flight, train, stay, ticket or appointment | Event with its `kind`, `confirmation` and `checklist` | closes as cancelled when cancelled |
 | A commitment ("I'll send it by Friday") | Task | |
+| A new person the user deals with | Person, with the address as a `contact` | |
 
 - **Automatic renewals aren't captured for now.** Event has no `renewal` kind; a renewal that needs action, such as cancelling a subscription in time, is a task.
 - **Return windows get no reminder.** Most orders aren't returned, so one reminder per order would be mostly noise. The delivery event's body records the window ("returnable until 2026-11-20"). When the user says they want to return something, the agent creates a task due that day.
 - Rows from mail have `source` `mail:<address>/<message id>`.
 
-### 3. Connector: `connectors/mail` (Gmail, `google.golang.org/api/gmail/v1`)
-- `Open(ctx, credPath) (*Account, error)`, `Profile`, `Changes(ctx, historyID) (ids, newHistoryID, error)` (returns `ErrHistoryGone` on 404), `Recent(ctx, days, max)` (the full sync: `newer_than:14d`, at most 50 messages), and `Message(ctx, id) (*Message, error)`.
-- A `Message` holds `ID, ThreadID, From, To, Cc, Date, Subject, Labels, Text, JSONLD []string, Attachments []string` (attachment names only).
-  - `Text` is taken from text/plain when present, otherwise from HTML converted to text with `golang.org/x/net/html`. It is capped at about 20k characters, with quoted replies removed.
-  - `JSONLD` holds the `application/ld+json` scripts of the HTML part.
-- **Pre-filter** (no LLM): skip `SPAM`, `TRASH`, `CATEGORY_PROMOTIONS`, `CATEGORY_SOCIAL` and `CATEGORY_FORUMS`. Keep `INBOX` and also `SENT`, because the user's own replies hold commitments ("I'll send it by Friday").
-- Tests use testdata Gmail API JSON: multipart, HTML-only, a flight with JSON-LD, and a 404 history.
+### 4. Workflow: `mail-message` (`worker/workflows/mail_message.go`)
+Triggered by the `mail:received` event. It is serialized per user (concurrency key `user_id`), so one user's bm writes never overlap.
 
-### 4. Workflows (`worker/workflows/`)
-- **`mail-sync`** (cron `*/15 * * * *`): for each `active` account, starts a `mail-account` child run. Its output lists accounts whose run couldn't start, as `news-shorts` does.
-- **`mail-account`** DAG, serialized per user (concurrency key `user_id`, so one user's bm writes never overlap):
-  1. **`fetch`**: open the account and call `Changes` from `history_id`. With no history id, or on `ErrHistoryGone`, call `Recent`. Apply the pre-filter and `PickMessages` (new ids only), *then* save the new `history_id`. Return up to 20 picked messages, oldest first, read with `Message`. Leftovers stay `picked` for the next run. On an auth failure, call `FailAccount`.
-  2. **`extract`**: one `ToolsNone` turn over the batch (`agent/prompts/extract_mail.md`), with structured output. The mail is third-party text, so the turn gets no tools and no memory, as news ranking and job tailoring do.
-     - Input: the user's name, email, timezone and today's date; their active goals (title and permalink, from `notes.Goals`) so tasks can be linked; and each message's headers, text and JSON-LD.
-     - Output: per message, either `skip` with a reason (newsletter, notification, OTP or security code) or a list of items.
-       - Each item has a `kind` (task, event, person), the fields of that schema, a `key` and a `state` (`open`, `done` or `cancelled`, from what the mail shows).
-       - The key is a stable title: a confirmation, order or invoice number when there is one.
-       - Tasks can carry a `remind_on`. Bills always do.
-       - Events carry their `checklist` lines.
-     - Retried once.
-  3. **`save`**: for each item, the harness does two writes.
-     - **The note.** It writes the item as Markdown with `notes.WriteNote`, through bm's CLI, as exercise `post` does.
-       - Notes are titled by `key`, so a later mail about the same booking or order (rescheduled, shipped, cancelled) overwrites its note with the latest details.
-       - Task and Event have no `source` field. The note's opening text names the account, the message's Gmail link and the subject, and the row's `source` column records the message id. Its evidence is `(observed, email, <date>)`.
-       - Person items are written only when no note in `people/` already lists that address as a `contact`. This is a disk read in `memory/store/notes`.
-     - **The rows.** For each task and event, it calls `PutItem` with the note's permalink, its dates through `store.InboxLeads`, and the `state` extraction reports: a cancelled booking, a paid bill, a delivered or cancelled order.
+1. **`check`** (no turn):
+   - It looks up the address with `MailAccount` and drops the request if the address isn't registered. Otherwise it calls `SeenMail`.
+   - A heartbeat stops here.
+   - So does a message `PickMessage` has already recorded. A new message is recorded as `picked` with its category.
+2. **`relate`**: one agent turn (`agent/prompts/relate_mail.md`) with structured output. The mail is third-party text, so the turn gets `ToolsRecall`, as the inbox digest's draft does: it can read memory and search the web, and can't change notes, files or items.
+   - **Input:** the user's name, email, timezone and today's date; their active goals (title and permalink, from `notes.Goals`); the message's headers, the script's category and summary, the text and the JSON-LD.
+   - **What it does in memory:**
+     - It searches for what the mail is about: the note of the same booking, order or invoice (by its reference number), the sender's person note, the goal or event it belongs to, and an earlier commitment it fulfils.
+     - It reads the user's preferences for that kind of event, for checklists.
+   - **Output:** either `skip` with a reason, or a list of items.
+     - Each item has a `kind` (task, event, person), the fields of that schema, a `key` and a `state` (`open`, `done` or `cancelled`, from what the mail shows).
+     - The key is a stable title: a confirmation, order or invoice number when there is one. When memory already has a note for the same thing, it is that note's title, so the update lands on it.
+     - Tasks can carry a `remind_on`; bills always do. Events carry their `checklist` lines.
+     - Each item lists `relations`: the permalinks of the goals, people and events it relates to, each with the relation's name (`part_of`, `with`, `for`).
+   - Retried once.
+3. **`save`**: for each item, the harness does two writes.
+   - **The note.** It writes the item as Markdown with `notes.WriteNote`, through bm's CLI, as exercise `post` does.
+     - Notes are titled by `key`, so a later mail about the same booking or order (rescheduled, shipped, cancelled) overwrites its note with the latest details.
+     - Relations are written as the note's wiki-link relations, which ties the mail into the knowledge graph.
+     - Task and Event have no `source` field. The note's opening text names the account, the message's Gmail link and the subject, and the row's `source` column records the message id. Its evidence is `(observed, email, <date>)`.
+     - Person items are written only when no note in `people/` already lists that address as a `contact`. This is a disk read in `memory/store/notes`.
+   - **The rows.** For each task and event, it calls `PutItem` with the note's permalink, its dates through `store.InboxLeads`, and the `state` the turn reports: a cancelled booking, a paid bill, a delivered or cancelled order.
 
-     Then it calls `FinishMessage(done)`. Messages that only skip are marked `skipped`. Retries are safe, because notes overwrite by title and rows upsert by key.
-  - An on-failure task marks the batch `failed`, so it doesn't block later runs.
-- **`inbox-digest`** changes:
-  - `check-skip` also picks the user's `failed` mail accounts, and the day is not skipped while one needs reconnecting.
-  - The draft prompt lists the accounts to reconnect.
-  - The draft turn already reads notes only (`ToolsRecall`), so notes holding text taken from mail need no change to it.
-- Wiring goes in `workflows.go` `Register` (only with Memory), in the package doc list, and in `Deps.Mail` (the credentials dir, `data/secrets/mail`).
+   Then it calls `FinishMessage(done)`; a message whose turn skips it is marked `skipped`. Retries are safe, because notes overwrite by title and rows upsert by key.
+- An on-failure task marks the message `failed`. The script has already labeled it `roamind/sent`, so the mail is not sent again; the run's input stays in Hatchet for a replay.
+- Wiring goes in `workflows.go` `Register` (only with Memory) and in the package doc list.
 
-### 5. Prompt and agent code
-- `agent/mail.go`: `MailBatch` input, `ExtractMailPrompt`, `ExtractedMailSchema` (JSON schema, descriptions carry the field formats), and Go types, following `agent/jobs.go`.
-- `agent/prompts/extract_mail.md`: positive instructions.
-  - Give the data (user, date, goals, messages).
-  - Say what to capture and how to date it: absolute ISO dates in the user's timezone.
-  - Ask for one item per real-world thing, keyed by its reference number. Treat JSON-LD as the most precise source.
-  - Say how mail maps to the two types, as in the table in section 2: a bill to pay is a task with `remind_on` three days before `due`, and an order is a delivery event.
-  - Mark promotional, automated-notification and security-code mail as skip.
+### 5. `inbox-digest` changes
+- `check-skip` also picks the user's `StaleMailAccounts`: those with no request for two days. The day is not skipped while one is stale.
+- The draft prompt lists them as "mail from \<address> hasn't arrived for two days; check its Apps Script".
 
-### 6. Docs, config
-- `docs/architecture.md`: new "Email assistant" section with a flow diagram (mail → notes + items → inbox digest).
-- `docs/deployment.md`: GCP setup, oauth2l, `task mail-connect`.
-- `README.md`: the inbox digest's feature line names mail as a source, plus a design principle: "Used Google's oauth2l to connect mail accounts offline…" (per README voice).
-- `.env.example`: `ROAMIND_MAIL_DIR` (default `data/secrets/mail`).
-- Privacy note in the docs: mail text is sent to Claude for extraction, and only extracted items are stored. The raw mail is not stored.
+### 6. Prompt and agent code
+- `agent/mail.go`: the `MailMessage` input, `RelateMailPrompt`, `RelatedMailSchema` (JSON schema, descriptions carry the field formats), and Go types, following `agent/jobs.go`.
+- `agent/prompts/relate_mail.md`: positive instructions.
+  - Give the data (user, date, goals, message, the script's category).
+  - Say how to search memory for the thing the mail is about, and to reuse an existing note's title as the key.
+  - Say what to capture and how to date it: absolute ISO dates in the user's timezone. Treat JSON-LD as the most precise source.
+  - Ask for one item per real-world thing, keyed by its reference number.
+  - Say how mail maps to the types, as in the table in section 3.
+  - Treat the script's category as a hint: the turn may skip the mail, or find it holds more than one item.
 
-## Considered: Gmail push through Pub/Sub
-Gmail can push new-mail notifications through Pub/Sub to a webhook, which could trigger a Hatchet workflow. The plan keeps the 15-minute poll instead:
-- **A push carries no mail.** It is `{emailAddress, historyId}`, base64-encoded, so the triggered run still calls `history.list` and `messages.get`, as `fetch` does.
-- **It removes no parts:**
-  - `users.watch` expires after 7 days, so a cron is still needed to renew it.
-  - Google recommends a periodic history sync anyway, because notifications can be delayed or dropped.
-- **It adds setup:** a Pub/Sub topic, a publish grant for `gmail-api-push@system.gserviceaccount.com`, and a push subscription.
-- **The endpoint couldn't be authenticated.** Pub/Sub push signs each request with a new OIDC token. Hatchet's inbound webhooks check basic auth, a fixed API key or HMAC, and none of those can verify the token. Hatchet also has no Google or Pub/Sub source.
-- **The gain is invisible.** Mail would be handled within seconds instead of within 15 minutes, but the output is an 08:00 digest.
+### 7. Docs, config
+- `docs/architecture.md`: a new "Email assistant" section with the flow diagram above.
+- `docs/deployment.md`:
+  - an OpenRouter key with credit;
+  - `clasp login` and `task mail-script` per Gmail account, and running `setup()` once;
+  - the script properties;
+  - `task mail-connect`;
+  - `ROAMIND_MAIL_SECRET` and `task webhook`.
+- `README.md`:
+  - the inbox digest's feature line names mail as a source;
+  - the public-surface principle names the `gmail` webhook beside Slack's;
+  - a design principle: "Read Gmail with an Apps Script in each account, so Roamind needs no Gmail OAuth app…" (per README voice).
+- `.env.example`: `ROAMIND_MAIL_SECRET`.
+- **Privacy note in the docs:**
+  - The first 4k characters of each mail not filtered out by Gmail's categories go to OpenRouter, served by hosts that don't keep data.
+  - The mail worth keeping then goes to Roamind and Claude.
+  - Hatchet keeps each event's payload, mail text included, for its retention period.
+  - Memory stores only the notes, not the raw mail.
 
-Push is worth adding if Roamind sends instant alerts, such as a gate change or a cancelled appointment within the hour. It would be a small change:
-- A Hatchet webhook (event key `gmail`) starts the same `mail-account` run, for the address in the payload.
-- `mail-sync` stays, as the watch-renewal and fallback cron.
+## Considered
+
+### Reading Gmail from Roamind (the plan of 2026-10-22)
+A `mail-sync` cron would poll each account through the Gmail API (`connectors/mail`), with an OAuth Desktop client and `oauth2l` for connecting, and `historyId` sync. It was dropped for the script:
+- it needs a Google Cloud OAuth app on the restricted `gmail.readonly` scope, kept "In production" so refresh tokens don't expire;
+- it needs a Gmail client and sync state in Roamind;
+- it can't label mail.
+
+### Gmail push through Pub/Sub
+Gmail can push new-mail notifications through Pub/Sub to a webhook. It was rejected for the earlier plan, and the script makes it unnecessary:
+- A push carries no mail, so the triggered run still has to read it from the Gmail API.
+- Pub/Sub signs each request with a new OIDC token, and Hatchet's webhooks can't verify one. The script signs with HMAC, which Hatchet checks.
+
+### Extracting items in the script
+The script could have DeepSeek extract the full items and Roamind only save them. It was rejected:
+- an extraction made without memory can't tell an update to an existing booking from a new one;
+- it can't link items to goals and people;
+- the schema and prompt would live outside the repo's Go types and tests.
 
 ## Files
 New:
+- `deploy/apps-script/{Code.js,appsscript.json,.clasp.json.example}`
 - `memory/sql-schemas/11_mail.sql`, `memory/store/mail.go` and its test
-- `connectors/mail/{gmail.go,message.go,*_test.go,testdata/}`
-- `agent/mail.go`, `agent/prompts/extract_mail.md`
-- `worker/workflows/{mail_sync.go,mail_account.go}` and their tests, with `testdata/extract_mail.jsonl`
+- `agent/mail.go`, `agent/prompts/relate_mail.md`
+- `worker/workflows/mail_message.go` and its test, with `testdata/relate_mail.jsonl`
 
 Changed:
-- `worker/workflows/{workflows.go,inbox_digest.go}`, `agent/inbox.go`, `agent/prompts/inbox_digest.md` (accounts to reconnect)
-- `worker/cmd/worker/main.go`
-- `Taskfile.yml`, `docs/*`, `README.md`, `.env.example`
-- `connectors/go.mod`, `worker/go.mod`: add the gmail/oauth2 dependencies, edited by hand in `worker/` (no `GOWORK=off go mod tidy`).
+- `worker/cmd/setup-webhook/main.go` (the `gmail` webhook)
+- `worker/workflows/{workflows.go,inbox_digest.go}`, `agent/inbox.go`, `agent/prompts/inbox_digest.md` (stale accounts)
+- `Taskfile.yml` (`mail-connect`, `mail-disconnect`, `mail-script`), `docs/*`, `README.md`, `.env.example`
 
 Reused:
 - `notes.WriteNote` and `notes.Goals` (`memory/store/notes/`)
 - `PutItem` and `InboxLeads` (`memory/store/items.go`)
-- `ToolsNone` structured turns (`agent/jobs.go`, `worker/workflows/job_application.go`)
-- the dispatcher pattern of `news-shorts`
+- `ToolsRecall` structured turns (`worker/workflows/inbox_digest.go`)
+- the Slack webhook's setup (`worker/cmd/setup-webhook`) and Funnel path
 - `storetest` for the store tests
 
-All work goes in one branch and one PR.
+No new Go dependencies. All work goes in one branch and one PR.
 
 ## Verification
-1. **Unit tests:** `go test ./...` in `memory`, `connectors`, `agent` and `worker`. This covers:
+1. **Unit tests:** `go test ./...` in `memory`, `agent` and `worker`. This covers:
    - store CRUD for `mail_accounts` and `mail_messages` on the real SQL files;
-   - Gmail message parsing from testdata (multipart, HTML-only, JSON-LD, history 404 → full sync);
-   - `mail-account` with a recorded `extract_mail.jsonl` turn writing the expected notes and rows. A second mail with the same key reschedules the row, and a cancellation closes it;
-   - `inbox-digest` listing a failed account, and not skipping the day for it.
+   - `mail-message` with a recorded `relate_mail.jsonl` turn writing the expected notes, relations and rows. A second mail with the same key reschedules the row, a cancellation closes it, and a resent message is dropped by `check`;
+   - an unregistered address and a heartbeat, neither of which starts a turn;
+   - `inbox-digest` listing a stale account, and not skipping the day for it.
 2. **Build and init:** `task build && task init`, then check the mail tables in `data/roamind.db`.
-3. **Live run:**
-   - Run `task mail-connect -- sainageswar@gmail.com` for two accounts.
-   - Trigger `mail-sync` with the Hatchet CLI (`hatchet` skill: trigger-and-watch).
-   - Check `mail_messages` statuses, the `items` rows, and the new notes under `data/memory/users/<p>/notes/{tasks,events,people}`. A bill should be a task with `amount`, and an order a delivery event with its tracking link.
+3. **Webhook:** `task webhook` prints the `gmail` URL. A `curl` with a wrong signature gets 403 through the Funnel; one signed with `ROAMIND_MAIL_SECRET` creates a `mail:received` event (`hatchet` skill: trigger-and-watch).
+4. **Live run:**
+   - Run `task mail-connect -- sainageswar@gmail.com <address>` and `task mail-script` for two accounts, then `setup()` in each.
+   - After a trigger run, check the Gmail labels.
+   - Then check the `mail_messages` statuses, the `items` rows, and the new notes under `data/memory/users/<p>/notes/{tasks,events,people}`. A bill should be a task with `amount`, and an order a delivery event with its tracking link, related to its person or goal notes.
    - Run bm `schema_validate` on the notes.
    - The next morning's inbox digest should show the mail's items that are due.
-4. **Failure path:** revoke an account's access in its Google account settings. The next sync should mark it `failed`, and the digest should say it needs reconnecting.
+5. **Failure path:** delete one account's trigger. Two days later the digest should say its mail hasn't arrived.
