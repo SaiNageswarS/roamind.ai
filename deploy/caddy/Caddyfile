@@ -41,3 +41,11 @@
 		header_down Set-Cookie "(?i);\s*domain=[^;]*" ""
 	}
 }
+
+# Jupyter (Notebook 7 at /tree, JupyterLab at /lab) → https://notebook.<tailnet>.ts.net
+# Jupyter asks for no token; this block is its only login. See deploy/bin/run-notebook.sh.
+:443 {
+	bind tailscale/notebook
+	import tailnet_owner_only
+	reverse_proxy 127.0.0.1:8890
+}

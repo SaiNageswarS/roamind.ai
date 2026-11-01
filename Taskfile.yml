@@ -124,6 +124,12 @@ tasks:
           echo "Slack Request URL: https://${host}${webhooks}/slack"
           tailscale funnel status'
 
+  notebook:
+    desc: Install the tailnet notebook's Python environment (JupyterLab, Notebook 7, JAX on CUDA) from notebook/uv.lock
+    sources: [notebook/pyproject.toml, notebook/uv.lock]
+    cmds:
+      - uv sync --project notebook --frozen --managed-python
+
   vllm:
     desc: Install vLLM and download the GPU search models
     cmds:
@@ -144,7 +150,7 @@ tasks:
         mkdir -p "$(dirname "$unit")"
         cat >"$unit" <<UNIT
         [Unit]
-        Description=Roamind (process-compose: caddy, embed, rerank, init, worker)
+        Description=Roamind (process-compose: caddy, embed, rerank, notebook, init, worker)
         After=network-online.target
 
         [Service]
