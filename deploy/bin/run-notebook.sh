@@ -54,7 +54,8 @@ for dev in /dev/nvidia*; do
   [[ -e "$dev" ]] && args+=(--dev-bind "$dev" "$dev")
 done
 
-exec bwrap "${args[@]}" -- "$venv/bin/jupyter" lab \
+# Started as Notebook 7, which opens at /tree; JupyterLab loads with it.
+exec bwrap "${args[@]}" -- "$venv/bin/jupyter" notebook \
   --no-browser --ip=127.0.0.1 --port=8890 --ServerApp.port_retries=0 \
-  --ServerApp.root_dir="$home/notebooks" --ServerApp.default_url=/tree \
+  --ServerApp.root_dir="$home/notebooks" \
   --IdentityProvider.token= --ServerApp.allow_remote_access=True
