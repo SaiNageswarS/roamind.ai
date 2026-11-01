@@ -1,0 +1,20 @@
+# The tailnet notebook's Python environment (task notebook; served by
+# deploy/bin/run-notebook.sh). Add a package with `uv add --project notebook <pkg>`.
+[project]
+name = "roamind-notebook"
+version = "0"
+requires-python = "==3.12.*"
+dependencies = [
+  "jupyterlab>=4.4",
+  "notebook>=7.4",
+  # CUDA 13 wheels: they run on the Blackwell GPU (RTX 5060).
+  "jax[cuda13]>=0.12",
+  "flax",
+  "optax",
+  "numpy",
+  "matplotlib",
+  "ipywidgets",
+]
+
+[tool.uv]
+package = false

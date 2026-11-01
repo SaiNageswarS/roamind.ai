@@ -7,9 +7,10 @@ How Roamind is run and set up. For an overview, see the [README](../README.md).
 ```
 hatchet server start (Hatchet CLI)        process-compose (`process-compose up`)
   postgres + hatchet-lite                    hatchet-ready → waits for /api/ready
-  dashboard/API :8889, gRPC :7078            caddy  → tailnet dashboards (hatchet.<tailnet>.ts.net)
+  dashboard/API :8889, gRPC :7078            caddy  → tailnet dashboards (hatchet., notebook.<tailnet>.ts.net)
   profile "local" (token, addresses)         funnel → public Slack webhook path only
                                              embed/rerank → vLLM search models (GPU, loopback)
+                                             notebook → sandboxed Jupyter with JAX (GPU, loopback :8890)
                                              worker → chat-turn, goal-channels, learning-exercise(s), news-*
 ```
 
@@ -22,13 +23,20 @@ hatchet server start (Hatchet CLI)        process-compose (`process-compose up`)
   - Only the Tailscale logins in `ROAMIND_DASHBOARD_USERS` get in, since the tailnet may be shared.
   - Caddy strips `Domain=localhost` from Hatchet's login cookie, so you can log in under the tailnet name.
   - To add a dashboard, copy the hatchet site block in `deploy/caddy/Caddyfile` with a new device name.
+  - Caddy doesn't finish starting until every device has joined the tailnet. It serves no dashboard until then, and process-compose's readiness probe keeps restarting it. Give a new device a `TS_AUTHKEY` for its first run, or approve it first with a Caddyfile that has only its block and opening the login URL from Caddy's log.
   - Path-based routing doesn't work for Hatchet: its page uses `<base href="/">` and calls `/api` from the site root.
+- **The notebook** (`notebook.<tailnet>.ts.net`) is Jupyter with JAX on the GPU, for small scripts from a phone or laptop.
+  - Notebook 7 opens by default (`/tree`): one document per page, which suits a phone. JupyterLab is at `/lab`. On iOS, Juno Connect can use it as a remote Jupyter server.
+  - Jupyter asks for no token; Caddy's login check is its only gate.
+  - `deploy/bin/run-notebook.sh` runs it in a bubblewrap sandbox. Notebooks can't see the home directory, the repo, `data/` or `.env`, and get no environment from it. They can write only `data/notebook`, which holds the notebooks in `notebooks/`. The network is shared, so they can reach the internet and this machine's loopback ports.
+  - The environment is `notebook/pyproject.toml`, locked in `notebook/uv.lock` and read-only to notebooks: add a package with `uv add --project notebook <pkg>`, then `task notebook` and restart the `notebook` process. `%pip install` fails.
+  - JAX allocates GPU memory as it needs it (`XLA_PYTHON_CLIENT_PREALLOCATE=false`). The two vLLMs hold about 70% of an 8 GB GPU, so a notebook gets about 2 GB; run larger work on the CPU (`JAX_PLATFORMS=cpu`) or with the vLLMs stopped.
 - **The only public endpoint** is Hatchet's webhook path, exposed through Tailscale Funnel.
 - **Caution:** `hatchet server start` binds its ports on all interfaces (0.0.0.0), so tailnet and LAN peers can reach `:8889` directly, bypassing Caddy. Change the default admin password, and firewall those ports, e.g. `sudo ufw deny in on tailscale0 to any port 8889,7078 proto tcp`.
 
 ## Setup
 
-All one-shot steps are tasks in `Taskfile.yml`, run with [Task](https://taskfile.dev) (`go install github.com/go-task/task/v3/cmd/task@v3.54.0`; `task` lists them). process-compose runs the long-lived processes (caddy, embed, rerank, worker), plus `init` once before the worker.
+All one-shot steps are tasks in `Taskfile.yml`, run with [Task](https://taskfile.dev) (`go install github.com/go-task/task/v3/cmd/task@v3.54.0`; `task` lists them). process-compose runs the long-lived processes (caddy, embed, rerank, notebook, worker), plus `init` once before the worker.
 
 1. **Config.** Copy `.env.example` to `.env`.
    - Set `TS_AUTHKEY` (needed only for Caddy's first run) and `ROAMIND_DASHBOARD_USERS` (comma-separated logins, e.g. `you@example.com`).
@@ -43,7 +51,7 @@ All one-shot steps are tasks in `Taskfile.yml`, run with [Task](https://taskfile
    - opens Tailscale Funnel on the webhook path only. The tailnet policy must allow Funnel for this node.
 
    It prints the Slack Request URL; paste it into the Slack app under Event Subscriptions.
-4. **Build.** Install the `sqlite3` CLI and `jq` (`sudo apt install sqlite3 jq`; `task init` uses them), and Google Chrome or Chromium, which the worker uses to render job postings that need JavaScript (`ROAMIND_CHROME_BIN`; without it such postings fail). `task all` builds `bin/caddy`, `bin/worker` and `bin/mcp`; Task skips a binary whose sources haven't changed. `task vllm` installs vLLM (pinned, on a uv-managed Python so Triton finds `Python.h`) and downloads the two search models. This needs an NVIDIA GPU. For memory, install Basic Memory's `bm` CLI on `PATH` with `uv tool install basic-memory` (tested with 0.23.2). Its first start downloads an embedding model.
+4. **Build.** Install the `sqlite3` CLI and `jq` (`sudo apt install sqlite3 jq`; `task init` uses them), and Google Chrome or Chromium, which the worker uses to render job postings that need JavaScript (`ROAMIND_CHROME_BIN`; without it such postings fail). `task all` builds `bin/caddy`, `bin/worker` and `bin/mcp`; Task skips a binary whose sources haven't changed. `task vllm` installs vLLM (pinned, on a uv-managed Python so Triton finds `Python.h`) and downloads the two search models. This needs an NVIDIA GPU. `task notebook` installs the notebook's environment (JupyterLab, Notebook 7, JAX with CUDA 13, Flax, Optax) from `notebook/uv.lock`. For memory, install Basic Memory's `bm` CLI on `PATH` with `uv tool install basic-memory` (tested with 0.23.2). Its first start downloads an embedding model.
 5. **Run.** `process-compose up` from the repo root. It reads `process-compose.yaml` and `.env`, and runs `task init` before the worker: with the `sqlite3` CLI it creates the store's tables from `memory/sql-schemas/` and loads the curated interests with `memory/seed/interests.sql`, then brings every user's Basic Memory project up to date: the settings in `memory/basic-memory-config.json` (search models) go into its `config.json`, and the schema notes in `memory/basic-memory-schemas/` replace the project's copies that differ. New users' projects are created by the `user-setup` workflow. Every step is safe to repeat, so editing a file in `memory/` takes effect on the next restart of the whole service (`systemctl --user restart roamind`); restarting only the worker in process-compose doesn't rerun `init`. The worker refuses to start on a store without tables. Then log into `https://hatchet.<tailnet>.ts.net` as `admin@example.com` / `Admin123!!` and change the password.
 
    To start at boot instead, `task service` installs and enables a `roamind` systemd user service that runs `process-compose up --tui=false` from the repo root. Manage it with `systemctl --user start|stop|status roamind`, and attach with `process-compose attach`. It starts at boot without a login only when lingering is on (`sudo loginctl enable-linger $USER`).
