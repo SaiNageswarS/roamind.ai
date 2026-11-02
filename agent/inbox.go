@@ -17,6 +17,9 @@ type InboxDigest struct {
 	Date     string // today, an ISO date
 	Weekday  string
 	Items    []InboxItem
+	// StaleMail are the user's Gmail accounts whose mail script sent
+	// nothing for two days.
+	StaleMail []string
 }
 
 // InboxItem is one of the user's items that is due, from the items table.

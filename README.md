@@ -19,7 +19,7 @@ Novelty is rated against other self-hosted personal agents:
 | **Job applications, drafted daily** | Your resume lives in your memory: upload one in the web app and it's written there, or tell Roamind about your work in Slack. Name your roles and regions, and once a day, at a time of its own for each user, Roamind searches applicant tracking sites, judges each new posting's fit against your resume, and writes a cover letter and an answer sheet for the form's questions. Paste links to postings you found and get the same for each within seconds: in the web app to review there, or in Slack, where the drafts come back in the thread, no web sign-in needed. You apply yourself; new ones from the search come only once the last ones are reviewed. | ★★ |
 | **Feeds can't steer the agent** | The model that ranks third-party feed text runs with no tools, no memory and no saved session, in a throwaway folder. A prompt injection in a feed can only change a score. | ★★ |
 | **Interests the agent curates** | Ask in chat to follow, mute or add a news interest. Through Roamind's own MCP server, the agent adds new interests with feeds it has checked and a rubric it writes. Your 👍/👎 reactions and replies to a digest weigh its interests in later ones. | ★★ |
-| **A morning inbox digest** | Tell Roamind about a bill, a flight or an appointment, and each morning it posts what's due in your private `#inbox` channel: overdue tasks first, then today and what's coming up, each with what you need from your memory, such as the booking reference or what to pack. Reply "done" in its thread to close an item. Days with nothing due cost nothing and post nothing. | ★★ |
+| **A morning inbox digest** | Tell Roamind about a bill, a flight or an appointment, or let it read your Gmail, and each morning it posts what's due in your private `#inbox` channel: overdue tasks first, then today and what's coming up, each with what you need from your memory, such as the booking reference or what to pack. Reply "done" in its thread to close an item. Days with nothing due cost nothing and post nothing. | ★★ |
 | **Memory with evidence** | Facts are typed, linked Markdown notes: Person, Place, Preference, Event, Goal, Progress, Task and Exercise. Each fact records how it was learned (stated, inferred, observed or corrected), from where and when. Read and edit them like any files. Whether a task or event is open, done or cancelled, and when to remind you of it, lives in a SQLite table the agent keeps through Roamind's MCP server, so what's due is one query. | ★★ |
 | **Claude Code is the agent** | Every turn is `claude -p`, with web search, files, PDFs, images and a shell. A Slack thread is one resumable Claude session, and the conversation lives only in Claude's own session files. | ★★ |
 | **A sandboxed workspace per user** | Each user has a private, persistent folder where Claude can write files and run commands. Files you share in Slack land in it, and the shell runs in a bubblewrap sandbox. | ★★ |
@@ -27,7 +27,7 @@ Novelty is rated against other self-hosted personal agents:
 | **Durable runs** | Every message, scheduled job and new-user setup is a [Hatchet](https://hatchet.run) workflow, with retries, per-user ordering, and runs you can trace and replay. | ★ |
 | **Local memory search** | Memory search uses Qwen3 embedding and re-ranking models on your own GPU, so notes never leave the machine for search. | ★ |
 | **Streamed answers with citations** | Replies stream into the thread as Claude writes them, with numbered sources. | ★ |
-| **One-machine deployment** | process-compose and a systemd unit run everything; `task init` prepares the database and memory, and Tailscale exposes only the Slack webhook. | ★ |
+| **One-machine deployment** | process-compose and a systemd unit run everything; `task init` prepares the database and memory, and Tailscale exposes only the Hatchet webhooks. | ★ |
 
 ## Security
 
@@ -39,11 +39,12 @@ Novelty is rated against other self-hosted personal agents:
   | News ranking (reads third-party feed text) | **None**: no tools, no memory, a throwaway directory, no saved session |
   | Job search on the web | WebSearch and WebFetch only: no files, shell or memory; blocked domains are denied |
   | Job ranking and tailoring (read posting text) | **None**, as for news ranking |
+  | Relating mail and drafting the inbox digest (read third-party mail) | Memory's read tools and WebSearch only: the harness writes the notes and items |
 
 - **Sandboxed shell.** Bash runs in a bubblewrap sandbox that sees only the user's workspace: no home directory, other users, secrets or local ports. Nothing runs unsandboxed.
 - **Isolated users.** Each user has their own workspace, memory database and config. Memory and Roamind's MCP server are pinned to the turn's user.
 - **Safe fetching.** The feed and job-posting readers connect only to public addresses and read at most 8 MB.
-- **Small public surface.** Only the Slack webhook path is public, via Tailscale Funnel. Dashboards and the notebook are tailnet-only, for listed logins.
+- **Small public surface.** Only the Hatchet webhooks path is public, via Tailscale Funnel: Slack's, and the signed gmail webhook of the mail scripts. Dashboards and the notebook are tailnet-only, for listed logins.
 - **Sandboxed notebook.** The tailnet Jupyter runs in a bubblewrap sandbox: notebooks see neither `.env`, `data/` nor the home directory, and can write only their own folder. The web app is hosted on Firebase; the worker only connects out to it.
 - **No accounts.** Identity is the member's Slack-verified email. Only your workspace's members can use the agent. Web users sign in with Google, and their verified email is their identity.
 - **Nothing is submitted for you.** The job assistant drafts applications; it never fills in or submits a form.
@@ -96,11 +97,12 @@ Details: [docs/architecture.md](docs/architecture.md); the web app's data contra
    - State is recorded before side effects, so a retry never creates a second channel or post.
 8. **Preferred upstream built-ins over wrappers.**
    - `claude -p` owns the tool-calling loop, and Basic Memory serves its own MCP server pinned with `--project`.
-   - Hatchet provides scheduling, retries and concurrency.
+   - Hatchet provides scheduling, retries and concurrency, and checks the signatures of inbound webhooks.
+   - Gmail is read by an Apps Script in each account, so Roamind needs no Gmail OAuth app, token store or sync state.
    - Roamind adds no wrapper services around them.
 9. **Applied least privilege per turn and physical isolation per user.**
    - A turn gets only the tools its input warrants.
-   - Text from third-party feeds and job postings is judged with no tools at all.
+   - Text from third-party feeds and job postings is judged with no tools at all; mail is related to memory with read-only tools.
    - Each user has their own sandboxed workspace, memory database and config.
 10. **Stored little, and stored derived values once.** Conversations live only in Claude's session files, and SQLite just maps threads to sessions. A user's memory project name is assigned once and stored, not computed per turn.
 11. **Wrote prompts that give data and say what to do.** When the model got something wrong, the fix was the right data or a positive instruction rather than a prohibition. Note schemas, not the system prompt, own the rules for each note type.

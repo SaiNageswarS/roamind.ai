@@ -14,6 +14,7 @@ vars:
   CADDY_VERSION: v2.11.7
   CADDY_TAILSCALE: de41b249af4f
   XCADDY_VERSION: v0.4.7
+  CLASP_VERSION: 2.4.2
   VLLM_VERSION: 0.30.0
   SEARCH_MODELS: Qwen/Qwen3-Embedding-0.6B Qwen/Qwen3-Reranker-0.6B
   # How init brings a project's bm config.json ($cfg) up to date: the
@@ -90,7 +91,7 @@ tasks:
         done
 
   hatchet-env:
-    desc: Start the Hatchet server, register the Slack webhook, open the Funnel
+    desc: Start the Hatchet server, register the webhooks, open the Funnel
     cmds:
       - task: hatchet
       - task: webhook
@@ -103,17 +104,55 @@ tasks:
       - "{{.WITH_HATCHET}} sh -c 'until curl -sf \"$HATCHET_CLIENT_SERVER_URL/api/ready\" >/dev/null; do sleep 2; done'"
 
   webhook:
-    desc: Create or update the Hatchet Slack webhook
+    desc: Create or update the Hatchet webhooks, slack and gmail, for the secrets set
     cmds:
       - |
-        if [ -z "${SLACK_SIGNING_SECRET:-}" ]; then
-          echo "SLACK_SIGNING_SECRET not set; skipping Slack webhook"
+        if [ -z "${SLACK_SIGNING_SECRET:-}" ] && [ -z "${ROAMIND_MAIL_SECRET:-}" ]; then
+          echo "neither SLACK_SIGNING_SECRET nor ROAMIND_MAIL_SECRET is set; skipping webhooks"
           exit 0
         fi
         {{.WITH_HATCHET}} go run ./worker/cmd/setup-webhook
 
+  # Mail reaches Roamind from an Apps Script in each Gmail account
+  # (deploy/apps-script), through the gmail webhook; these record which
+  # user an account belongs to, and push the script.
+  mail-connect:
+    desc: "Connect a Gmail account to a Roamind user, e.g. task mail-connect -- you@example.com you@gmail.com"
+    cmds:
+      - |
+        set -- {{.CLI_ARGS}}
+        [ $# -eq 2 ] || { echo "usage: task mail-connect -- <roamind user email> <gmail address>" >&2; exit 1; }
+        db="${ROAMIND_DATA_DIR:-./data}/roamind.db"
+        quote() { printf "'%s'" "$(printf %s "$1" | sed "s/'/''/g")"; }
+        user="$(sqlite3 -bail "$db" "SELECT id FROM users WHERE lower(email) = lower(trim($(quote "$1")))")"
+        [ -n "$user" ] || { echo "no Roamind user with email $1" >&2; exit 1; }
+        sqlite3 -bail "$db" "INSERT INTO mail_accounts (address, user_id, connected_at)
+          VALUES (trim($(quote "$2")), '$user', CAST(strftime('%s', 'now') AS INTEGER))
+          ON CONFLICT (address) DO UPDATE SET user_id = excluded.user_id, connected_at = excluded.connected_at"
+        echo "connected $2 to $1; push the script with task mail-script and run its setup()"
+
+  mail-disconnect:
+    desc: "Disconnect a Gmail account, e.g. task mail-disconnect -- you@gmail.com (then delete its script's trigger)"
+    cmds:
+      - |
+        set -- {{.CLI_ARGS}}
+        [ $# -eq 1 ] || { echo "usage: task mail-disconnect -- <gmail address>" >&2; exit 1; }
+        addr="$(printf %s "$1" | sed "s/'/''/g")"
+        sqlite3 -bail "${ROAMIND_DATA_DIR:-./data}/roamind.db" "DELETE FROM mail_accounts WHERE address = trim('$addr')"
+        echo "disconnected $1"
+
+  mail-script:
+    desc: "Push the mail Apps Script to a Gmail account's script project, e.g. task mail-script -- <script id>; clasp login as that account first"
+    dir: deploy/apps-script
+    cmds:
+      - |
+        set -- {{.CLI_ARGS}}
+        [ $# -eq 1 ] || { echo "usage: task mail-script -- <script id>" >&2; exit 1; }
+        printf '{"scriptId": "%s"}\n' "$1" > .clasp.json
+        npx --yes @google/clasp@{{.CLASP_VERSION}} push --force
+
   funnel:
-    desc: Expose only the Slack webhook path publicly via Tailscale Funnel
+    desc: Expose only the Hatchet webhooks path (Slack, gmail) publicly via Tailscale Funnel
     cmds:
       - |
         {{.WITH_HATCHET}} bash -c '

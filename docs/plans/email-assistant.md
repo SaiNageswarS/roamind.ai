@@ -1,6 +1,11 @@
-# Email assistant (plan; mail still to build)
+# Email assistant (plan; built)
 
-Status: drafted 2026-10-21, revised 2026-10-22, redesigned 2026-11-01 around Google Apps Script. What is left is reading mail. Everything mail feeds into is built and described in `docs/architecture.md`:
+Status: drafted 2026-10-21, revised 2026-10-22, redesigned 2026-11-01 around Google Apps Script, built 2026-11-02. How it works now is in the Email assistant section of `docs/architecture.md`, and setting it up in `docs/deployment.md`. The build differs from this plan in that:
+- `mail-message` runs are serialized across all accounts, not per user: the webhook's event names the account, so its concurrency key can't be the user.
+- An update rewrites the note's file in place, found by permalink, because bm names a file after the title it was first written with; writing it under another title made a second note.
+- The script labels per message through the Gmail advanced service; `GmailApp` labels whole threads.
+
+Everything mail feeds into is built and described in `docs/architecture.md`:
 - the Task and Event schemas (PR #8);
 - the `items` table and the `items` tools (PRs #10 and #11);
 - the inbox channel and the morning `inbox-digest` (2026-10-22).

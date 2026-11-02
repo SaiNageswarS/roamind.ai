@@ -31,7 +31,7 @@ hatchet server start (Hatchet CLI)        process-compose (`process-compose up`)
   - `deploy/bin/run-notebook.sh` runs it in a bubblewrap sandbox. Notebooks can't see the home directory, the repo, `data/` or `.env`, and get no environment from it. They can write only `data/notebook`, which holds the notebooks in `notebooks/`. The network is shared, so they can reach the internet and this machine's loopback ports.
   - The environment is `notebook/pyproject.toml`, locked in `notebook/uv.lock` and read-only to notebooks: add a package with `uv add --project notebook <pkg>`, then `task notebook` and restart the `notebook` process. `%pip install` fails.
   - JAX allocates GPU memory as it needs it (`XLA_PYTHON_CLIENT_PREALLOCATE=false`). The two vLLMs hold about 70% of an 8 GB GPU, so a notebook gets about 2 GB; run larger work on the CPU (`JAX_PLATFORMS=cpu`) or with the vLLMs stopped.
-- **The only public endpoint** is Hatchet's webhook path, exposed through Tailscale Funnel.
+- **The only public endpoint** is Hatchet's webhooks path, exposed through Tailscale Funnel: the Slack webhook, and the gmail webhook the mail scripts post to (see Email assistant in `docs/architecture.md`).
 - **Caution:** `hatchet server start` binds its ports on all interfaces (0.0.0.0), so tailnet and LAN peers can reach `:8889` directly, bypassing Caddy. Change the default admin password, and firewall those ports, e.g. `sudo ufw deny in on tailscale0 to any port 8889,7078 proto tcp`.
 
 ## Setup
@@ -55,6 +55,19 @@ All one-shot steps are tasks in `Taskfile.yml`, run with [Task](https://taskfile
 5. **Run.** `process-compose up` from the repo root. It reads `process-compose.yaml` and `.env`, and runs `task init` before the worker: with the `sqlite3` CLI it creates the store's tables from `memory/sql-schemas/` and loads the curated interests with `memory/seed/interests.sql`, then brings every user's Basic Memory project up to date: the settings in `memory/basic-memory-config.json` (search models) go into its `config.json`, and the schema notes in `memory/basic-memory-schemas/` replace the project's copies that differ. New users' projects are created by the `user-setup` workflow. Every step is safe to repeat, so editing a file in `memory/` takes effect on the next restart of the whole service (`systemctl --user restart roamind`); restarting only the worker in process-compose doesn't rerun `init`. The worker refuses to start on a store without tables. Then log into `https://hatchet.<tailnet>.ts.net` as `admin@example.com` / `Admin123!!` and change the password.
 
    To start at boot instead, `task service` installs and enables a `roamind` systemd user service that runs `process-compose up --tui=false` from the repo root. Manage it with `systemctl --user start|stop|status roamind`, and attach with `process-compose attach`. It starts at boot without a login only when lingering is on (`sudo loginctl enable-linger $USER`).
+
+**Email assistant** (optional). Each Gmail account runs its own Apps Script, which sends its mail to Roamind; Roamind needs no Gmail access.
+
+1. Set `ROAMIND_MAIL_SECRET` in `.env` (`openssl rand -hex 32`), then run `task webhook`. It prints the `gmail` webhook's URL. The Funnel already covers it.
+2. For each Gmail account:
+   - Run `task mail-connect -- <roamind user email> <gmail address>`. The user must have talked to Roamind already.
+   - Signed in as that account, create a project at [script.google.com](https://script.google.com) and copy its script id from Project settings.
+   - Run `npx @google/clasp login` as that account, then `task mail-script -- <script id>`, which pushes `deploy/apps-script`.
+   - In Project settings → Script properties, set `OPENROUTER_API_KEY` (a key with credit), `OPENROUTER_MODEL` (a DeepSeek model id on OpenRouter, e.g. `deepseek/deepseek-chat`), `WEBHOOK_URL` and `WEBHOOK_SECRET` (`ROAMIND_MAIL_SECRET`).
+   - Run `setup` once in the editor. It asks for the script's permissions (Gmail, fetching URLs, triggers), creates the `roamind/*` labels and installs the 15-minute trigger.
+3. Check the account's Executions page and its `roamind/*` labels in Gmail, and the `mail-message` runs in Hatchet.
+
+`task mail-disconnect -- <address>` removes an account; delete its script's trigger too. A script that stops running shows up in the inbox digest after two days.
 
 Development commands:
 - `task test` and `task vet` run in every module.

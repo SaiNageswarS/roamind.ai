@@ -14,6 +14,8 @@
 //   - inbox-digests: each morning, an inbox-digest run per user.
 //   - inbox-digest: check-skip → draft → post, the user's items that are
 //     due, with what they need for each from memory.
+//   - mail-message: check → relate → save, one mail a Gmail account's
+//     Apps Script sent to the gmail webhook, saved as notes and items.
 //   - job-search: at JobSearchHours, a job-hunt run per web user.
 //   - job-hunt: check-skip → resume, find → pick → spawn.
 //   - job-links: resume → pick → spawn, for the postings a user linked to,
@@ -164,7 +166,7 @@ func Register(c *hatchet.Client, d Deps) (wfs []hatchet.WorkflowBase, listen fun
 	return append(wfs,
 		ChatTurn(c, d), setup, goals, exercise, LearningExercises(c, d, exercise),
 		digest, NewsShorts(c, d, digest, setup), NewsReaction(c, d),
-		inbox, InboxDigests(c, d, inbox, setup),
+		inbox, InboxDigests(c, d, inbox, setup), MailMessage(c, d),
 	), listen
 }
 

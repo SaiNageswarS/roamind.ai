@@ -47,6 +47,9 @@ const SourceChat = "chat"
 // DeliveryKind is the event kind of an order arriving.
 const DeliveryKind = "delivery"
 
+// EventKinds are the Event schema's kinds.
+var EventKinds = []string{"appointment", "travel", "stay", "ticket", "meeting", DeliveryKind, "milestone", "other"}
+
 // isoDate is the layout of ISO dates.
 const isoDate = "2006-01-02"
 

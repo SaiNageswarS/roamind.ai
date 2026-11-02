@@ -189,6 +189,30 @@ Each morning, users get a message on what needs their attention, from their item
   2. **`draft`** is one agent turn (`agent/prompts/inbox_digest.md`), given each due item's key, kind, date and note permalink. It reads the notes and their related notes from memory for what the user needs: the time and place, the booking reference, a bill's amount, an event's checklist with the user's preferences for that kind of event. It returns the digest as structured output, grouped under Overdue, Today and Coming up, each item ending with its key. The turn runs unattended, so it gets `ToolsRecall` (see Design rules): it can read memory and search the web, and can't change notes, files or items. It runs in the workspace directory with a saved session.
   3. **`post`** reserves the day in `inbox_digests` (unique per user and day), posts the digest in the inbox channel, and records it with its message and text. The day is given back if the post fails. The digest's thread is saved with the drafting session, so a reply ("done", "paid", "moved to Tuesday") resumes it, knows which item is meant, and changes it with the items tools, which chat turns get.
 
+## Email assistant
+Mail from the user's Gmail accounts becomes task, event and person notes, each task and event with its `items` row, so the inbox digest shows it when it is due.
+
+```
+Gmail ─▶ Apps Script, per account (deploy/apps-script/Code.js), every 15 minutes
+           new mail ─▶ OpenRouter (DeepSeek, providers that keep no data): broad category
+           label roamind/<category>; skip stops here
+           POST, signed ─▶ Tailscale Funnel ─▶ Hatchet webhook gmail ─event mail:received─▶ worker: mail-message
+                                                                                               check ─▶ relate ─▶ save
+           label roamind/sent once the webhook answers 200                                   notes + items ─▶ inbox digest
+```
+
+- **Reading mail:** Roamind has no Gmail access of its own. An Apps Script in each account, authorized by its owner, finds new mail in the inbox (without the promotions, social and forums tabs) and in sent mail, where the user's commitments are. It takes at most 20 messages a run, oldest first.
+  - Labels are per message, through the Gmail advanced service: `roamind/<category>` on every message, and `roamind/sent` once the webhook accepts it. Mail found while Roamind is down stays unlabeled and is sent on a later run.
+  - The model only sorts mail into `bill`, `travel`, `order`, `appointment`, `commitment`, `person`, `other` or `skip`, from the first 4,000 characters. `skip` (newsletters, notifications, codes, marketing) never leaves Gmail.
+  - The script sends a heartbeat once a day when it posted nothing else.
+- **The webhook:** `gmail` is a generic Hatchet webhook (`worker/cmd/setup-webhook`), under the webhooks path the Funnel already makes public. Hatchet checks the hex HMAC-SHA256 of the raw body in `X-Roamind-Signature` against `ROAMIND_MAIL_SECRET`, which every account's script shares. It has no timestamp, so a request can be replayed, which `check` makes harmless.
+- **The `mail-message` DAG** (`worker/workflows/mail_message.go`), serialized across all accounts, since the event names the account rather than the user:
+  1. **`check`** finds the account in `mail_accounts` (`task mail-connect`) and records the request as `seen_at`. Heartbeats, accounts not connected, users without memory, and messages `mail_messages` already holds are skipped there. A message whose run failed is taken again, so a replay retries it.
+  2. **`relate`** is one agent turn (`agent/prompts/relate_mail.md`) with structured output. The mail is third-party text, so the turn gets `ToolsRecall`: it reads memory and searches the web, and can't change notes, files or items. It searches memory for the booking, order or invoice by its reference number, the sender, the goal or event, and an earlier commitment, and returns one item per real-world thing: a kind, the note to update or a new note's title and folder, the note's whole content, and for tasks and events the item's key, dates and state. Bills get `remind_on` three days before due.
+  3. **`save`** writes each note through bm, then its row with `PutItem` (`source` `mail:<address>/<message id>`). An update rewrites the note's file in place, found by permalink (`notes.FindNote`), because bm names a file after the title it was first written with. A new note must be in its schema's folder; a new person whose address a note in `people/` already lists is dropped. Dropped items are listed in the run's output, and the others are still saved. The message ends `done`, or `skipped` when nothing was saved; an on-failure task marks it `failed`.
+- **A quiet account:** `inbox-digest`'s `check-skip` lists the user's accounts with no request for two days (`MailStaleAfter`), and the day isn't skipped for them, so the digest asks the user to check that script.
+- **Privacy:** the first 4,000 characters of each mail outside the filtered tabs go to OpenRouter. What isn't skipped goes to Roamind and Claude. Hatchet keeps each event's payload, the mail's text included, for its retention period. Memory keeps only the notes.
+
 ## Job assistant (web channel)
 The job assistant is the first feature of the web channel, Roamind's web app, a separate repo on Firebase: users sign in with Google, upload a resume and give roles, regions and notes. The user's resume lives in their memory, as their own Person note: an upload is written there, and a Slack user's chats may have put it there already. The worker finds postings, and takes the links users send in the web app or in Slack; it writes a cover letter and answer sheet for each from that note, and delivers them where the request came from: to Firestore, for review in the web app, or to the Slack thread. A Slack user needn't use the web app, and a user may use both. The user applies on their own. Nothing is submitted or filled in on any site. The data contract, with the security rules, is [web.md](web.md).
 
