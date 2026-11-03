@@ -12,7 +12,7 @@ func TestHasContact(t *testing.T) {
 	root := n.NotesDir("bm-u-sai-1")
 	files := map[string]string{
 		"people/Asha.md": "---\ntitle: Asha\ntype: person\npermalink: bm-u-sai-1/people/asha\n---\n\n" +
-			"- [relationship] dentist\n- [contact] Asha Rao <Asha@Clinic.example>\n",
+			"- [relationship] dentist\n- [contact] Asha Rao <Asha@Clinic.example>\n- [contact] +91 98480 22338\n",
 		"tasks/Contact.md":  "---\ntitle: Contact\ntype: task\npermalink: bm-u-sai-1/tasks/contact\n---\n- [contact] bob@x.com\n",
 		"people/readme.txt": "- [contact] bob@x.com\n",
 	}
@@ -23,7 +23,10 @@ func TestHasContact(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for contact, want := range map[string]bool{"asha@clinic.example": true, " ASHA@clinic.example ": true, "bob@x.com": false, "": false} {
+	for contact, want := range map[string]bool{"asha@clinic.example": true, " ASHA@clinic.example ": true,
+		"Dr Asha <asha@clinic.example>": true, "+91 98480 22338": true, "bob@x.com": false, "": false,
+		// Only whole addresses match.
+		"sha@clinic.example": false, "asha@clinic.exam": false, "rao": false} {
 		if has, err := n.HasContact("bm-u-sai-1", contact); err != nil || has != want {
 			t.Errorf("HasContact(%q) = %v %v", contact, has, err)
 		}
@@ -93,6 +96,9 @@ func TestPermalink(t *testing.T) {
 		{"events/2026", "Parents' flight Dusseldorf to Hyderabad 2026-11-12", "p/events/2026/parents-flight-dusseldorf-to-hyderabad-2026-11-12"},
 		{"tasks/", "Pay Acme INV-7", "p/tasks/pay-acme-inv-7"},
 		{"people", "Dr. Asha Rao", "p/people/dr-asha-rao"},
+		{"tasks", "కరెంటు బిల్లు 2026", "p/tasks/కరెంటు-బిల్లు-2026"},
+		{"tasks", "Zahlung für Müller", "p/tasks/zahlung-für-müller"},
+		{"tasks", "🙂 !!", ""},
 	} {
 		if got := Permalink("p", c.folder, c.title); got != c.want {
 			t.Errorf("Permalink(%q, %q) = %q", c.folder, c.title, got)

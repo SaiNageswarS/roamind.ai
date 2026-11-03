@@ -60,14 +60,14 @@ All one-shot steps are tasks in `Taskfile.yml`, run with [Task](https://taskfile
 
 1. Set `ROAMIND_MAIL_SECRET` in `.env` (`openssl rand -hex 32`), then run `task webhook`. It prints the `gmail` webhook's URL. The Funnel already covers it.
 2. For each Gmail account:
-   - Run `task mail-connect -- <roamind user email> <gmail address>`. The user must have talked to Roamind already.
+   - Run `task mail-connect -- <roamind user email> <gmail address>`. The user must have talked to Roamind already. It prints the account's key for its script; running it again makes a new key, which the script must then be given.
    - Signed in as that account, create a project at [script.google.com](https://script.google.com) and copy its script id from Project settings.
    - Run `npx @google/clasp login` as that account, then `task mail-script -- <script id>`, which pushes `deploy/apps-script`.
-   - In Project settings → Script properties, set `OPENROUTER_API_KEY` (a key with credit), `OPENROUTER_MODEL` (a DeepSeek model id on OpenRouter, e.g. `deepseek/deepseek-chat`), `WEBHOOK_URL` and `WEBHOOK_SECRET` (`ROAMIND_MAIL_SECRET`).
+   - In Project settings → Script properties, set `OPENROUTER_API_KEY` (a key with credit), `OPENROUTER_MODEL` (a DeepSeek model id on OpenRouter, e.g. `deepseek/deepseek-chat`), `WEBHOOK_URL`, `WEBHOOK_SECRET` (`ROAMIND_MAIL_SECRET`) and `ACCOUNT_SECRET` (the key `task mail-connect` printed).
    - Run `setup` once in the editor. It asks for the script's permissions (Gmail, fetching URLs, triggers), creates the `roamind/*` labels and installs the 15-minute trigger.
 3. Check the account's Executions page and its `roamind/*` labels in Gmail, and the `mail-message` runs in Hatchet.
 
-`task mail-disconnect -- <address>` removes an account; delete its script's trigger too. A script that stops running shows up in the inbox digest after two days.
+`task mail-disconnect -- <address>` removes an account; delete its script's trigger too. A script that stops running shows up in the inbox digest after two days, and mail that couldn't be saved shows up there for a week. To send a mail again, remove its `roamind/sent` label, or its `roamind/error` label for one the script gave up on.
 
 Development commands:
 - `task test` and `task vet` run in every module.

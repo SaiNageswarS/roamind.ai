@@ -117,7 +117,7 @@ tasks:
   # (deploy/apps-script), through the gmail webhook; these record which
   # user an account belongs to, and push the script.
   mail-connect:
-    desc: "Connect a Gmail account to a Roamind user, e.g. task mail-connect -- you@example.com you@gmail.com"
+    desc: "Connect a Gmail account to a Roamind user and print its script's key, e.g. task mail-connect -- you@example.com you@gmail.com"
     cmds:
       - |
         set -- {{.CLI_ARGS}}
@@ -126,10 +126,18 @@ tasks:
         quote() { printf "'%s'" "$(printf %s "$1" | sed "s/'/''/g")"; }
         user="$(sqlite3 -bail "$db" "SELECT id FROM users WHERE lower(email) = lower(trim($(quote "$1")))")"
         [ -n "$user" ] || { echo "no Roamind user with email $1" >&2; exit 1; }
-        sqlite3 -bail "$db" "INSERT INTO mail_accounts (address, user_id, connected_at)
-          VALUES (trim($(quote "$2")), '$user', CAST(strftime('%s', 'now') AS INTEGER))
-          ON CONFLICT (address) DO UPDATE SET user_id = excluded.user_id, connected_at = excluded.connected_at"
-        echo "connected $2 to $1; push the script with task mail-script and run its setup()"
+        # The account's own key, which its script signs with; connecting
+        # again makes a new one.
+        secret="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+        [ ${#secret} -eq 64 ] || { echo "could not make a key" >&2; exit 1; }
+        sqlite3 -bail "$db" "INSERT INTO mail_accounts (address, user_id, secret, connected_at)
+          VALUES (trim($(quote "$2")), '$user', '$secret', CAST(strftime('%s', 'now') AS INTEGER))
+          ON CONFLICT (address) DO UPDATE SET user_id = excluded.user_id, secret = excluded.secret,
+            connected_at = excluded.connected_at"
+        echo "connected $2 to $1"
+        echo "set the script property ACCOUNT_SECRET of $2's script to:"
+        echo "  $secret"
+        echo "then push the script with task mail-script and run its setup()"
 
   mail-disconnect:
     desc: "Disconnect a Gmail account, e.g. task mail-disconnect -- you@gmail.com (then delete its script's trigger)"

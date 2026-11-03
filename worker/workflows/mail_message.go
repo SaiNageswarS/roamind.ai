@@ -2,6 +2,9 @@ package workflows
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -26,8 +29,8 @@ import (
 // Each Gmail account's Apps Script (deploy/apps-script) gives its new mail
 // a broad category and posts it to the gmail webhook, which Hatchet checks
 // the signature of and turns into a MailEventKey event. check finds the
-// account's user and records the message, so a message sent again is
-// related once; relate has the agent find what the mail is about in
+// account's user, checks the request is signed with the account's own key,
+// and records the message, so a message sent again is related once; relate has the agent find what the mail is about in
 // memory and say which notes to write; save writes them, with the item
 // rows of tasks and events, which the inbox digest shows when due.
 const MailMessageName = "mail-message"
@@ -40,11 +43,35 @@ const MailEventKey = "mail:received"
 // even its daily heartbeat, before the inbox digest says so.
 const MailStaleAfter = 48 * time.Hour
 
+// MailStuckAfter is how long after its run started a message that was
+// never finished, as when its run was cancelled, can be picked again, and
+// is in the inbox digest.
+const MailStuckAfter = time.Hour
+
+// MailUnsavedFor is how long the inbox digest lists a message that wasn't
+// saved, until it is sent again.
+const MailUnsavedFor = 7 * 24 * time.Hour
+
 // MailInput is a request of a mail script: a message, or a heartbeat with
-// only the address.
+// only the address and date. Signature is the hex HMAC-SHA256, keyed with
+// the account's secret, of its address, message id and date, each ending
+// in a line break; the webhook's own signature, which Hatchet checks, has
+// a key every script knows.
 type MailInput struct {
 	agent.MailMessage
-	Heartbeat bool `json:"heartbeat,omitempty"`
+	Heartbeat bool   `json:"heartbeat,omitempty"`
+	Signature string `json:"signature,omitempty"`
+}
+
+// mailSignature is what an account's script signs in with secret.
+func mailSignature(secret string, in MailInput) string {
+	key, err := hex.DecodeString(secret)
+	if err != nil || len(key) == 0 {
+		return ""
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(in.Address + "\n" + in.MessageID + "\n" + in.Date + "\n"))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // mailCheck is check's result; Skip is always present, so the later
@@ -139,6 +166,13 @@ func (d Deps) checkMail(ctx context.Context, in MailInput) (mailCheck, error) {
 		out.Skip = "the account " + in.Address + " is not connected"
 		return out, nil
 	}
+	want := mailSignature(acct.Secret, in)
+	if want == "" || !hmac.Equal([]byte(strings.ToLower(in.Signature)), []byte(want)) {
+		// Another account's script, or one with an old key.
+		slog.Warn("mail with a wrong account signature", "address", in.Address)
+		out.Skip = "the request is not signed with the key of " + in.Address
+		return out, nil
+	}
 	if err := d.Store.SeenMail(ctx, acct.Address, d.now()); err != nil {
 		return out, err
 	}
@@ -159,7 +193,7 @@ func (d Deps) checkMail(ctx context.Context, in MailInput) (mailCheck, error) {
 		return out, nil
 	}
 	ok, err := d.Store.PickMessage(ctx, store.MailMessage{Address: acct.Address, MessageID: in.MessageID,
-		UserID: u.ID, Category: in.Category})
+		UserID: u.ID, Category: in.Category, Subject: in.Subject, Link: in.Link}, d.now().Add(-MailStuckAfter))
 	if err != nil {
 		return out, err
 	}
@@ -280,24 +314,22 @@ func (d Deps) saveRelated(ctx context.Context, u *store.User, in MailInput, it a
 	if content == "" {
 		return "", "no content", nil
 	}
+	// The note's file is named title, which bm makes its title.
 	var folder, title string
 	found, err := d.Memory.FindNote(ctx, project, strings.TrimSpace(it.Note))
 	if err != nil {
 		return "", "", err
 	}
-	switch {
-	case found != nil:
-		if found.Type != it.Kind {
-			return "", "the note " + it.Note + " has type " + found.Type + ", not " + it.Kind, nil
-		}
-		permalink, folder, title = found.Permalink, found.Folder, found.Name
-	default:
+	if found == nil {
 		folder, title = strings.Trim(strings.TrimSpace(it.Folder), "/"), strings.TrimSpace(it.Title)
 		if !mailFolders[it.Kind].MatchString(folder) {
 			return "", "folder " + it.Folder + " is not where " + it.Kind + " notes go", nil
 		}
 		if title == "" || strings.ContainsAny(title, "/\\\n") || len(title) > 200 {
 			return "", "the title is empty, too long, or has a slash or line break", nil
+		}
+		if permalink = notes.Permalink(project, folder, title); permalink == "" {
+			return "", "the title has no letters or digits", nil
 		}
 		if it.Kind == "person" {
 			has, err := d.Memory.HasContact(project, it.Contact)
@@ -308,13 +340,40 @@ func (d Deps) saveRelated(ctx context.Context, u *store.User, in MailInput, it a
 				return "", "a person note in people/ already lists " + it.Contact, nil
 			}
 		}
-		permalink = notes.Permalink(project, folder, title)
+		// A note already has the new note's permalink: a task or event is
+		// updated, but a person's note, which holds their history, is not
+		// replaced by one the turn thought new.
+		if found, err = d.Memory.FindNote(ctx, project, permalink); err != nil {
+			return "", "", err
+		}
+		if found != nil && it.Kind == "person" {
+			return "", "the person note " + found.Permalink + " already exists", nil
+		}
+	}
+	if found != nil {
+		if found.Type != it.Kind {
+			return "", "the note " + found.Permalink + " has type " + found.Type + ", not " + it.Kind, nil
+		}
+		permalink, folder, title = found.Permalink, found.Folder, found.Name
 	}
 
 	var row *store.Item
 	if it.Kind != "person" {
 		row = &store.Item{UserID: u.ID, Key: strings.TrimSpace(it.Key), Kind: it.Kind, Note: permalink, Title: title,
 			Date: strings.TrimSpace(it.Date), State: it.State, Source: "mail:" + in.Address + "/" + in.MessageID}
+		if row.Key == "" && found != nil {
+			// An update keeps the note's row, whatever its key.
+			rows, err := d.Store.Items(ctx, u.ID, store.ItemFilter{Folder: permalink})
+			if err != nil {
+				return "", "", err
+			}
+			for _, r := range rows {
+				if r.Note == permalink && r.Kind == it.Kind {
+					row.Key = r.Key
+					break
+				}
+			}
+		}
 		if row.Key == "" {
 			row.Key = title
 		}

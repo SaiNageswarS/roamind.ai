@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -65,13 +66,14 @@ func (n Notes) FindNote(ctx context.Context, project, permalink string) (*Found,
 }
 
 // HasContact reports whether a person note of project in people/ lists
-// contact, such as an email address, as a [contact], in any case.
+// contact as a [contact]: one of contact's email addresses, in any case,
+// or, when it has none, such as a phone number, all of it.
 func (n Notes) HasContact(project, contact string) (bool, error) {
 	if err := ValidProject(project); err != nil {
 		return false, err
 	}
-	contact = strings.ToLower(strings.TrimSpace(contact))
-	if contact == "" {
+	want := contactKeys(contact)
+	if len(want) == 0 {
 		return false, nil
 	}
 	has := false
@@ -81,9 +83,11 @@ func (n Notes) HasContact(project, contact string) (bool, error) {
 			return nil
 		}
 		for _, m := range contactRe.FindAllStringSubmatch(body, -1) {
-			if strings.Contains(strings.ToLower(m[1]), contact) {
-				has = true
-				return errFound
+			for _, k := range contactKeys(m[1]) {
+				if slices.Contains(want, k) {
+					has = true
+					return errFound
+				}
 			}
 		}
 		return nil
@@ -94,7 +98,23 @@ func (n Notes) HasContact(project, contact string) (bool, error) {
 	return has, err
 }
 
-var contactRe = regexp.MustCompile(`(?m)^- \[contact\] (.+)$`)
+var (
+	contactRe = regexp.MustCompile(`(?m)^- \[contact\] (.+)$`)
+	emailRe   = regexp.MustCompile(`[^\s<>()"',;:]+@[^\s<>()"',;:]+\.[^\s<>()"',;:]+`)
+)
+
+// contactKeys are what a contact is matched by: its email addresses, or
+// the whole of it, lowercase.
+func contactKeys(contact string) []string {
+	contact = strings.ToLower(strings.TrimSpace(contact))
+	if contact == "" {
+		return nil
+	}
+	if emails := emailRe.FindAllString(contact, -1); len(emails) > 0 {
+		return emails
+	}
+	return []string{contact}
+}
 
 // walk calls fn with the slash path relative to the notes folder, the
 // frontmatter and the body of each note under folder, skipping schemas.
@@ -130,11 +150,20 @@ func (n Notes) walk(project, folder string, fn func(rel string, fm map[string]st
 	})
 }
 
-var apostrophes = strings.NewReplacer("'", "", "’", "")
+var (
+	apostrophes = strings.NewReplacer("'", "", "’", "")
+	// nonWord is what a permalink joins words across: bm keeps letters of
+	// any script, with their marks, and digits.
+	nonWord = regexp.MustCompile(`[^\p{L}\p{M}\p{N}]+`)
+)
 
 // Permalink is the permalink a new note of project gets for its folder and
-// title, as bm makes it: lowercase words joined by hyphens.
+// title, as bm makes it: lowercase words joined by hyphens; "" when the
+// title has no letters or digits.
 func Permalink(project, folder, title string) string {
-	slug := strings.Trim(nonSlug.ReplaceAllString(apostrophes.Replace(strings.ToLower(title)), "-"), "-")
+	slug := strings.Trim(nonWord.ReplaceAllString(apostrophes.Replace(strings.ToLower(title)), "-"), "-")
+	if slug == "" {
+		return ""
+	}
 	return strings.Trim(project+"/"+strings.Trim(folder, "/"), "/") + "/" + slug
 }

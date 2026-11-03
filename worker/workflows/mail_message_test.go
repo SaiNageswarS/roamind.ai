@@ -53,18 +53,36 @@ func TestMailMessage(t *testing.T) {
 	}
 
 	msg := MailInput{MailMessage: agent.MailMessage{Address: "Sai@Gmail.com", MessageID: "18c1", From: "Etihad <no-reply@etihad.com>",
-		To: "sai@gmail.com", Subject: "Your flight has changed", Link: "https://mail.google.com/mail/u/0/#all/18c1",
-		Category: "travel", Summary: "EY 134 moved to 10:15", Text: "Your flight EY 134 now departs at 10:15."}}
+		To: "sai@gmail.com", Date: "2026-11-02T07:58:00.000Z", Subject: "Your flight has changed",
+		Link: "https://mail.google.com/mail/u/0/#all/18c1", Category: "travel", Summary: "EY 134 moved to 10:15",
+		Text: "Your flight EY 134 now departs at 10:15."}}
 
 	// check: an account not connected is dropped.
 	if chk, err := d.checkMail(ctx, msg); err != nil || chk.Skip != "the account Sai@Gmail.com is not connected" {
 		t.Fatalf("unconnected = %+v %v", chk, err)
 	}
-	if err := d.Store.ConnectMail(ctx, "sai@gmail.com", "h1"); err != nil {
+	secret, err := d.Store.ConnectMail(ctx, "sai@gmail.com", "h1")
+	if err != nil {
 		t.Fatal(err)
 	}
+	// Signed with another account's key, or not at all: dropped, and the
+	// account isn't seen.
+	other, _ := d.Store.ConnectMail(ctx, "other@gmail.com", "h1")
+	for _, sig := range []string{"", mailSignature(other, msg)} {
+		in := msg
+		in.Signature = sig
+		if chk, err := d.checkMail(ctx, in); err != nil || chk.Skip != "the request is not signed with the key of Sai@Gmail.com" {
+			t.Fatalf("signature %q = %+v %v", sig, chk, err)
+		}
+	}
+	if a, _ := d.Store.MailAccountOf(ctx, "sai@gmail.com"); a == nil || !a.SeenAt.IsZero() {
+		t.Fatalf("seen after bad signatures = %+v", a)
+	}
+	msg.Signature = mailSignature(secret, msg)
 	// A heartbeat only records that the script runs.
-	if chk, err := d.checkMail(ctx, MailInput{MailMessage: agent.MailMessage{Address: "sai@gmail.com"}, Heartbeat: true}); err != nil || chk.Skip != "heartbeat" {
+	beat := MailInput{MailMessage: agent.MailMessage{Address: "sai@gmail.com", Date: "2026-11-02T08:00:00.000Z"}, Heartbeat: true}
+	beat.Signature = mailSignature(secret, beat)
+	if chk, err := d.checkMail(ctx, beat); err != nil || chk.Skip != "heartbeat" {
 		t.Fatalf("heartbeat = %+v %v", chk, err)
 	}
 	if a, _ := d.Store.MailAccountOf(ctx, "sai@gmail.com"); a == nil || !a.SeenAt.Equal(now.Truncate(time.Second)) {
@@ -148,6 +166,7 @@ func TestMailMessage(t *testing.T) {
 
 	// A mail with nothing to save is skipped.
 	msg.MessageID = "18c2"
+	msg.Signature = mailSignature(secret, msg)
 	chk, _ = d.checkMail(ctx, msg)
 	if sv, err := d.saveMail(ctx, msg, chk, mailRelate{Related: agent.RelatedMail{Skip: "a newsletter"}}); err != nil || len(sv.Notes) != 0 {
 		t.Fatalf("skip save = %+v %v", sv, err)
@@ -176,7 +195,7 @@ func TestInboxStaleMail(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := InboxInput{UserID: "h1", Day: "2026-11-12"}
-	if err := d.Store.ConnectMail(ctx, "sai@gmail.com", "h1"); err != nil {
+	if _, err := d.Store.ConnectMail(ctx, "sai@gmail.com", "h1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Store.SeenMail(ctx, "sai@gmail.com", now.Add(-time.Hour)); err != nil {
@@ -195,6 +214,141 @@ func TestInboxStaleMail(t *testing.T) {
 	prompt, err := agent.InboxDigestPrompt(agent.InboxDigest{UserName: "Sai", Date: in.Day, Weekday: "Thursday", StaleMail: chk.StaleMail})
 	if err != nil || !strings.Contains(prompt, "None of their tasks or events is due today.") ||
 		!strings.Contains(prompt, "Script sends their mail to Roamind:\n\n- sai@gmail.com") || strings.Contains(prompt, "from the items table") {
+		t.Fatalf("prompt: %v\n%s", err, prompt)
+	}
+}
+
+// mailSignatureNode is the script's signature of TestMailSignature's
+// request, computed in Node with crypto.createHmac('sha256',
+// Buffer.from(key, 'hex')) over the same text.
+const mailSignatureNode = "352a1fc664f6744a8fb7c1c8e751f35f40c1cf0b8eb2039c9f4bfcb3d8d93dfa"
+
+func TestMailSignature(t *testing.T) {
+	in := MailInput{MailMessage: agent.MailMessage{Address: "sai@gmail.com", MessageID: "18c1", Date: "2026-11-02T07:58:00.000Z"}}
+	key := strings.Repeat("ab", 32)
+	if got, want := mailSignature(key, in), mailSignatureNode; got != want {
+		t.Fatalf("signature = %s, want %s", got, want)
+	}
+	if mailSignature("not hex", in) != "" || mailSignature("", in) != "" {
+		t.Fatal("signed with a bad key")
+	}
+}
+
+// An item the turn thought new whose permalink a note already has: a task
+// updates it in place and keeps its row's key, a person is dropped; a
+// title with no letters is dropped.
+func TestSaveRelatedExisting(t *testing.T) {
+	ctx := context.Background()
+	d, _, _ := setup(t)
+	mem, err := notes.New(t.TempDir(), "../../memory", fakeBM(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Memory, d.Location = mem, time.UTC
+	d.Now = func() time.Time { return time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC) }
+	if err := d.Store.UpsertSlackUser(ctx, store.User{ID: "h1", Email: "sai@x.com", SlackTeamID: "T1", SlackUserID: "U1"}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := d.Store.AssignMemoryProject(ctx, "h1", "bm-u-h1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.Setup(p); err != nil {
+		t.Fatal(err)
+	}
+	root := mem.NotesDir(p)
+	for name, body := range map[string]string{
+		"tasks/Pay Acme.md": "---\ntitle: Pay Acme\ntype: task\npermalink: " + p + "/tasks/pay-acme\n---\n\nold\n",
+		"people/Dr Asha Rao.md": "---\ntitle: Dr Asha Rao\ntype: person\npermalink: " + p +
+			"/people/dr-asha-rao\n---\n\n- [contact] asha@clinic.example\n",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		os.MkdirAll(filepath.Dir(path), 0o700)
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.Store.PutItem(ctx, store.Item{UserID: "h1", Key: "ACME-1", Kind: store.ItemTask, Note: p + "/tasks/pay-acme",
+		Title: "Pay Acme", Date: "2026-11-20"}); err != nil {
+		t.Fatal(err)
+	}
+	u, _ := d.Store.UserByID(ctx, "h1")
+	in := MailInput{MailMessage: agent.MailMessage{Address: "sai@gmail.com", MessageID: "18c9"}}
+
+	permalink, why, err := d.saveRelated(ctx, u, in, agent.RelatedItem{Kind: store.ItemTask, Title: "Pay ACME", Folder: "tasks",
+		Content: "new", Date: "2026-11-25"})
+	if err != nil || why != "" || permalink != p+"/tasks/pay-acme" {
+		t.Fatalf("task = %q %q %v", permalink, why, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "tasks/Pay Acme.md")); !strings.Contains(string(b), "\nnew\n") {
+		t.Fatalf("task note = %s", b)
+	}
+	if _, err := os.Stat(filepath.Join(root, "tasks/Pay ACME.md")); err == nil {
+		t.Fatal("the task made a second note")
+	}
+	items, _ := d.Store.Items(ctx, "h1", store.ItemFilter{})
+	if len(items) != 1 || items[0].Key != "ACME-1" || items[0].Date != "2026-11-25" {
+		t.Fatalf("items = %+v", items)
+	}
+
+	_, why, err = d.saveRelated(ctx, u, in, agent.RelatedItem{Kind: "person", Title: "Dr. Asha Rao", Folder: "people",
+		Content: "new", Contact: "Asha <asha@home.example>"})
+	if err != nil || why != "the person note "+p+"/people/dr-asha-rao already exists" {
+		t.Fatalf("person = %q %v", why, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "people/Dr Asha Rao.md")); !strings.Contains(string(b), "asha@clinic.example") {
+		t.Fatalf("person note = %s", b)
+	}
+
+	if _, why, _ := d.saveRelated(ctx, u, in, agent.RelatedItem{Kind: store.ItemTask, Title: "🙂", Folder: "tasks", Content: "x"}); why != "the title has no letters or digits" {
+		t.Fatalf("emoji title = %q", why)
+	}
+}
+
+// A mail that wasn't saved is in the inbox digest, even on a day with
+// nothing due.
+func TestInboxUnsavedMail(t *testing.T) {
+	ctx := context.Background()
+	d, _, _ := setup(t)
+	withMemory(t, &d)
+	d.Location = time.UTC
+	now := time.Now()
+	d.Now = func() time.Time { return now }
+	if err := d.Store.UpsertSlackUser(ctx, store.User{ID: "h1", Email: "sai@x.com", SlackTeamID: "T1", SlackUserID: "U1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Store.AssignMemoryProject(ctx, "h1", "bm-u-h1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Store.SaveChannel(ctx, store.Channel{UserID: "h1", Kind: store.KindInbox, ChannelID: "I1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Store.ConnectMail(ctx, "sai@gmail.com", "h1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Store.SeenMail(ctx, "sai@gmail.com", now); err != nil {
+		t.Fatal(err)
+	}
+	in := InboxInput{UserID: "h1", Day: now.Format(time.DateOnly)}
+	m := store.MailMessage{Address: "sai@gmail.com", MessageID: "18c1", UserID: "h1", Subject: "Your bill", Link: "https://mail/18c1"}
+	if ok, err := d.Store.PickMessage(ctx, m, now.Add(-MailStuckAfter)); err != nil || !ok {
+		t.Fatalf("pick = %v %v", ok, err)
+	}
+	// Still running.
+	if chk, _ := d.checkInbox(ctx, in); chk.Skip != "nothing is due" {
+		t.Fatalf("running = %+v", chk)
+	}
+	if err := d.Store.FinishMessage(ctx, m.Address, m.MessageID, store.MailFailed); err != nil {
+		t.Fatal(err)
+	}
+	chk, err := d.checkInbox(ctx, in)
+	want := agent.InboxMail{Address: "sai@gmail.com", Subject: "Your bill", Link: "https://mail/18c1"}
+	if err != nil || chk.Skip != "" || len(chk.UnsavedMail) != 1 || chk.UnsavedMail[0] != want {
+		t.Fatalf("failed = %+v %v", chk, err)
+	}
+	prompt, err := agent.InboxDigestPrompt(agent.InboxDigest{UserName: "Sai", Date: in.Day, Weekday: "Tuesday", UnsavedMail: chk.UnsavedMail})
+	if err != nil || !strings.Contains(prompt, "- Your bill (sai@gmail.com, https://mail/18c1)") ||
+		!strings.Contains(prompt, "After the items, in a short Mail\nsection, list them") || !strings.Contains(prompt, "roamind/sent label") {
 		t.Fatalf("prompt: %v\n%s", err, prompt)
 	}
 }

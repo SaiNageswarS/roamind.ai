@@ -20,6 +20,16 @@ type InboxDigest struct {
 	// StaleMail are the user's Gmail accounts whose mail script sent
 	// nothing for two days.
 	StaleMail []string
+	// UnsavedMail are the user's mails of the past week that were sent to
+	// Roamind but not saved.
+	UnsavedMail []InboxMail
+}
+
+// InboxMail is a mail that wasn't saved.
+type InboxMail struct {
+	Address string `json:"address"` // the Gmail account
+	Subject string `json:"subject"`
+	Link    string `json:"link"`
 }
 
 // InboxItem is one of the user's items that is due, from the items table.

@@ -11,24 +11,34 @@
 //   OPENROUTER_MODEL    a DeepSeek model id on OpenRouter, e.g. deepseek/deepseek-chat
 //   WEBHOOK_URL         the gmail webhook's URL, printed by task webhook
 //   WEBHOOK_SECRET      ROAMIND_MAIL_SECRET from Roamind's .env
+//   ACCOUNT_SECRET      this account's key, printed by task mail-connect
+//
+// Hatchet checks each request's signature with WEBHOOK_SECRET, which every
+// account's script has; Roamind checks a second one, with ACCOUNT_SECRET,
+// so that no account's script can send mail as another's.
 //
 // Run setup() once from the editor: it authorizes the script, creates the
 // labels and installs the trigger.
 //
 // A message is labeled roamind/sent only once the webhook accepts it, so
-// mail found while Roamind is down is sent on a later run. Only the first
+// mail found while Roamind is down is sent on a later run; removing the
+// label sends a message again. A message that fails MAX_FAILS runs in a
+// row, as when OpenRouter can't sort it, is labeled roamind/error and left.
+// Only the first
 // CLASSIFY_CHARS of a message go to OpenRouter, and only to providers that
 // don't keep or train on requests.
 
 const CATEGORIES = ['bill', 'travel', 'order', 'appointment', 'commitment', 'person', 'other', 'skip'];
 const SENT = 'sent';
+const ERROR = 'error';
 const MAX_PER_RUN = 20;
+const MAX_FAILS = 8;
 const TEXT_CHARS = 20000;
 const CLASSIFY_CHARS = 4000;
 // Runs stop taking messages after this, within Apps Script's 6 minutes.
 const RUN_MS = 4.5 * 60 * 1000;
 // Gmail search names nested labels with hyphens: roamind/sent is roamind-sent.
-const NEW_MAIL = '-label:roamind-sent -label:roamind-skip newer_than:3d';
+const NEW_MAIL = '-label:roamind-sent -label:roamind-skip -label:roamind-error newer_than:3d';
 const QUERIES = [
   'in:inbox -category:promotions -category:social -category:forums ' + NEW_MAIL,
   // The user's own replies hold their commitments.
@@ -60,7 +70,7 @@ const CLASSIFY_SCHEMA = {
 
 function setup() {
   config_();
-  for (const c of CATEGORIES.concat([SENT])) labelId_(c);
+  for (const c of CATEGORIES.concat([SENT, ERROR])) labelId_(c);
   for (const t of ScriptApp.getProjectTriggers()) {
     if (t.getHandlerFunction() === 'run') ScriptApp.deleteTrigger(t);
   }
@@ -72,19 +82,28 @@ function run() {
   const cfg = config_();
   const started = Date.now();
   const address = Session.getEffectiveUser().getEmail();
+  const props = PropertiesService.getScriptProperties();
   let posted = 0;
   for (const id of newMessages_()) {
     if (Date.now() - started > RUN_MS) break;
     try {
       if (handle_(cfg, address, id)) posted++;
+      props.deleteProperty('FAILS_' + id);
     } catch (e) {
-      // Left unlabeled, so the next run tries it again.
+      // Left unlabeled, so the next run tries it again, up to MAX_FAILS.
       console.error('message ' + id + ': ' + e);
+      const fails = Number(props.getProperty('FAILS_' + id) || 0) + 1;
+      if (fails < MAX_FAILS) {
+        props.setProperty('FAILS_' + id, String(fails));
+      } else {
+        addLabel_(id, ERROR);
+        props.deleteProperty('FAILS_' + id);
+      }
     }
   }
-  const props = PropertiesService.getScriptProperties();
   const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
-  if (props.getProperty('POSTED_DAY') !== today && post_(cfg, { address: address, heartbeat: true })) {
+  if (props.getProperty('POSTED_DAY') !== today &&
+      post_(cfg, { address: address, date: new Date().toISOString(), heartbeat: true })) {
     props.setProperty('POSTED_DAY', today);
   }
   console.log('posted ' + posted + ' messages');
@@ -93,34 +112,88 @@ function run() {
 // handle_ classifies, labels and posts one message; true when it was
 // posted.
 function handle_(cfg, address, id) {
-  const m = GmailApp.getMessageById(id);
-  const html = m.getBody();
-  const text = cleanText_(m.getPlainBody() || htmlToText_(html));
-  const jsonld = jsonLD_(html);
+  const m = message_(id);
+  const text = cleanText_(m.plain || htmlToText_(m.html));
+  const jsonld = jsonLD_(m.html);
   const c = classify_(cfg, m, text, jsonld);
   addLabel_(id, c.category);
   if (c.category === 'skip') return false;
   const msg = {
     address: address,
     message_id: id,
-    thread_id: m.getThread().getId(),
+    thread_id: m.threadId,
     link: 'https://mail.google.com/mail/u/0/#all/' + id,
-    from: m.getFrom(),
-    to: m.getTo(),
-    cc: m.getCc(),
-    date: m.getDate().toISOString(),
-    subject: m.getSubject(),
+    from: m.from,
+    to: m.to,
+    cc: m.cc,
+    date: m.date,
+    subject: m.subject,
     category: c.category,
     summary: c.summary,
     text: text.slice(0, TEXT_CHARS),
     jsonld: jsonld,
-    attachments: m.getAttachments().map(a => a.getName()),
+    attachments: m.attachments,
   };
   if (!post_(cfg, msg)) return false;
   addLabel_(id, SENT);
   PropertiesService.getScriptProperties().setProperty('POSTED_DAY',
     Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'));
   return true;
+}
+
+// message_ reads a message with the Gmail API: its headers, its text and
+// HTML bodies, and the names of its attachments.
+function message_(id) {
+  const r = Gmail.Users.Messages.get('me', id, { format: 'full' });
+  const headers = headers_(r.payload);
+  const m = {
+    threadId: r.threadId,
+    from: headers.from || '',
+    to: headers.to || '',
+    cc: headers.cc || '',
+    subject: headers.subject || '',
+    date: new Date(Number(r.internalDate)).toISOString(),
+    plain: '',
+    html: '',
+    attachments: [],
+  };
+  const walk = part => {
+    if (part.filename) {
+      m.attachments.push(part.filename);
+    } else if (part.mimeType === 'text/plain' && !m.plain) {
+      m.plain = partText_(part);
+    } else if (part.mimeType === 'text/html' && !m.html) {
+      m.html = partText_(part);
+    }
+    for (const p of part.parts || []) walk(p);
+  };
+  walk(r.payload);
+  return m;
+}
+
+// headers_ returns a part's headers by lowercase name, the first of each.
+function headers_(part) {
+  const out = {};
+  for (const h of part.headers || []) {
+    const k = h.name.toLowerCase();
+    if (!(k in out)) out[k] = h.value;
+  }
+  return out;
+}
+
+// partText_ decodes a part's body in its charset. The API gives the body
+// as base64url, or as bytes.
+function partText_(part) {
+  const data = part.body && part.body.data;
+  if (!data) return '';
+  const bytes = typeof data === 'string' ? Utilities.base64DecodeWebSafe(data) : data;
+  const charset = (/charset="?([^";\s]+)/i.exec(headers_(part)['content-type'] || '') || [])[1] || 'UTF-8';
+  const blob = Utilities.newBlob(bytes);
+  try {
+    return blob.getDataAsString(charset);
+  } catch (e) {
+    return blob.getDataAsString('UTF-8');
+  }
 }
 
 // newMessages_ returns the ids of new messages, oldest first, at most
@@ -139,7 +212,7 @@ function newMessages_() {
 }
 
 function classify_(cfg, m, text, jsonld) {
-  const mail = 'From: ' + m.getFrom() + '\nTo: ' + m.getTo() + '\nSubject: ' + m.getSubject() +
+  const mail = 'From: ' + m.from + '\nTo: ' + m.to + '\nSubject: ' + m.subject +
     '\n\n' + text.slice(0, CLASSIFY_CHARS) + (jsonld.length ? '\n\nschema.org:\n' + jsonld.join('\n').slice(0, CLASSIFY_CHARS) : '');
   const res = UrlFetchApp.fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'post',
@@ -167,11 +240,15 @@ function classify_(cfg, m, text, jsonld) {
 }
 
 // post_ sends a JSON body to the webhook, signed with the hex HMAC-SHA256
-// of its bytes, which Hatchet checks; true when it was accepted.
+// of its bytes, which Hatchet checks; true when it was accepted. The body
+// also gets the account's signature of its address, message id and date,
+// each ending in a line break, which Roamind checks.
 function post_(cfg, body) {
+  body.signature = hmacHex_(
+    Utilities.newBlob(body.address + '\n' + (body.message_id || '') + '\n' + (body.date || '') + '\n').getBytes(),
+    hexBytes_(cfg.accountSecret));
   const bytes = Utilities.newBlob(JSON.stringify(body)).getBytes();
-  const sig = Utilities.computeHmacSha256Signature(bytes, Utilities.newBlob(cfg.secret).getBytes())
-    .map(b => ('0' + (b & 0xff).toString(16)).slice(-2)).join('');
+  const sig = hmacHex_(bytes, Utilities.newBlob(cfg.secret).getBytes());
   const res = UrlFetchApp.fetch(cfg.webhook, {
     method: 'post',
     contentType: 'application/json',
@@ -179,11 +256,28 @@ function post_(cfg, body) {
     headers: { 'X-Roamind-Signature': sig },
     muteHttpExceptions: true,
   });
-  if (res.getResponseCode() !== 200) {
+  const code = res.getResponseCode();
+  if (code < 200 || code > 299) {
     console.error('webhook ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 300));
     return false;
   }
   return true;
+}
+
+function hmacHex_(value, key) {
+  return Utilities.computeHmacSha256Signature(value, key)
+    .map(b => ('0' + (b & 0xff).toString(16)).slice(-2)).join('');
+}
+
+// hexBytes_ returns the bytes of a hex string, as Apps Script's signed
+// bytes.
+function hexBytes_(hex) {
+  const out = [];
+  for (let i = 0; i + 1 < hex.length; i += 2) {
+    const b = parseInt(hex.slice(i, i + 2), 16);
+    out.push(b > 127 ? b - 256 : b);
+  }
+  return out;
 }
 
 function addLabel_(id, name) {
@@ -237,9 +331,13 @@ function config_() {
     model: p.getProperty('OPENROUTER_MODEL'),
     webhook: p.getProperty('WEBHOOK_URL'),
     secret: p.getProperty('WEBHOOK_SECRET'),
+    accountSecret: p.getProperty('ACCOUNT_SECRET'),
   };
   for (const k of Object.keys(cfg)) {
-    if (!cfg[k]) throw new Error('set the script properties OPENROUTER_API_KEY, OPENROUTER_MODEL, WEBHOOK_URL and WEBHOOK_SECRET');
+    if (!cfg[k]) {
+      throw new Error('set the script properties OPENROUTER_API_KEY, OPENROUTER_MODEL, WEBHOOK_URL, WEBHOOK_SECRET and ACCOUNT_SECRET');
+    }
   }
+  if (!/^([0-9a-f]{2})+$/i.test(cfg.accountSecret)) throw new Error('ACCOUNT_SECRET is not hex; copy it from task mail-connect');
   return cfg;
 }

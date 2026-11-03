@@ -63,6 +63,9 @@ type inboxCheck struct {
 	// StaleMail are the addresses of the user's mail accounts that sent
 	// nothing for MailStaleAfter.
 	StaleMail []string `json:"stale_mail,omitempty"`
+	// UnsavedMail are the user's mails of the past MailUnsavedFor whose
+	// run failed or never finished.
+	UnsavedMail []agent.InboxMail `json:"unsaved_mail,omitempty"`
 }
 
 // inboxDraft is draft's result.
@@ -241,7 +244,14 @@ func (d Deps) checkInbox(ctx context.Context, in InboxInput) (inboxCheck, error)
 	for _, a := range stale {
 		out.StaleMail = append(out.StaleMail, a.Address)
 	}
-	if len(due) == 0 && len(stale) == 0 {
+	unsaved, err := d.Store.UnsavedMail(ctx, u.ID, d.now().Add(-MailUnsavedFor), d.now().Add(-MailStuckAfter))
+	if err != nil {
+		return out, err
+	}
+	for _, m := range unsaved {
+		out.UnsavedMail = append(out.UnsavedMail, agent.InboxMail{Address: m.Address, Subject: m.Subject, Link: m.Link})
+	}
+	if len(due) == 0 && len(stale) == 0 && len(unsaved) == 0 {
 		out.Skip = "nothing is due"
 		return out, nil
 	}
@@ -274,6 +284,7 @@ func (d Deps) draftInbox(ctx context.Context, in InboxInput, chk inboxCheck) (in
 	}
 	prompt, err := agent.InboxDigestPrompt(agent.InboxDigest{
 		UserName: u.DisplayName, Date: in.Day, Weekday: day.Weekday().String(), Items: chk.Items, StaleMail: chk.StaleMail,
+		UnsavedMail: chk.UnsavedMail,
 	})
 	if err != nil {
 		return out, err
@@ -344,6 +355,6 @@ func (d Deps) postInbox(ctx context.Context, in InboxInput, chk inboxCheck, dr i
 			return out, fmt.Errorf("post inbox digest: %w", err)
 		}
 	}
-	slog.Info("inbox digest posted", "user", in.UserID, "day", in.Day, "items", len(chk.Items), "stale_mail", len(chk.StaleMail))
+	slog.Info("inbox digest posted", "user", in.UserID, "day", in.Day, "items", len(chk.Items), "stale_mail", len(chk.StaleMail), "unsaved_mail", len(chk.UnsavedMail))
 	return out, nil
 }
