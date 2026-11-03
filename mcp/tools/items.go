@@ -10,9 +10,6 @@ import (
 	"roamind.ai/memory/store"
 )
 
-// eventKinds are the Event schema's kinds.
-var eventKinds = []string{"appointment", "travel", "stay", "ticket", "meeting", store.DeliveryKind, "milestone", "other"}
-
 // SaveItemInput is save_item's input.
 type SaveItemInput struct {
 	Key       string `json:"key" jsonschema:"a stable key: the confirmation, order or invoice number when there is one, else the note's title"`
@@ -77,7 +74,7 @@ func items(s *mcp.Server, d Deps) {
 			return nil, Done{}, err
 		}
 		if it.Kind == store.ItemEvent && it.EventKind != "" {
-			if err := oneOf("event_kind", it.EventKind, eventKinds...); err != nil {
+			if err := oneOf("event_kind", it.EventKind, store.EventKinds...); err != nil {
 				return nil, Done{}, err
 			}
 		}

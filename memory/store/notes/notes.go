@@ -11,9 +11,10 @@
 // Every project is self-contained, with its own bm config and database, so
 // users share nothing but the read-only embedding model.
 //
-// Notes are read straight from disk and written through bm's CLI, which
-// indexes them at once. A project is created by Setup, from the user-setup
-// workflow, before anything reads or writes it.
+// Notes are read straight from disk, except that FindNote asks bm, and
+// written through bm's CLI, which indexes them at once. A project is
+// created by Setup, from the user-setup workflow, before anything reads or
+// writes it.
 package notes
 
 import (

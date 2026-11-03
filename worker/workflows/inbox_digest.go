@@ -28,7 +28,8 @@ const InboxDigestsName = "inbox-digests"
 //	check-skip → draft → post
 //
 // check-skip picks the user's items that are due today from the items
-// table, and skips the day when there are none; draft has the agent write
+// table, and their mail accounts whose script has gone quiet (see
+// mail-message), and skips the day when there are neither; draft has the agent write
 // the digest, reading each item's note and related notes in memory; post
 // posts it. The digest's thread resumes the drafting session, so a reply
 // such as "done" closes the item it is about with the items tools.
@@ -59,6 +60,12 @@ type inboxCheck struct {
 	Skip      string            `json:"skip"`
 	ChannelID string            `json:"channel_id,omitempty"`
 	Items     []agent.InboxItem `json:"items,omitempty"`
+	// StaleMail are the addresses of the user's mail accounts that sent
+	// nothing for MailStaleAfter.
+	StaleMail []string `json:"stale_mail,omitempty"`
+	// UnsavedMail are the user's mails of the past MailUnsavedFor whose
+	// run failed or never finished.
+	UnsavedMail []agent.InboxMail `json:"unsaved_mail,omitempty"`
 }
 
 // inboxDraft is draft's result.
@@ -195,7 +202,7 @@ func InboxDigest(c *hatchet.Client, d Deps) *hatchet.Workflow {
 
 // checkInbox decides whether the user gets a digest on the day: they need
 // memory and an inbox channel, the day must not be posted yet, and some of
-// their items must be due.
+// their items must be due or a mail account must have gone quiet.
 func (d Deps) checkInbox(ctx context.Context, in InboxInput) (inboxCheck, error) {
 	var out inboxCheck
 	u, err := d.Store.UserByID(ctx, in.UserID)
@@ -230,7 +237,21 @@ func (d Deps) checkInbox(ctx context.Context, in InboxInput) (inboxCheck, error)
 	if err != nil {
 		return out, err
 	}
-	if len(due) == 0 {
+	stale, err := d.Store.StaleMailAccounts(ctx, u.ID, d.now().Add(-MailStaleAfter))
+	if err != nil {
+		return out, err
+	}
+	for _, a := range stale {
+		out.StaleMail = append(out.StaleMail, a.Address)
+	}
+	unsaved, err := d.Store.UnsavedMail(ctx, u.ID, d.now().Add(-MailUnsavedFor), d.now().Add(-MailStuckAfter))
+	if err != nil {
+		return out, err
+	}
+	for _, m := range unsaved {
+		out.UnsavedMail = append(out.UnsavedMail, agent.InboxMail{Address: m.Address, Subject: m.Subject, Link: m.Link})
+	}
+	if len(due) == 0 && len(stale) == 0 && len(unsaved) == 0 {
 		out.Skip = "nothing is due"
 		return out, nil
 	}
@@ -262,7 +283,8 @@ func (d Deps) draftInbox(ctx context.Context, in InboxInput, chk inboxCheck) (in
 		return out, fmt.Errorf("day %q: %w", in.Day, err)
 	}
 	prompt, err := agent.InboxDigestPrompt(agent.InboxDigest{
-		UserName: u.DisplayName, Date: in.Day, Weekday: day.Weekday().String(), Items: chk.Items,
+		UserName: u.DisplayName, Date: in.Day, Weekday: day.Weekday().String(), Items: chk.Items, StaleMail: chk.StaleMail,
+		UnsavedMail: chk.UnsavedMail,
 	})
 	if err != nil {
 		return out, err
@@ -333,6 +355,6 @@ func (d Deps) postInbox(ctx context.Context, in InboxInput, chk inboxCheck, dr i
 			return out, fmt.Errorf("post inbox digest: %w", err)
 		}
 	}
-	slog.Info("inbox digest posted", "user", in.UserID, "day", in.Day, "items", len(chk.Items))
+	slog.Info("inbox digest posted", "user", in.UserID, "day", in.Day, "items", len(chk.Items), "stale_mail", len(chk.StaleMail), "unsaved_mail", len(chk.UnsavedMail))
 	return out, nil
 }

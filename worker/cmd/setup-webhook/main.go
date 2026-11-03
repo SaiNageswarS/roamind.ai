@@ -1,8 +1,14 @@
-// Command setup-webhook (re)creates the Hatchet Slack webhook that
-// turns Slack Events API requests into Hatchet events, and prints the URL to
-// paste into the Slack app's Event Subscriptions.
+// Command setup-webhook (re)creates the Hatchet webhooks that turn inbound
+// requests into Hatchet events, and prints the URLs to give their senders:
 //
-//	SLACK_SIGNING_SECRET=... ROAMIND_PUBLIC_URL=https://host.tailnet.ts.net go run ./cmd/setup-webhook
+//   - slack, when SLACK_SIGNING_SECRET is set: Slack Events API requests,
+//     for the Slack app's Event Subscriptions;
+//
+//   - gmail, when ROAMIND_MAIL_SECRET is set: mail from each Gmail
+//     account's Apps Script (deploy/apps-script), signed with that secret,
+//     for the script's WEBHOOK_URL property.
+//
+//     SLACK_SIGNING_SECRET=... ROAMIND_MAIL_SECRET=... ROAMIND_PUBLIC_URL=https://host.tailnet.ts.net go run ./cmd/setup-webhook
 package main
 
 import (
@@ -18,9 +24,8 @@ import (
 	"github.com/hatchet-dev/hatchet/sdks/go/features"
 
 	"roamind.ai/channels/slack"
+	"roamind.ai/worker/workflows"
 )
-
-const webhookName = "slack"
 
 func main() {
 	if err := run(context.Background()); err != nil {
@@ -30,47 +35,70 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	secret := os.Getenv("SLACK_SIGNING_SECRET")
-	if secret == "" {
-		return fmt.Errorf("SLACK_SIGNING_SECRET is required")
+	slackSecret, mailSecret := os.Getenv("SLACK_SIGNING_SECRET"), os.Getenv("ROAMIND_MAIL_SECRET")
+	if slackSecret == "" && mailSecret == "" {
+		return fmt.Errorf("SLACK_SIGNING_SECRET or ROAMIND_MAIL_SECRET is required")
 	}
 	client, err := hatchet.NewClient()
 	if err != nil {
 		return err
 	}
-	hooks := client.Webhooks()
-
-	// Recreate rather than update: the signing secret can only be set on
-	// create, and it must follow the Slack app's current secret.
-	if wh, err := hooks.Get(ctx, webhookName); err == nil && wh != nil {
-		if err := hooks.Delete(ctx, webhookName); err != nil {
-			return fmt.Errorf("delete webhook: %w", err)
-		}
-	}
-	_, err = hooks.Create(ctx, features.CreateWebhookOpts{
-		Name:               webhookName,
-		SourceName:         rest.SLACK,
-		EventKeyExpression: slack.EventKeyExpression,
-		Auth: features.HMACAuth{
-			SigningSecret:       secret,
-			SignatureHeaderName: "X-Slack-Signature",
-			Algorithm:           rest.SHA256,
-			Encoding:            rest.HEX,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("create webhook: %w", err)
-	}
-	fmt.Println("registered webhook", webhookName)
-
 	tenant, err := tenantID()
 	if err != nil {
 		return err
 	}
-	path := fmt.Sprintf("/api/v1/stable/tenants/%s/webhooks/%s", tenant, webhookName)
-	base := strings.TrimRight(os.Getenv("ROAMIND_PUBLIC_URL"), "/")
-	fmt.Println("Slack Request URL:", base+path)
-	fmt.Println("Funnel path prefix:", fmt.Sprintf("/api/v1/stable/tenants/%s/webhooks", tenant))
+	prefix := fmt.Sprintf("/api/v1/stable/tenants/%s/webhooks", tenant)
+	base := strings.TrimRight(os.Getenv("ROAMIND_PUBLIC_URL"), "/") + prefix
+	if slackSecret != "" {
+		if err := recreate(ctx, client.Webhooks(), features.CreateWebhookOpts{
+			Name:               "slack",
+			SourceName:         rest.SLACK,
+			EventKeyExpression: slack.EventKeyExpression,
+			Auth: features.HMACAuth{
+				SigningSecret:       slackSecret,
+				SignatureHeaderName: "X-Slack-Signature",
+				Algorithm:           rest.SHA256,
+				Encoding:            rest.HEX,
+			},
+		}); err != nil {
+			return err
+		}
+		fmt.Println("Slack Request URL:", base+"/slack")
+	}
+	if mailSecret != "" {
+		// Hatchet checks a generic webhook's signature over the raw body,
+		// which Apps Script signs with Utilities.computeHmacSha256Signature.
+		if err := recreate(ctx, client.Webhooks(), features.CreateWebhookOpts{
+			Name:               "gmail",
+			SourceName:         rest.GENERIC,
+			EventKeyExpression: "'" + workflows.MailEventKey + "'",
+			Auth: features.HMACAuth{
+				SigningSecret:       mailSecret,
+				SignatureHeaderName: "X-Roamind-Signature",
+				Algorithm:           rest.SHA256,
+				Encoding:            rest.HEX,
+			},
+		}); err != nil {
+			return err
+		}
+		fmt.Println("Apps Script WEBHOOK_URL:", base+"/gmail")
+	}
+	fmt.Println("Funnel path prefix:", prefix)
+	return nil
+}
+
+// recreate deletes the webhook named in opts, if there is one, and creates
+// it: its secret can only be set on create, and must follow .env.
+func recreate(ctx context.Context, hooks *features.WebhooksClient, opts features.CreateWebhookOpts) error {
+	if wh, err := hooks.Get(ctx, opts.Name); err == nil && wh != nil {
+		if err := hooks.Delete(ctx, opts.Name); err != nil {
+			return fmt.Errorf("delete webhook %s: %w", opts.Name, err)
+		}
+	}
+	if _, err := hooks.Create(ctx, opts); err != nil {
+		return fmt.Errorf("create webhook %s: %w", opts.Name, err)
+	}
+	fmt.Println("registered webhook", opts.Name)
 	return nil
 }
 

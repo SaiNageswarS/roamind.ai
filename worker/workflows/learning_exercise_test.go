@@ -40,16 +40,26 @@ func TestLocalCrons(t *testing.T) {
 }
 
 // fakeBM saves the note `bm tool write-note` is given in the project's
-// notes folder, as bm does.
+// notes folder, and finds the note with the permalink `bm tool read-note`
+// is given, with or without the project, as bm does.
 func fakeBM(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "bm")
 	script := `#!/bin/sh
+cmd=$2
 while [ $# -gt 0 ]; do
-  case "$1" in --folder) folder=$2; shift ;; --title) title=$2; shift ;; esac
+  case "$1" in --folder) folder=$2; shift ;; --title) title=$2; shift ;; --project) project=$2; shift ;; --) id=$2; shift ;; esac
   shift
 done
 notes="$BASIC_MEMORY_CONFIG_DIR/../notes"
+if [ "$cmd" = read-note ]; then
+  case "$id" in "$project"/*) ;; *) id="$project/$id" ;; esac
+  f=$(grep -rlx "permalink: $id" "$notes" | head -n 1)
+  if [ -z "$f" ]; then echo '{"permalink": null, "file_path": null, "frontmatter": null}'; exit 0; fi
+  type=$(sed -n 's/^type: //p' "$f" | head -n 1)
+  printf '{"permalink": "%s", "file_path": "%s", "frontmatter": {"type": "%s"}}\n' "$id" "${f#$notes/}" "$type"
+  exit 0
+fi
 mkdir -p "$notes/$folder" && cat > "$notes/$folder/$title.md"
 `
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {

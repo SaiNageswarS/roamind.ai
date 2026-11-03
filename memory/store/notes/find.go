@@ -1,0 +1,169 @@
+package notes
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+)
+
+// Found is a note as bm resolves it: where WriteNote rewrites it in place.
+// bm names a note's file after the title it was first written with, which
+// a later title can differ from, and writing it with another title would
+// make a second note.
+type Found struct {
+	Permalink string
+	Folder    string // relative to the notes folder, with slashes; "" at the top
+	Name      string // the file name without .md
+	Type      string
+}
+
+// FindNote returns the note of project with permalink, which bm reads by
+// its exact permalink, with or without the project, or nil when there is
+// none; bm suggests similar notes then, which FindNote ignores.
+func (n Notes) FindNote(ctx context.Context, project, permalink string) (*Found, error) {
+	if err := ValidProject(project); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(permalink) == "" {
+		return nil, nil
+	}
+	cmd := exec.CommandContext(ctx, n.Binary, "tool", "read-note", "--project", project, "--json", "--frontmatter", "--", permalink)
+	cmd.Env = append(os.Environ(), "BASIC_MEMORY_CONFIG_DIR="+n.ConfigDir(project))
+	var out, errOut bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errOut
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("bm read-note: %w: %s", err, strings.TrimSpace(errOut.String()))
+	}
+	var note struct {
+		Permalink   *string `json:"permalink"`
+		FilePath    string  `json:"file_path"`
+		Frontmatter struct {
+			Type string `json:"type"`
+		} `json:"frontmatter"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &note); err != nil {
+		return nil, fmt.Errorf("bm read-note: %w", err)
+	}
+	if note.Permalink == nil || *note.Permalink == "" {
+		return nil, nil
+	}
+	dir := path.Dir(note.FilePath)
+	if dir == "." {
+		dir = ""
+	}
+	return &Found{Permalink: *note.Permalink, Folder: dir, Name: strings.TrimSuffix(path.Base(note.FilePath), ".md"),
+		Type: note.Frontmatter.Type}, nil
+}
+
+// HasContact reports whether a person note of project in people/ lists
+// contact as a [contact]: one of contact's email addresses, in any case,
+// or, when it has none, such as a phone number, all of it.
+func (n Notes) HasContact(project, contact string) (bool, error) {
+	if err := ValidProject(project); err != nil {
+		return false, err
+	}
+	want := contactKeys(contact)
+	if len(want) == 0 {
+		return false, nil
+	}
+	has := false
+	errFound := errors.New("found")
+	err := n.walk(project, "people", func(_ string, fm map[string]string, body string) error {
+		if fm["type"] != "person" {
+			return nil
+		}
+		for _, m := range contactRe.FindAllStringSubmatch(body, -1) {
+			for _, k := range contactKeys(m[1]) {
+				if slices.Contains(want, k) {
+					has = true
+					return errFound
+				}
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, errFound) {
+		err = nil
+	}
+	return has, err
+}
+
+var (
+	contactRe = regexp.MustCompile(`(?m)^- \[contact\] (.+)$`)
+	emailRe   = regexp.MustCompile(`[^\s<>()"',;:]+@[^\s<>()"',;:]+\.[^\s<>()"',;:]+`)
+)
+
+// contactKeys are what a contact is matched by: its email addresses, or
+// the whole of it, lowercase.
+func contactKeys(contact string) []string {
+	contact = strings.ToLower(strings.TrimSpace(contact))
+	if contact == "" {
+		return nil
+	}
+	if emails := emailRe.FindAllString(contact, -1); len(emails) > 0 {
+		return emails
+	}
+	return []string{contact}
+}
+
+// walk calls fn with the slash path relative to the notes folder, the
+// frontmatter and the body of each note under folder, skipping schemas.
+func (n Notes) walk(project, folder string, fn func(rel string, fm map[string]string, body string) error) error {
+	root := n.NotesDir(project)
+	return filepath.WalkDir(filepath.Join(root, filepath.FromSlash(folder)), func(p string, d fs.DirEntry, err error) error {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			if rel == "schemas" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(rel, ".md") {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		fm, body := frontmatter(string(b))
+		return fn(rel, fm, body)
+	})
+}
+
+var (
+	apostrophes = strings.NewReplacer("'", "", "’", "")
+	// nonWord is what a permalink joins words across: bm keeps letters of
+	// any script, with their marks, and digits.
+	nonWord = regexp.MustCompile(`[^\p{L}\p{M}\p{N}]+`)
+)
+
+// Permalink is the permalink a new note of project gets for its folder and
+// title, as bm makes it: lowercase words joined by hyphens; "" when the
+// title has no letters or digits.
+func Permalink(project, folder, title string) string {
+	slug := strings.Trim(nonWord.ReplaceAllString(apostrophes.Replace(strings.ToLower(title)), "-"), "-")
+	if slug == "" {
+		return ""
+	}
+	return strings.Trim(project+"/"+strings.Trim(folder, "/"), "/") + "/" + slug
+}
