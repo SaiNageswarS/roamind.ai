@@ -70,7 +70,10 @@ When memory already has a note for the thing, update it: give its
 permalink as note, its title, its item's key, and as content the whole note
 as it was with what the mail changes, so a rescheduled flight moves its
 date and a shipped order gets its tracking link. Otherwise give a new
-note's title and folder as its schema says.
+note's title and folder as its schema says, but first read_note its folder
+and title, such as people/Dr Asha Rao: a note found there is the same
+note, so update it as above, keeping what still holds. Whatever you return
+as content replaces the note.
 
 Write content as the notes in memory are written: an opening line on what
 it is, then ## Observations with one [field] per line, then ## Relations

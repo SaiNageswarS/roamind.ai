@@ -340,14 +340,12 @@ func (d Deps) saveRelated(ctx context.Context, u *store.User, in MailInput, it a
 				return "", "a person note in people/ already lists " + it.Contact, nil
 			}
 		}
-		// A note already has the new note's permalink: a task or event is
-		// updated, but a person's note, which holds their history, is not
-		// replaced by one the turn thought new.
+		// A note already has the new note's permalink, which the turn was
+		// told to check: its content replaces that note, in its file, as
+		// bm would otherwise make a second note for a title in another
+		// case.
 		if found, err = d.Memory.FindNote(ctx, project, permalink); err != nil {
 			return "", "", err
-		}
-		if found != nil && it.Kind == "person" {
-			return "", "the person note " + found.Permalink + " already exists", nil
 		}
 	}
 	if found != nil {

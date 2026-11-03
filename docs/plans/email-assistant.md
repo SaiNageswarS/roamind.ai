@@ -6,7 +6,7 @@ Status: drafted 2026-10-21, revised 2026-10-22, redesigned 2026-11-01 around Goo
 - The script reads and labels per message through the Gmail advanced service; `GmailApp` labels whole threads.
 - Each account has its own key (`task mail-connect`), and the worker checks a second signature with it: with only the shared `ROAMIND_MAIL_SECRET`, one user's script could send mail as another's account.
 - Mail that wasn't saved (a failed or stuck run) is listed in the inbox digest for a week; removing its `roamind/sent` label sends it again. A message the script fails on 8 runs in a row is labeled `roamind/error`.
-- A new note whose permalink a note already has updates it (a task or event) or is dropped (a person).
+- The turn reads a new note's folder and title before naming it, and updates a note already there; its content always replaces the note, written into the existing file when the permalink is taken.
 
 Everything mail feeds into is built and described in `docs/architecture.md`:
 - the Task and Event schemas (PR #8);

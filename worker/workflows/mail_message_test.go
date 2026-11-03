@@ -234,9 +234,9 @@ func TestMailSignature(t *testing.T) {
 	}
 }
 
-// An item the turn thought new whose permalink a note already has: a task
-// updates it in place and keeps its row's key, a person is dropped; a
-// title with no letters is dropped.
+// An item the turn thought new whose permalink a note already has replaces
+// that note in its file, and a task keeps its row's key; a title with no
+// letters is dropped.
 func TestSaveRelatedExisting(t *testing.T) {
 	ctx := context.Background()
 	d, _, _ := setup(t)
@@ -291,13 +291,16 @@ func TestSaveRelatedExisting(t *testing.T) {
 		t.Fatalf("items = %+v", items)
 	}
 
-	_, why, err = d.saveRelated(ctx, u, in, agent.RelatedItem{Kind: "person", Title: "Dr. Asha Rao", Folder: "people",
-		Content: "new", Contact: "Asha <asha@home.example>"})
-	if err != nil || why != "the person note "+p+"/people/dr-asha-rao already exists" {
-		t.Fatalf("person = %q %v", why, err)
+	permalink, why, err = d.saveRelated(ctx, u, in, agent.RelatedItem{Kind: "person", Title: "Dr. Asha Rao", Folder: "people",
+		Content: "- [contact] asha@home.example", Contact: "Asha <asha@home.example>"})
+	if err != nil || why != "" || permalink != p+"/people/dr-asha-rao" {
+		t.Fatalf("person = %q %q %v", permalink, why, err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(root, "people/Dr Asha Rao.md")); !strings.Contains(string(b), "asha@clinic.example") {
+	if b, _ := os.ReadFile(filepath.Join(root, "people/Dr Asha Rao.md")); !strings.Contains(string(b), "asha@home.example") {
 		t.Fatalf("person note = %s", b)
+	}
+	if _, err := os.Stat(filepath.Join(root, "people/Dr. Asha Rao.md")); err == nil {
+		t.Fatal("the person made a second note")
 	}
 
 	if _, why, _ := d.saveRelated(ctx, u, in, agent.RelatedItem{Kind: store.ItemTask, Title: "🙂", Folder: "tasks", Content: "x"}); why != "the title has no letters or digits" {
