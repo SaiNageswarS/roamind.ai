@@ -281,16 +281,16 @@ func (d Deps) saveRelated(ctx context.Context, u *store.User, in MailInput, it a
 		return "", "no content", nil
 	}
 	var folder, title string
-	found, err := d.Memory.FindNote(project, strings.TrimSpace(it.Note))
+	found, err := d.Memory.FindNote(ctx, project, strings.TrimSpace(it.Note))
 	if err != nil {
 		return "", "", err
 	}
 	switch {
-	case it.Note != "" && found != nil:
+	case found != nil:
 		if found.Type != it.Kind {
 			return "", "the note " + it.Note + " has type " + found.Type + ", not " + it.Kind, nil
 		}
-		permalink, folder, title = it.Note, found.Folder, found.Name
+		permalink, folder, title = found.Permalink, found.Folder, found.Name
 	default:
 		folder, title = strings.Trim(strings.TrimSpace(it.Folder), "/"), strings.TrimSpace(it.Title)
 		if !mailFolders[it.Kind].MatchString(folder) {

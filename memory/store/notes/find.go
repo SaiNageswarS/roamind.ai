@@ -1,49 +1,67 @@
 package notes
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
 )
 
-// Found is a note on disk: where WriteNote rewrites it in place. bm names
-// a note's file after the title it was first written with, which a later
-// title can differ from, and writing it with another title would make a
-// second note.
+// Found is a note as bm resolves it: where WriteNote rewrites it in place.
+// bm names a note's file after the title it was first written with, which
+// a later title can differ from, and writing it with another title would
+// make a second note.
 type Found struct {
-	Folder string // relative to the notes folder, with slashes; "" at the top
-	Name   string // the file name without .md
-	Type   string
-	Body   string // the note after its frontmatter
+	Permalink string
+	Folder    string // relative to the notes folder, with slashes; "" at the top
+	Name      string // the file name without .md
+	Type      string
 }
 
-// FindNote returns the note of project with permalink, read straight from
-// disk, or nil when there is none.
-func (n Notes) FindNote(project, permalink string) (*Found, error) {
+// FindNote returns the note of project with permalink, which bm reads by
+// its exact permalink, with or without the project, or nil when there is
+// none; bm suggests similar notes then, which FindNote ignores.
+func (n Notes) FindNote(ctx context.Context, project, permalink string) (*Found, error) {
 	if err := ValidProject(project); err != nil {
 		return nil, err
 	}
-	var found *Found
-	errFound := errors.New("found")
-	err := n.walk(project, "", func(rel string, fm map[string]string, body string) error {
-		if fm["permalink"] != permalink {
-			return nil
-		}
-		dir := path.Dir(rel)
-		if dir == "." {
-			dir = ""
-		}
-		found = &Found{Folder: dir, Name: strings.TrimSuffix(path.Base(rel), ".md"), Type: fm["type"], Body: body}
-		return errFound
-	})
-	if errors.Is(err, errFound) {
-		err = nil
+	if strings.TrimSpace(permalink) == "" {
+		return nil, nil
 	}
-	return found, err
+	cmd := exec.CommandContext(ctx, n.Binary, "tool", "read-note", "--project", project, "--json", "--frontmatter", "--", permalink)
+	cmd.Env = append(os.Environ(), "BASIC_MEMORY_CONFIG_DIR="+n.ConfigDir(project))
+	var out, errOut bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errOut
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("bm read-note: %w: %s", err, strings.TrimSpace(errOut.String()))
+	}
+	var note struct {
+		Permalink   *string `json:"permalink"`
+		FilePath    string  `json:"file_path"`
+		Frontmatter struct {
+			Type string `json:"type"`
+		} `json:"frontmatter"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &note); err != nil {
+		return nil, fmt.Errorf("bm read-note: %w", err)
+	}
+	if note.Permalink == nil || *note.Permalink == "" {
+		return nil, nil
+	}
+	dir := path.Dir(note.FilePath)
+	if dir == "." {
+		dir = ""
+	}
+	return &Found{Permalink: *note.Permalink, Folder: dir, Name: strings.TrimSuffix(path.Base(note.FilePath), ".md"),
+		Type: note.Frontmatter.Type}, nil
 }
 
 // HasContact reports whether a person note of project in people/ lists
