@@ -8,7 +8,7 @@
 //
 // Script properties (Project settings → Script properties):
 //   OPENROUTER_API_KEY  an OpenRouter key with credit
-//   OPENROUTER_MODEL    a DeepSeek model id on OpenRouter, e.g. deepseek/deepseek-chat
+//   OPENROUTER_MODEL    a DeepSeek model id on OpenRouter, e.g. deepseek/deepseek-v4.1-flash-1017
 //   WEBHOOK_URL         the gmail webhook's URL, printed by task webhook
 //   WEBHOOK_SECRET      ROAMIND_MAIL_SECRET from Roamind's .env
 //   ACCOUNT_SECRET      this account's key, printed by task mail-connect
@@ -79,6 +79,21 @@ function setup() {
 }
 
 function run() {
+  // One run at a time: the trigger can fire while another run, such as
+  // setup()'s, is still going, and both would send the same mail.
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(0)) {
+    console.log('another run is going');
+    return;
+  }
+  try {
+    run_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function run_() {
   const cfg = config_();
   const started = Date.now();
   const address = Session.getEffectiveUser().getEmail();

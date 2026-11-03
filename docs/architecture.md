@@ -203,6 +203,7 @@ Gmail ─▶ Apps Script, per account (deploy/apps-script/Code.js), every 15 min
 
 - **Reading mail:** Roamind has no Gmail access of its own. An Apps Script in each account, authorized by its owner, finds new mail in the inbox (without the promotions, social and forums tabs) and in sent mail, where the user's commitments are. It takes at most 20 messages a run, oldest first.
   - The script reads and labels mail through the Gmail advanced service alone, so it needs only the `gmail.modify` scope. Labels are per message: `roamind/<category>` on every message, and `roamind/sent` once the webhook accepts it. Mail found while Roamind is down stays unlabeled and is sent on a later run; removing `roamind/sent` sends a message again.
+  - Runs never overlap: one that starts while another is going, as the trigger can during `setup()`'s, stops at once (`LockService`).
   - A message that fails 8 runs in a row (about two hours), as when OpenRouter can't sort it, is labeled `roamind/error` and left, so it can't hold up newer mail.
   - The model only sorts mail into `bill`, `travel`, `order`, `appointment`, `commitment`, `person`, `other` or `skip`, from the first 4,000 characters. `skip` (newsletters, notifications, codes, marketing) never leaves Gmail.
   - The script sends a heartbeat once a day when it posted nothing else.
