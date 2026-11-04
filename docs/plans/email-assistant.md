@@ -3,6 +3,7 @@
 Status: drafted 2026-10-21, revised 2026-10-22, redesigned 2026-11-01 around Google Apps Script, built 2026-11-02. How it works now is in the Email assistant section of `docs/architecture.md`, and setting it up in `docs/deployment.md`. The build differs from this plan in that:
 - `mail-message` runs are serialized across all accounts, not per user: the webhook's event names the account, so its concurrency key can't be the user.
 - An update rewrites the note's file in place, found by permalink with `bm tool read-note`, because bm names a file after the title it was first written with; writing it under another title made a second note.
+- The script runs once a day, not every 15 minutes, over the past week's mail, and a run out of time continues a minute later.
 - The script reads and labels per message through the Gmail advanced service; `GmailApp` labels whole threads.
 - Each account has its own key (`task mail-connect`), and the worker checks a second signature with it: with only the shared `ROAMIND_MAIL_SECRET`, one user's script could send mail as another's account.
 - Mail that wasn't saved (a failed or stuck run) is listed in the inbox digest for a week; removing its `roamind/sent` label sends it again. A message the script fails on 8 runs in a row is labeled `roamind/error`.
