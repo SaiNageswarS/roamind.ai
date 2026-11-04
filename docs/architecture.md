@@ -193,7 +193,7 @@ Each morning, users get a message on what needs their attention, from their item
 Mail from the user's Gmail accounts becomes task, event and person notes, each task and event with its `items` row, so the inbox digest shows it when it is due.
 
 ```
-Gmail ─▶ Apps Script, per account (deploy/apps-script/Code.js), every 15 minutes
+Gmail ─▶ Apps Script, per account (deploy/apps-script/Code.js), once a day     
            new mail ─▶ OpenRouter (DeepSeek, providers that keep no data): broad category
            label roamind/<category>; skip stops here
            POST, signed ─▶ Tailscale Funnel ─▶ Hatchet webhook gmail ─event mail:received─▶ worker: mail-message
@@ -201,10 +201,10 @@ Gmail ─▶ Apps Script, per account (deploy/apps-script/Code.js), every 15 min
            label roamind/sent once the webhook accepts it                                    notes + items ─▶ inbox digest
 ```
 
-- **Reading mail:** Roamind has no Gmail access of its own. An Apps Script in each account, authorized by its owner, finds new mail in the inbox (without the promotions, social and forums tabs) and in sent mail, where the user's commitments are. It takes at most 20 messages a run, oldest first.
-  - The script reads and labels mail through the Gmail advanced service alone, so it needs only the `gmail.modify` scope. Labels are per message: `roamind/<category>` on every message, and `roamind/sent` once the webhook accepts it. Mail found while Roamind is down stays unlabeled and is sent on a later run; removing `roamind/sent` sends a message again.
-  - Runs never overlap: one that starts while another is going, as the trigger can during `setup()`'s, stops at once (`LockService`).
-  - A message that fails 8 runs in a row (about two hours), as when OpenRouter can't sort it, is labeled `roamind/error` and left, so it can't hold up newer mail.
+- **Reading mail:** Roamind has no Gmail access of its own. An Apps Script in each account, authorized by its owner, finds new mail in the inbox (without the promotions, social and forums tabs) and in sent mail, where the user's commitments are, over the past week. It runs once a day, at `RUN_HOUR` (6:00 by default, before the 8:00 digest), and takes the mail oldest first. A run stops taking mail after 4.5 minutes, within Apps Script's 6, and starts a continuation a minute later, until the day's mail is sent (at most 500 messages from each of inbox and sent mail).
+  - The script reads and labels mail through the Gmail advanced service alone, so it needs only the `gmail.modify` scope. Labels are per message: `roamind/<category>` on every message, and `roamind/sent` once the webhook accepts it. Mail found while Roamind is down stays unlabeled and is sent on a later day, within the week; removing `roamind/sent` sends a message again.
+  - Runs never overlap: one that starts while another is going stops at once (`LockService`).
+  - A message that fails, as when OpenRouter can't sort it, waits for the next day, so continuations don't retry it; after failing on 3 days it is labeled `roamind/error` and left.
   - The model only sorts mail into `bill`, `travel`, `order`, `appointment`, `commitment`, `person`, `other` or `skip`, from the first 4,000 characters. `skip` (newsletters, notifications, codes, marketing) never leaves Gmail.
   - The script sends a heartbeat once a day when it posted nothing else.
 - **The webhook:** `gmail` is a generic Hatchet webhook (`worker/cmd/setup-webhook`), under the webhooks path the Funnel already makes public. Hatchet checks the hex HMAC-SHA256 of the raw body in `X-Roamind-Signature` against `ROAMIND_MAIL_SECRET`, which every account's script shares, so it only keeps out what isn't one of the scripts. Each request also carries `signature`, the account's own: an HMAC-SHA256 of its address, message id and date with the key `task mail-connect` made for that account (`mail_accounts.secret`), the script's `ACCOUNT_SECRET`. So one user's script can't send mail as another user's account. Neither signature has a timestamp, so a request can be replayed, which `check` makes harmless.

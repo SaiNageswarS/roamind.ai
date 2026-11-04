@@ -1,5 +1,5 @@
-// Roamind's mail script, one per Gmail account (task mail-script). Every
-// 15 minutes it finds the account's new mail, has a DeepSeek model on
+// Roamind's mail script, one per Gmail account (task mail-script). Once a
+// day, at RUN_HOUR, it finds the account's new mail, has a DeepSeek model on
 // OpenRouter sort each message into a broad category, labels it
 // roamind/<category> in Gmail, and posts what isn't skipped to Roamind's
 // gmail webhook, through the Tailscale Funnel. Roamind relates the mail to
@@ -12,18 +12,22 @@
 //   WEBHOOK_URL         the gmail webhook's URL, printed by task webhook
 //   WEBHOOK_SECRET      ROAMIND_MAIL_SECRET from Roamind's .env
 //   ACCOUNT_SECRET      this account's key, printed by task mail-connect
+//   RUN_HOUR            optional: the hour, 0 to 23 in the script's time zone,
+//                       of the daily run; 6 when unset, before the 8:00 digest
 //
 // Hatchet checks each request's signature with WEBHOOK_SECRET, which every
 // account's script has; Roamind checks a second one, with ACCOUNT_SECRET,
 // so that no account's script can send mail as another's.
 //
-// Run setup() once from the editor: it authorizes the script, creates the
-// labels and installs the trigger.
+// Run setup() once from the editor, and again after changing RUN_HOUR: it
+// authorizes the script, creates the labels and installs the daily trigger.
 //
-// A message is labeled roamind/sent only once the webhook accepts it, so
-// mail found while Roamind is down is sent on a later run; removing the
-// label sends a message again. A message that fails MAX_FAILS runs in a
-// row, as when OpenRouter can't sort it, is labeled roamind/error and left.
+// A run that is out of time with mail left starts another a minute later,
+// until all of the day's mail is sent. A message is labeled roamind/sent
+// only once the webhook accepts it, so mail found while Roamind is down is
+// sent on a later day; removing the label sends a message again. A message
+// that fails, as when OpenRouter can't sort it, is tried again the next
+// day, and labeled roamind/error and left after failing on MAX_FAILS days.
 // Only the first
 // CLASSIFY_CHARS of a message go to OpenRouter, and only to providers that
 // don't keep or train on requests.
@@ -31,14 +35,19 @@
 const CATEGORIES = ['bill', 'travel', 'order', 'appointment', 'commitment', 'person', 'other', 'skip'];
 const SENT = 'sent';
 const ERROR = 'error';
-const MAX_PER_RUN = 20;
-const MAX_FAILS = 8;
+const MAX_FAILS = 3;
+// The most messages a day takes from each search; the rest, a later day.
+const MAX_LISTED = 500;
+const RUN_HOUR = 6;
 const TEXT_CHARS = 20000;
 const CLASSIFY_CHARS = 4000;
-// Runs stop taking messages after this, within Apps Script's 6 minutes.
+// Runs stop taking messages after this, within Apps Script's 6 minutes,
+// and leave the rest to the next one.
 const RUN_MS = 4.5 * 60 * 1000;
+const MORE_AFTER_MS = 60 * 1000;
 // Gmail search names nested labels with hyphens: roamind/sent is roamind-sent.
-const NEW_MAIL = '-label:roamind-sent -label:roamind-skip -label:roamind-error newer_than:3d';
+// A week, so mail found while Roamind is down is still sent days later.
+const NEW_MAIL = '-label:roamind-sent -label:roamind-skip -label:roamind-error newer_than:7d';
 const QUERIES = [
   'in:inbox -category:promotions -category:social -category:forums ' + NEW_MAIL,
   // The user's own replies hold their commitments.
@@ -69,59 +78,87 @@ const CLASSIFY_SCHEMA = {
 };
 
 function setup() {
-  config_();
+  const cfg = config_();
   for (const c of CATEGORIES.concat([SENT, ERROR])) labelId_(c);
-  for (const t of ScriptApp.getProjectTriggers()) {
-    if (t.getHandlerFunction() === 'run') ScriptApp.deleteTrigger(t);
-  }
-  ScriptApp.newTrigger('run').timeBased().everyMinutes(15).create();
+  deleteTriggers_('run');
+  deleteTriggers_('more');
+  ScriptApp.newTrigger('run').timeBased().everyDays(1).atHour(cfg.runHour).create();
   run();
 }
 
 function run() {
-  // One run at a time: the trigger can fire while another run, such as
-  // setup()'s, is still going, and both would send the same mail.
+  // One run at a time: two runs would send the same mail.
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(0)) {
     console.log('another run is going');
     return;
   }
   try {
-    run_();
+    // A continuation's trigger stays listed after it fires.
+    deleteTriggers_('more');
+    if (run_()) {
+      ScriptApp.newTrigger('more').timeBased().after(MORE_AFTER_MS).create();
+      console.log('more mail left; continuing in a minute');
+    }
   } finally {
     lock.releaseLock();
   }
 }
 
+// more continues a run that was out of time.
+function more() {
+  run();
+}
+
+// run_ sends the new mail it has time for; true when some is left.
 function run_() {
   const cfg = config_();
   const started = Date.now();
   const address = Session.getEffectiveUser().getEmail();
   const props = PropertiesService.getScriptProperties();
+  const today = today_();
   let posted = 0;
+  let left = false;
   for (const id of newMessages_()) {
-    if (Date.now() - started > RUN_MS) break;
+    // A message that failed today waits for tomorrow, so continuations
+    // don't try it again and again.
+    const failed = (props.getProperty('FAILS_' + id) || '0|').split('|');
+    if (failed[1] === today) continue;
+    if (Date.now() - started > RUN_MS) {
+      left = true;
+      break;
+    }
     try {
       if (handle_(cfg, address, id)) posted++;
       props.deleteProperty('FAILS_' + id);
     } catch (e) {
-      // Left unlabeled, so the next run tries it again, up to MAX_FAILS.
+      // Left unlabeled, so a later day tries it again, up to MAX_FAILS.
       console.error('message ' + id + ': ' + e);
-      const fails = Number(props.getProperty('FAILS_' + id) || 0) + 1;
+      const fails = Number(failed[0]) + 1;
       if (fails < MAX_FAILS) {
-        props.setProperty('FAILS_' + id, String(fails));
+        props.setProperty('FAILS_' + id, fails + '|' + today);
       } else {
         addLabel_(id, ERROR);
         props.deleteProperty('FAILS_' + id);
       }
     }
   }
-  const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
   if (props.getProperty('POSTED_DAY') !== today &&
       post_(cfg, { address: address, date: new Date().toISOString(), heartbeat: true })) {
     props.setProperty('POSTED_DAY', today);
   }
   console.log('posted ' + posted + ' messages');
+  return left;
+}
+
+function deleteTriggers_(handler) {
+  for (const t of ScriptApp.getProjectTriggers()) {
+    if (t.getHandlerFunction() === handler) ScriptApp.deleteTrigger(t);
+  }
+}
+
+function today_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
 }
 
 // handle_ classifies, labels and posts one message; true when it was
@@ -151,8 +188,7 @@ function handle_(cfg, address, id) {
   };
   if (!post_(cfg, msg)) return false;
   addLabel_(id, SENT);
-  PropertiesService.getScriptProperties().setProperty('POSTED_DAY',
-    Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'));
+  PropertiesService.getScriptProperties().setProperty('POSTED_DAY', today_());
   return true;
 }
 
@@ -211,19 +247,25 @@ function partText_(part) {
   }
 }
 
-// newMessages_ returns the ids of new messages, oldest first, at most
-// MAX_PER_RUN.
+// newMessages_ returns the ids of new messages, oldest first: at most
+// MAX_LISTED of each search, its newest.
 function newMessages_() {
   const ids = [];
   for (const q of QUERIES) {
-    const res = Gmail.Users.Messages.list('me', { q: q, maxResults: MAX_PER_RUN });
-    for (const m of res.messages || []) {
-      if (ids.indexOf(m.id) < 0) ids.push(m.id);
-    }
+    let listed = 0;
+    let pageToken;
+    do {
+      const res = Gmail.Users.Messages.list('me', { q: q, maxResults: Math.min(100, MAX_LISTED - listed), pageToken: pageToken });
+      for (const m of res.messages || []) {
+        listed++;
+        if (ids.indexOf(m.id) < 0) ids.push(m.id);
+      }
+      pageToken = res.nextPageToken;
+    } while (pageToken && listed < MAX_LISTED);
   }
-  // Gmail's ids grow with time; the list comes newest first.
+  // Gmail's ids grow with time; the lists come newest first.
   ids.sort((a, b) => (a.length - b.length) || (a < b ? -1 : a > b ? 1 : 0));
-  return ids.slice(0, MAX_PER_RUN);
+  return ids;
 }
 
 function classify_(cfg, m, text, jsonld) {
@@ -348,11 +390,14 @@ function config_() {
     secret: p.getProperty('WEBHOOK_SECRET'),
     accountSecret: p.getProperty('ACCOUNT_SECRET'),
   };
+  const hour = p.getProperty('RUN_HOUR');
   for (const k of Object.keys(cfg)) {
     if (!cfg[k]) {
       throw new Error('set the script properties OPENROUTER_API_KEY, OPENROUTER_MODEL, WEBHOOK_URL, WEBHOOK_SECRET and ACCOUNT_SECRET');
     }
   }
   if (!/^([0-9a-f]{2})+$/i.test(cfg.accountSecret)) throw new Error('ACCOUNT_SECRET is not hex; copy it from task mail-connect');
+  cfg.runHour = hour === null || hour.trim() === '' ? RUN_HOUR : Number(hour);
+  if (!Number.isInteger(cfg.runHour) || cfg.runHour < 0 || cfg.runHour > 23) throw new Error('RUN_HOUR is not an hour from 0 to 23');
   return cfg;
 }

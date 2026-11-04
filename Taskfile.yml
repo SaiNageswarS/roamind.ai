@@ -157,7 +157,11 @@ tasks:
         set -- {{.CLI_ARGS}}
         [ $# -eq 1 ] || { echo "usage: task mail-script -- <script id>" >&2; exit 1; }
         printf '{"scriptId": "%s"}\n' "$1" > .clasp.json
-        npx --yes @google/clasp@{{.CLASP_VERSION}} push --force
+        # clasp exits 0 when Google refuses the push, and may still print
+        # "Pushed"; its "Push failed" is what tells.
+        out="$(npx --yes @google/clasp@{{.CLASP_VERSION}} push --force 2>&1)"
+        printf '%s\n' "$out" | grep -v '^\s*at ' | head -40
+        if printf '%s' "$out" | grep -q 'Push failed'; then exit 1; fi
 
   funnel:
     desc: Expose only the Hatchet webhooks path (Slack, gmail) publicly via Tailscale Funnel
