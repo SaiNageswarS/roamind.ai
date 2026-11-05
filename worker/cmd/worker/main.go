@@ -1,9 +1,11 @@
 // Command worker runs the Roamind Hatchet worker. `task init` prepares its
-// store and memory projects first.
+// store and memory projects first, and runs `worker -questdb-init` to create
+// QuestDB's tables.
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -22,6 +24,7 @@ import (
 	"roamind.ai/channels/web"
 	"roamind.ai/connectors/feeds"
 	"roamind.ai/connectors/jobs"
+	"roamind.ai/memory/finance"
 	"roamind.ai/memory/store"
 	"roamind.ai/memory/store/notes"
 	"roamind.ai/worker/client"
@@ -36,8 +39,13 @@ func main() {
 }
 
 func run() error {
+	questdbInit := flag.Bool("questdb-init", false, "create QuestDB's tables from <ROAMIND_MEMORY_DIR>/questdb-schemas, then exit")
+	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *questdbInit {
+		return initQuestDB(ctx)
+	}
 
 	dataDir, err := filepath.Abs(envOr("ROAMIND_DATA_DIR", "./data"))
 	if err != nil {
@@ -169,6 +177,18 @@ func run() error {
 	}
 	slog.Info("worker starting", "data_dir", dataDir, "slots", slots)
 	return w.StartBlocking(ctx)
+}
+
+// initQuestDB applies the schemas in the repo's memory folder to QuestDB
+// (deploy/bin/run-questdb.sh), as admin over Postgres wire; its HTTP is
+// read-only.
+func initQuestDB(ctx context.Context) error {
+	db, err := finance.Open(ctx, envOr("ROAMIND_QUESTDB_ADDR", finance.DefaultAddr), os.Getenv("ROAMIND_QUESTDB_PASSWORD"))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return db.Init(ctx, filepath.Join(envOr("ROAMIND_MEMORY_DIR", "./memory"), "questdb-schemas"))
 }
 
 // mcpBinary is the absolute path of the mcp command (task build):

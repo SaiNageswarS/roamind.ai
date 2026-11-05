@@ -65,11 +65,14 @@ tasks:
   # projects are created by the user-setup workflow; this brings existing
   # ones up to date.
   init:
-    desc: From memory/, create the store's tables, load the curated interests, and bring every Basic Memory project up to date
+    desc: From memory/, create the store's and QuestDB's tables, load the curated interests, and bring every Basic Memory project up to date
     cmds:
       - mkdir -p "${ROAMIND_DATA_DIR:-./data}/memory/fastembed_cache"
       - cat memory/sql-schemas/*.sql | sqlite3 -bail "${ROAMIND_DATA_DIR:-./data}/roamind.db"
       - sqlite3 -bail "${ROAMIND_DATA_DIR:-./data}/roamind.db" ".read memory/seed/interests.sql"
+      # QuestDB's tables, from memory/questdb-schemas (HTTP is read-only, so
+      # the worker applies them over Postgres wire).
+      - ./bin/worker -questdb-init
       - |
         # A project whose config.json jq can't merge into is skipped, with a
         # warning, so one bad file doesn't keep the worker down.
@@ -206,20 +209,16 @@ tasks:
         mkdir -p bin
         mv "$tmp/questdb-{{.QUESTDB_VERSION}}-rt-linux-x86-64" {{.QUESTDB}}
 
-  # Its data goes in data/questdb. It listens on loopback only, as QuestDB
-  # binds every interface by default: the web console and REST API on 9000,
-  # Postgres wire on 8812 (user admin, password quest), line protocol on
-  # 9009 and health metrics on 9003.
+  # Locked down by deploy/bin/run-questdb.sh: loopback only, line protocol
+  # off, HTTP read-only, Postgres wire behind ROAMIND_QUESTDB_PASSWORD. The
+  # web console and REST API are on 9000, Postgres wire on 8812, health on
+  # 9003. process-compose runs it as `questdb`, in the foreground
+  # (task questdb -- -n); this starts it in the background without the rest.
   questdb:
     desc: Start QuestDB in the background, downloading it first if needed (web console http://127.0.0.1:9000)
     deps: [questdb-install]
-    env:
-      QDB_HTTP_BIND_TO: 127.0.0.1:9000
-      QDB_HTTP_MIN_NET_BIND_TO: 127.0.0.1:9003
-      QDB_PG_NET_BIND_TO: 127.0.0.1:8812
-      QDB_LINE_TCP_NET_BIND_TO: 127.0.0.1:9009
     cmds:
-      - '{{.QUESTDB}}/bin/questdb.sh start -d "$(realpath -m "${ROAMIND_DATA_DIR:-./data}/questdb")"'
+      - deploy/bin/run-questdb.sh {{.QUESTDB}} {{.CLI_ARGS}}
 
   questdb-stop:
     desc: Stop QuestDB
@@ -238,7 +237,7 @@ tasks:
         mkdir -p "$(dirname "$unit")"
         cat >"$unit" <<UNIT
         [Unit]
-        Description=Roamind (process-compose: caddy, embed, rerank, notebook, init, worker)
+        Description=Roamind (process-compose: caddy, embed, rerank, notebook, questdb, init, worker)
         After=network-online.target
 
         [Service]

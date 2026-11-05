@@ -5,6 +5,7 @@
 #   task all           bin/caddy, bin/worker, bin/mcp
 #   task vllm          the search models' vLLM
 #   task notebook      the notebook's Python environment
+#   .env               ROAMIND_QUESTDB_PASSWORD and ROAMIND_QUESTDB_READONLY_PASSWORD
 #
 # Processes that talk to Hatchet run through deploy/bin/with-hatchet.sh, which
 # loads the Hatchet CLI profile created by `hatchet server start`.
@@ -78,11 +79,30 @@ processes:
       restart: on_failure
       backoff_seconds: 10
 
+  questdb:
+    description: QuestDB for the finance assistant's ledger, locked down (127.0.0.1:9000 console, :8812 Postgres wire, questdb.<tailnet>.ts.net)
+    # Downloads QuestDB first if needed; -n keeps it in the foreground.
+    command: task questdb -- -n
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 9003
+        path: /status
+      initial_delay_seconds: 3
+      period_seconds: 5
+      failure_threshold: 24
+    availability:
+      restart: on_failure
+      backoff_seconds: 10
+
   # Tables, curated interests and Basic Memory schema notes from memory/;
   # safe to repeat, so it runs before every worker start.
   init:
-    description: Prepare the store and memory projects from memory/
+    description: Prepare the store, QuestDB's tables and memory projects from memory/
     command: task init
+    depends_on:
+      questdb:
+        condition: process_healthy
 
   worker:
     description: Roamind Hatchet worker (chat-turn)

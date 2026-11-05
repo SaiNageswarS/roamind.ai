@@ -49,3 +49,13 @@
 	import tailnet_owner_only
 	reverse_proxy 127.0.0.1:8890
 }
+
+# QuestDB web console → https://questdb.<tailnet>.ts.net
+# Its HTTP is read-only (deploy/bin/run-questdb.sh), so a console session can
+# query and chart but not change or drop data. Saved queries are in
+# deploy/questdb/dashboards.sql. The console sees every user's finances.
+:443 {
+	bind tailscale/questdb
+	import tailnet_owner_only
+	reverse_proxy 127.0.0.1:9000
+}

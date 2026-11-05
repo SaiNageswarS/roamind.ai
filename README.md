@@ -44,7 +44,7 @@ Novelty is rated against other self-hosted personal agents:
 - **Sandboxed shell.** Bash runs in a bubblewrap sandbox that sees only the user's workspace: no home directory, other users, secrets or local ports. Nothing runs unsandboxed.
 - **Isolated users.** Each user has their own workspace, memory database and config. Memory and Roamind's MCP server are pinned to the turn's user.
 - **Safe fetching.** The feed and job-posting readers connect only to public addresses and read at most 8 MB.
-- **Small public surface.** Only the Hatchet webhooks path is public, via Tailscale Funnel: Slack's, and the signed gmail webhook of the mail scripts. Dashboards and the notebook are tailnet-only, for listed logins.
+- **Small public surface.** Only the Hatchet webhooks path is public, via Tailscale Funnel: Slack's, and the signed gmail webhook of the mail scripts. Dashboards (Hatchet, QuestDB) and the notebook are tailnet-only, for listed logins.
 - **Sandboxed notebook.** The tailnet Jupyter runs in a bubblewrap sandbox: notebooks see neither `.env`, `data/` nor the home directory, and can write only their own folder. The web app is hosted on Firebase; the worker only connects out to it.
 - **No accounts.** Identity is the member's Slack-verified email. Only your workspace's members can use the agent. Web users sign in with Google, and their verified email is their identity.
 - **Nothing is submitted for you.** The job assistant drafts applications; it never fills in or submits a form.
@@ -120,7 +120,7 @@ Details: [docs/architecture.md](docs/architecture.md); the web app's data contra
 Needs an NVIDIA GPU, Tailscale, the [Hatchet CLI](https://docs.hatchet.run/reference/cli.md), [Task](https://taskfile.dev), `sqlite3`, `jq`, `bwrap`, `socat` and Basic Memory (`uv tool install basic-memory`).
 
 ```sh
-cp .env.example .env          # add TS_AUTHKEY, ROAMIND_DASHBOARD_USERS
+cp .env.example .env          # add TS_AUTHKEY, ROAMIND_DASHBOARD_USERS, QuestDB passwords
 # create the Slack app from deploy/slack-app-manifest.yaml; add its tokens to .env
 task hatchet-env              # Hatchet server, Slack webhook, Funnel; prints the Slack Request URL
 task all vllm notebook
