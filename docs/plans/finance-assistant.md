@@ -5,13 +5,7 @@ Status: drafted 2026-11-04; revised 2026-11-05 around QuestDB (PR #19 added `tas
 ## Context
 Roamind should follow each user's investments across their accounts in the US, the EU and India, and alert them about the stocks they hold. It should give them their holdings, profit and tax estimates, and track their subscriptions, all in a channel of their own: `#finance-<name>`.
 
-The first user's accounts:
-- Morgan Stanley at Work / E\*TRADE (US): RSU and ESPP shares;
-- INDmoney (US stocks bought from India);
-- bunq Stocks (EU);
-- Paytm Money (India): shares and mutual funds.
-
-They trade 20–30 times a month.
+A user may hold shares, ETFs and mutual funds at several brokers across those markets, including employer stock plans (RSU vests, ESPP purchases), and may trade dozens of times a month.
 
 Decided with the user:
 - **Several users.** Every user's financial data is theirs alone, as their memory is. Market data is shared.
@@ -28,8 +22,8 @@ Decided with the user:
 
 Findings that shape the design:
 - **Brokers can't be read directly.**
-  - E\*TRADE's and Paytm Money's APIs need a browser login every day: their tokens expire at midnight.
-  - INDmoney has no API, and bunq's API doesn't cover bunq Stocks.
+  - Retail broker APIs, where they exist, mostly need a browser login every day: their access tokens expire at midnight.
+  - Many brokers and neobanks have no API for holdings at all.
   - Mail and reports cover every account the same way.
 - **QuestDB fits the de-dupe.** A WAL table can declare `DEDUP UPSERT KEYS(ts, …)`: a row with the same keys replaces the old one, and an identical row is skipped. That makes every write here an idempotent upsert: a retried run, or a report uploaded twice, changes nothing. The keys must include the designated timestamp.
 - **QuestDB has `DECIMAL(precision, scale)`** since 9.2, with exact arithmetic and no implicit conversion from doubles, so money is stored exactly. The `task questdb` install is 10.1.0.
@@ -156,7 +150,7 @@ Both sources produce the same thing: a list of observations with a source, a doc
   - hashes the file;
   - stops if `finance_uploads` has the hash for this user ("already imported on 3 Nov");
   - parses it.
-- **Parsers come first.** Known CSV and XLSX formats have Go parsers in `connectors/statements`: the Paytm Money tradebook, INDmoney's US holding and transaction statements, the E\*TRADE gains and losses and benefit history, and bunq's statement. Each parser is added when the first real file of that format is seen.
+- **Parsers come first.** Known CSV and XLSX formats have Go parsers in `connectors/statements`: one per broker export: a tradebook, a transaction or holdings statement, a stock plan's gains and benefit history. Each parser is added when the first real file of that format is seen.
 - **The model is the fallback**, for PDFs and unknown layouts. It reads the file and passes `rows` in the observation schema, and the tool runs the same checks as for mail. A report's own totals, when it has them, must match the sum of its rows.
 - A CAS PDF is encrypted with the PAN. The turn asks for the password in the thread and decrypts it in the sandbox with `qpdf`, which is added to the sandbox image. The password isn't stored. A CAS gives `holdings_reported`, not trades.
 - Rows go to `observations` with source `upload:<sha256>`. The tool marks the user dirty, and the worker starts `finance-reconcile` after the turn, the way `goalChannelsTrigger` runs. The MCP server has no Hatchet client.
@@ -197,7 +191,7 @@ Both sources produce the same thing: a list of observations with a source, a doc
 - They are listed in the next post in `#finance-<name>`.
 - `list_conflicts` and `resolve_conflict(id, use: report|mail|chat|both)` let the user settle them in chat. `both` is for two real trades that looked like one.
 - A resolution is stored and re-applied by later reconciles.
-- **Holdings checks:** the reconcile compares computed positions with the latest `holdings_reported` for each account. A difference is a conflict too ("CAS shows 120 INFY at Paytm Money; trades give 110").
+- **Holdings checks:** the reconcile compares computed positions with the latest `holdings_reported` for each account. A difference is a conflict too ("CAS shows 120 INFY; trades give 110").
 
 ### 5. Several users
 - **Tables:**
@@ -392,7 +386,7 @@ New Go dependency: `github.com/jackc/pgx/v5` as a direct dependency of `memory`.
    - A write over HTTP is refused, and so is a login with the default password.
    - `https://questdb.<tailnet>.ts.net` opens for a listed login, gives 403 for others, and refuses a `DROP TABLE`.
 3. **Live, phase 2:**
-   - Upload a Paytm Money tradebook and compare `list_holdings` with the app.
+   - Upload a broker's tradebook and compare `list_holdings` with the app.
    - Upload it again: "already imported".
    - Upload an overlapping statement: no doubled trades, agreements counted.
 4. **Live, phase 3:**
