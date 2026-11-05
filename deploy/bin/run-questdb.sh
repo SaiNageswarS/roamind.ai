@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Starts QuestDB locked down: every port on loopback, line protocol off, HTTP
-# (the web console and REST API) read-only, telemetry off, and Postgres wire
-# behind ROAMIND_QUESTDB_PASSWORD (user admin) plus a read-only user (user)
-# behind ROAMIND_QUESTDB_READONLY_PASSWORD. Its data goes in
-# <ROAMIND_DATA_DIR>/questdb.
+# Starts QuestDB on loopback only, with its data in <ROAMIND_DATA_DIR>/questdb.
+# Roamind reads and writes over QWP, QuestDB's WebSocket protocol, on the HTTP
+# port (9000), which also serves the web console and REST API; Caddy puts the
+# console on the tailnet. QWP needs line protocol over HTTP, so that stays
+# on. Postgres wire, line protocol over TCP and UDP, and telemetry are off.
 #
 # Usage: run-questdb.sh <questdb home> [questdb.sh start options]; -n keeps it
 # in the foreground, as process-compose runs it.
@@ -12,27 +12,12 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
 home="$1"
 shift
-pw="${ROAMIND_QUESTDB_PASSWORD:-}"
-ro="${ROAMIND_QUESTDB_READONLY_PASSWORD:-}"
-if [[ -z "$pw" || "$pw" == quest ]]; then
-  echo "run-questdb: set ROAMIND_QUESTDB_PASSWORD in .env (not QuestDB's default, quest)" >&2
-  exit 1
-fi
-if [[ -z "$ro" || "$ro" == quest || "$ro" == "$pw" ]]; then
-  echo "run-questdb: set ROAMIND_QUESTDB_READONLY_PASSWORD in .env, different from ROAMIND_QUESTDB_PASSWORD" >&2
-  exit 1
-fi
 
 export QDB_HTTP_BIND_TO=127.0.0.1:9000
 export QDB_HTTP_MIN_NET_BIND_TO=127.0.0.1:9003
-export QDB_PG_NET_BIND_TO=127.0.0.1:8812
-export QDB_HTTP_SECURITY_READONLY=true
+export QDB_PG_ENABLED=false
 export QDB_LINE_TCP_ENABLED=false
-export QDB_LINE_HTTP_ENABLED=false
 export QDB_LINE_UDP_ENABLED=false
 export QDB_TELEMETRY_ENABLED=false
-export QDB_PG_PASSWORD="$pw"
-export QDB_PG_READONLY_USER_ENABLED=true
-export QDB_PG_READONLY_PASSWORD="$ro"
 
 exec "$home/bin/questdb.sh" start "$@" -d "$(realpath -m "${ROAMIND_DATA_DIR:-./data}/questdb")"

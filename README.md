@@ -120,7 +120,7 @@ Details: [docs/architecture.md](docs/architecture.md); the web app's data contra
 Needs an NVIDIA GPU, Tailscale, the [Hatchet CLI](https://docs.hatchet.run/reference/cli.md), [Task](https://taskfile.dev), `sqlite3`, `jq`, `bwrap`, `socat` and Basic Memory (`uv tool install basic-memory`).
 
 ```sh
-cp .env.example .env          # add TS_AUTHKEY, ROAMIND_DASHBOARD_USERS, QuestDB passwords
+cp .env.example .env          # add TS_AUTHKEY, ROAMIND_DASHBOARD_USERS
 # create the Slack app from deploy/slack-app-manifest.yaml; add its tokens to .env
 task hatchet-env              # Hatchet server, Slack webhook, Funnel; prints the Slack Request URL
 task all vllm notebook

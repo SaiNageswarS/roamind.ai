@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,8 +11,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 )
 
 // testDB is a QuestDB the tests start in a temporary directory, on free
@@ -22,12 +18,6 @@ import (
 // with the schemas applied. It is nil, and the tests skip, when there is
 // none.
 var testDB *DB
-
-// testHTTP is its web console and REST API, read-only as in production.
-var testHTTP string
-
-// testPG is its Postgres wire.
-var testPG string
 
 func TestMain(m *testing.M) {
 	stop, err := startQuestDB()
@@ -49,7 +39,7 @@ func startQuestDB() (stop func(), err error) {
 	if err != nil {
 		return nil, err
 	}
-	ports := make([]string, 3)
+	ports := make([]string, 2)
 	for i := range ports {
 		if ports[i], err = freePort(); err != nil {
 			return nil, err
@@ -59,15 +49,10 @@ func startQuestDB() (stop func(), err error) {
 	cmd.Env = append(os.Environ(),
 		"QDB_HTTP_BIND_TO=127.0.0.1:"+ports[0],
 		"QDB_HTTP_MIN_NET_BIND_TO=127.0.0.1:"+ports[1],
-		"QDB_PG_NET_BIND_TO=127.0.0.1:"+ports[2],
-		"QDB_HTTP_SECURITY_READONLY=true",
+		"QDB_PG_ENABLED=false",
 		"QDB_LINE_TCP_ENABLED=false",
-		"QDB_LINE_HTTP_ENABLED=false",
 		"QDB_LINE_UDP_ENABLED=false",
 		"QDB_TELEMETRY_ENABLED=false",
-		"QDB_PG_PASSWORD=test-password",
-		"QDB_PG_READONLY_USER_ENABLED=true",
-		"QDB_PG_READONLY_PASSWORD=test-readonly",
 	)
 	// The tag lets it run beside another QuestDB. questdb.sh runs java as
 	// its child: stop kills the whole group.
@@ -86,7 +71,10 @@ func startQuestDB() (stop func(), err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	for {
-		if testDB, err = Open(ctx, "127.0.0.1:"+ports[2], "test-password"); err == nil {
+		attempt, cancelAttempt := context.WithTimeout(ctx, 2*time.Second)
+		testDB, err = Open(attempt, "127.0.0.1:"+ports[0])
+		cancelAttempt()
+		if err == nil {
 			break
 		}
 		if ctx.Err() != nil {
@@ -95,8 +83,6 @@ func startQuestDB() (stop func(), err error) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	testHTTP = "http://127.0.0.1:" + ports[0]
-	testPG = "127.0.0.1:" + ports[2]
 	if err := testDB.Init(ctx, "../questdb-schemas"); err != nil {
 		stop()
 		return nil, err
@@ -126,50 +112,6 @@ func TestInitRepeats(t *testing.T) {
 	d := db(t)
 	if err := d.Init(context.Background(), "../questdb-schemas"); err != nil {
 		t.Fatalf("second init: %v", err)
-	}
-}
-
-func TestOpenRefusesDefaultPassword(t *testing.T) {
-	for _, pw := range []string{"", "quest"} {
-		if _, err := Open(context.Background(), DefaultAddr, pw); err == nil {
-			t.Errorf("Open with password %q succeeded", pw)
-		}
-	}
-}
-
-func TestHTTPReadOnly(t *testing.T) {
-	db(t)
-	for _, q := range []string{"SELECT count() FROM observations", "DROP TABLE observations"} {
-		resp, err := http.Get(testHTTP + "/exec?query=" + url.QueryEscape(q))
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		if ok := resp.StatusCode == http.StatusOK; ok != (q[0] == 'S') {
-			t.Errorf("%s over HTTP: %s", q, resp.Status)
-		}
-	}
-}
-
-// TestReadonlyUser checks the read-only user, for the notebook, can query
-// but not write.
-func TestReadonlyUser(t *testing.T) {
-	db(t)
-	ctx := context.Background()
-	c, err := pgx.Connect(ctx, "postgres://user:test-readonly@"+testPG+"/qdb")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close(ctx)
-	var n int64
-	if err := c.QueryRow(ctx, `SELECT count() FROM observations`).Scan(&n); err != nil {
-		t.Errorf("read-only query: %v", err)
-	}
-	if _, err := c.Exec(ctx, `INSERT INTO observations (ts, user_id, source, line) VALUES (now(), 'x', 'chat:x', 1)`); err == nil {
-		t.Error("the read-only user wrote a row")
-	}
-	if _, err := pgx.Connect(ctx, "postgres://admin:quest@"+testPG+"/qdb"); err == nil {
-		t.Error("admin logged in with the default password")
 	}
 }
 
@@ -223,6 +165,18 @@ func TestObservations(t *testing.T) {
 	}
 	if err := d.AddObservations(ctx, "obs-user", []Observation{{Source: "chat:x"}}); err == nil {
 		t.Error("an observation without a date was written")
+	}
+}
+
+// TestWriteRefused checks a write QuestDB refuses fails the call that made
+// it, not later in the background.
+func TestWriteRefused(t *testing.T) {
+	d := db(t)
+	err := d.AddObservations(context.Background(), "refused-user", []Observation{
+		{Date: time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC), Source: "chat:x", Line: 1, Quantity: "not a number"},
+	})
+	if err == nil {
+		t.Error("a quantity that isn't a number was written")
 	}
 }
 

@@ -180,10 +180,9 @@ func run() error {
 }
 
 // initQuestDB applies the schemas in the repo's memory folder to QuestDB
-// (deploy/bin/run-questdb.sh), as admin over Postgres wire; its HTTP is
-// read-only.
+// (deploy/bin/run-questdb.sh).
 func initQuestDB(ctx context.Context) error {
-	db, err := finance.Open(ctx, envOr("ROAMIND_QUESTDB_ADDR", finance.DefaultAddr), os.Getenv("ROAMIND_QUESTDB_PASSWORD"))
+	db, err := finance.Open(ctx, envOr("ROAMIND_QUESTDB_ADDR", finance.DefaultAddr))
 	if err != nil {
 		return err
 	}

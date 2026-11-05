@@ -4,9 +4,14 @@
 // `task init` (bin/worker -questdb-init); its state (accounts, uploads,
 // conflicts, alerts) is in the SQLite store.
 //
-// It is the only code that queries QuestDB. Every function on a user's data
-// takes the user's id and binds it as a parameter, so a caller can't read or
-// write another user's rows (TestTenancy).
+// It talks to QuestDB with the official client over QWP, QuestDB's
+// WebSocket protocol on its HTTP port. Writes are INSERTs run with Exec,
+// which returns once the server has taken the statement or refused it; the
+// client's ingestion sender reports refusals only later, in the background.
+//
+// It is the only Roamind code that queries QuestDB. Every function on a
+// user's data takes the user's id and binds it as a parameter, so a caller
+// can't read or write another user's rows (TestTenancy).
 //
 // Decimals cross this package as text ("12.345", "" for unknown), so no
 // precision is lost between QuestDB's DECIMAL columns and the ledger's maths.
@@ -16,47 +21,84 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	qdb "github.com/questdb/go-questdb-client/v4"
 )
 
-// DefaultAddr is where deploy/bin/run-questdb.sh has QuestDB listen for
-// Postgres wire.
-const DefaultAddr = "127.0.0.1:8812"
+// DefaultAddr is where deploy/bin/run-questdb.sh has QuestDB's HTTP port,
+// which serves QWP, the web console and the REST API.
+const DefaultAddr = "127.0.0.1:9000"
 
-// DB is a connection pool to QuestDB, as its admin user.
-type DB struct{ pool *pgxpool.Pool }
+// DB is a pool of QWP query sessions to QuestDB.
+type DB struct{ qdb *qdb.QuestDB }
 
-// Open connects to QuestDB's Postgres wire at addr (host:port) as admin with
-// password, which must not be QuestDB's default.
-func Open(ctx context.Context, addr, password string) (*DB, error) {
-	if password == "" || password == "quest" {
-		return nil, errors.New("finance: ROAMIND_QUESTDB_PASSWORD is not set, or is QuestDB's default")
-	}
-	dsn := url.URL{Scheme: "postgres", User: url.UserPassword("admin", password), Host: addr, Path: "/qdb"}
-	cfg, err := pgxpool.ParseConfig(dsn.String())
+// Open connects to QuestDB's HTTP port at addr (host:port) and checks it
+// answers a query. Connections are made as they're needed (lazy_connect),
+// so no ingestion connection is opened: writes are INSERTs.
+func Open(ctx context.Context, addr string) (*DB, error) {
+	q, err := qdb.NewQuestDB(ctx, "ws::addr="+addr+";lazy_connect=true;", qdb.WithQueryPoolMax(4))
 	if err != nil {
-		return nil, err
-	}
-	cfg.MaxConns = 4
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		return nil, err
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
 		return nil, fmt.Errorf("finance: QuestDB at %s: %w", addr, err)
 	}
-	return &DB{pool: pool}, nil
+	d := &DB{qdb: q}
+	if err := d.query(ctx, `SELECT 1`, nil, func(*qdb.QwpColumnBatch, int) error { return nil }); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("finance: QuestDB at %s: %w", addr, err)
+	}
+	return d, nil
 }
 
-func (d *DB) Close() { d.pool.Close() }
+func (d *DB) Close() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = d.qdb.Close(ctx)
+}
+
+// exec runs one statement with its parameters.
+func (d *DB) exec(ctx context.Context, sql string, binds qdb.QwpBindFunc) error {
+	s, err := d.qdb.BorrowQuery(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	var opts []qdb.QwpQueryOption
+	if binds != nil {
+		opts = append(opts, qdb.WithQwpQueryBinds(binds))
+	}
+	_, err = s.Exec(ctx, sql, opts...)
+	return err
+}
+
+// query runs a SELECT and calls row for each row of its result.
+func (d *DB) query(ctx context.Context, sql string, binds qdb.QwpBindFunc, row func(b *qdb.QwpColumnBatch, r int) error) error {
+	s, err := d.qdb.BorrowQuery(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	var opts []qdb.QwpQueryOption
+	if binds != nil {
+		opts = append(opts, qdb.WithQwpQueryBinds(binds))
+	}
+	cur := s.Query(ctx, sql, opts...)
+	defer cur.Close()
+	for b, err := range cur.Batches() {
+		if err != nil {
+			return err
+		}
+		for r := range b.RowCount() {
+			if err := row(b, r); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 
 // Init runs the statements of every .sql file in dir, in name order. They
 // are CREATE TABLE IF NOT EXISTS and ALTER TABLE … DEDUP statements, so it's
@@ -76,7 +118,7 @@ func (d *DB) Init(ctx context.Context, dir string) error {
 			return err
 		}
 		for _, stmt := range statements(string(b)) {
-			if _, err := d.pool.Exec(ctx, stmt); err != nil {
+			if err := d.exec(ctx, stmt, nil); err != nil {
 				return fmt.Errorf("finance: %s: %w\n%s", filepath.Base(f), err, stmt)
 			}
 		}
@@ -110,30 +152,21 @@ func (d *DB) WaitApplied(ctx context.Context, tables ...string) error {
 	defer cancel()
 	for {
 		pending := 0
-		rows, err := d.pool.Query(ctx, `SELECT name, suspended, writerTxn, sequencerTxn, errorMessage FROM wal_tables()`)
+		err := d.query(ctx, `SELECT name, suspended, writerTxn, sequencerTxn, errorMessage FROM wal_tables()`, nil,
+			func(b *qdb.QwpColumnBatch, r int) error {
+				name := b.String(0, r)
+				if !slices.Contains(tables, name) {
+					return nil
+				}
+				if b.Bool(1, r) {
+					return fmt.Errorf("finance: QuestDB suspended table %s: %s", name, b.String(4, r))
+				}
+				if b.Int64(2, r) < b.Int64(3, r) {
+					pending++
+				}
+				return nil
+			})
 		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var name, msg string
-			var suspended bool
-			var writer, sequencer int64
-			if err := rows.Scan(&name, &suspended, &writer, &sequencer, nullable(&msg)); err != nil {
-				rows.Close()
-				return err
-			}
-			if !slices.Contains(tables, name) {
-				continue
-			}
-			if suspended {
-				rows.Close()
-				return fmt.Errorf("finance: QuestDB suspended table %s: %s", name, msg)
-			}
-			if writer < sequencer {
-				pending++
-			}
-		}
-		if err := rows.Err(); err != nil {
 			return err
 		}
 		if pending == 0 {
@@ -147,37 +180,31 @@ func (d *DB) WaitApplied(ctx context.Context, tables ...string) error {
 	}
 }
 
-// nullable scans a text column that may be NULL into s, "" for NULL.
-func nullable(s *string) scanText { return scanText{s} }
-
-type scanText struct{ p *string }
-
-func (t scanText) Scan(v any) error {
-	switch v := v.(type) {
-	case nil:
-		*t.p = ""
-	case string:
-		*t.p = v
-	default:
-		return fmt.Errorf("finance: can't scan %T as text", v)
-	}
-	return nil
-}
-
-// orNull is v, or NULL when v is "".
-func orNull(v string) any {
+// text binds v as VARCHAR at i, or NULL when v is "". Symbols and decimals
+// are bound as text too; a decimal's statement casts it.
+func text(b *qdb.QwpBinds, i int, v string) {
 	if v == "" {
-		return nil
+		b.NullVarcharBind(i)
+		return
 	}
-	return v
+	b.VarcharBind(i, v)
 }
 
-// timeOrNull is t, or NULL when t is zero.
-func timeOrNull(t time.Time) any {
+// timestamp binds t at i, or NULL when t is zero.
+func timestamp(b *qdb.QwpBinds, i int, t time.Time) {
 	if t.IsZero() {
-		return nil
+		b.NullTimestampMicrosBind(i)
+		return
 	}
-	return t.UTC()
+	b.TimestampMicrosBind(i, t.UnixMicro())
+}
+
+// timeAt is the TIMESTAMP at (col, r), zero for NULL.
+func timeAt(b *qdb.QwpColumnBatch, col, r int) time.Time {
+	if b.IsNull(col, r) {
+		return time.Time{}
+	}
+	return time.UnixMicro(b.Int64(col, r)).UTC()
 }
 
 // trimDecimal drops the trailing zeros QuestDB pads a DECIMAL's scale with:
@@ -189,3 +216,5 @@ func trimDecimal(s string) string {
 	s = strings.TrimRight(s, "0")
 	return strings.TrimSuffix(s, ".")
 }
+
+var errNoUser = errors.New("finance: no user")

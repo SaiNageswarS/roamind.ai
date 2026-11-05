@@ -32,13 +32,8 @@ Findings that shape the design:
   - It has no transactions across tables.
   - WAL writes are applied asynchronously, so a read straight after a write may not see it.
   - So it holds facts keyed by time. Mutable state (accounts, rules, subscriptions, conflicts, uploads) stays in SQLite. Reads that must see their own writes first wait for the WAL to be applied (section 5).
-- **QuestDB's open-source build has no row-level security or roles.** Each user's isolation is enforced in Roamind's code: every per-user table has a `user_id` column, and only the store package queries it. The console sees everything, so it is for the operator only, read-only.
-- **The console has the right switches.** A running instance's `SHOW PARAMETERS` lists:
-  - `http.security.readonly`, which disables commands that change data over HTTP;
-  - `http.user`/`http.password`;
-  - `pg.user`/`pg.password` (default `admin`/`quest`);
-  - a separate `pg.readonly.user`;
-  - `line.tcp.enabled` and `line.http.enabled`.
+- **QuestDB's open-source build has no row-level security or roles.** Each user's isolation is enforced in Roamind's code: every per-user table has a `user_id` column, and only the store package queries it. The console sees everything, so it is for the operator only.
+- **The tailnet is trusted.** The console and QWP share port 9000 and QuestDB asks for no login there, so the tailnet and Caddy's login check are the gates. QuestDB's `http.security.readonly` would make the console query-only, but it refuses QWP writes too.
 
   Each maps to a `QDB_…` environment variable.
 - **Market data:**
@@ -66,7 +61,7 @@ chat ("I sold 20 INFY") ─▶ chat turn ─▶ record_trade ──────�
                                                                                                  ▼
 finance-daily: prices, FX, actions ─▶ valuations ─▶ rules in Go ─▶ alert turn ─▶ #finance-<name>
 finance-weekly: figures from QuestDB ─▶ summary turn ─▶ #finance-<name>
-QuestDB console (read-only) ◀── Caddy questdb.<tailnet>.ts.net ◀── operator
+QuestDB console ◀── Caddy questdb.<tailnet>.ts.net ◀── operator
 ```
 
 ## Design
@@ -78,16 +73,11 @@ QuestDB console (read-only) ◀── Caddy questdb.<tailnet>.ts.net ◀── o
   - `init` and the `worker` wait for it.
   - `task questdb` stays for a manual start without the rest of the stack.
 - **Ports, all on loopback** (as now):
-  - 9000: the console and REST API;
-  - 8812: Postgres wire;
+  - 9000: QWP, the console and REST API;
   - 9003: health.
-- **What gets turned off or locked down:**
-  - Line protocol is turned off (`QDB_LINE_TCP_ENABLED=false`, `QDB_LINE_HTTP_ENABLED=false`). Roamind writes through Postgres wire, and one protocol is less to secure.
-  - HTTP is read-only (`QDB_HTTP_SECURITY_READONLY=true`), so the console, and anything reaching port 9000, can only query.
-  - The Postgres password is `ROAMIND_QUESTDB_PASSWORD` from `.env`, passed as `QDB_PG_PASSWORD`; the default `quest` is refused at start.
-  - `pg.readonly.user` is enabled with `ROAMIND_QUESTDB_READONLY_PASSWORD`, for the notebook and any later dashboard tool.
-- **The Go client** is `github.com/jackc/pgx/v5`, already in `worker/go.sum` (indirectly). Writes are `INSERT`s of a few rows; the volume is tiny (~300 trades a user a year, ~15k price rows a year).
-- **Schemas** are `CREATE TABLE IF NOT EXISTS` files in `memory/questdb-schemas/*.sql`, applied by `task init` with the worker's binary (`bin/worker -questdb-init`), since HTTP is read-only and there's no `psql` to assume. A changed dedup key list is applied with `ALTER TABLE … DEDUP ENABLE UPSERT KEYS`.
+- **What gets turned off:** Postgres wire (`QDB_PG_ENABLED=false`), line protocol over TCP and UDP, and telemetry. Line protocol over HTTP stays on, because QWP needs it.
+- **The Go client** is QuestDB's official one, `github.com/questdb/go-questdb-client/v4`, over QWP. Writes are `INSERT`s run with `Exec`, which fails on a refused write; the client's ingestion sender would report a refusal only later, in the background. The volume is tiny (~300 trades a user a year, ~15k price rows a year).
+- **Schemas** are `CREATE TABLE IF NOT EXISTS` files in `memory/questdb-schemas/*.sql`, applied by `task init` with the worker's binary (`bin/worker -questdb-init`). A changed dedup key list is applied with `ALTER TABLE … DEDUP ENABLE UPSERT KEYS`.
 
 ### 2. Data
 Shared tables have no `user_id`; every per-user table has one, as the first upsert key after the timestamp. Money and quantities are `DECIMAL(24, 8)`; prices of a unit are `DECIMAL(20, 6)`. Every QuestDB table is a WAL table.
@@ -281,7 +271,7 @@ Both sources produce the same thing: a list of observations with a source, a doc
 - **Caddy:** a new block in `deploy/caddy/Caddyfile`:
 
   ```
-  # QuestDB console (read-only) → https://questdb.<tailnet>.ts.net
+  # QuestDB console → https://questdb.<tailnet>.ts.net
   :443 {
   	bind tailscale/questdb
   	import tailnet_owner_only
@@ -290,11 +280,7 @@ Both sources produce the same thing: a list of observations with a source, a doc
   ```
 
   Only `ROAMIND_DASHBOARD_USERS` get in, as for Hatchet and the notebook. The new device needs a `TS_AUTHKEY` or an approval on its first run (`docs/deployment.md`).
-- **Two gates:**
-  - Caddy's login check;
-  - QuestDB's read-only HTTP, so a console session can't change or drop data.
-
-  Port 9000 stays on loopback, so the console is reached only through Caddy.
+- **The gate is Caddy's login check,** on a trusted tailnet. A console session can change and drop data. Port 9000 stays on loopback, so the console is reached only through Caddy.
 - **What's in the console:** a SQL editor that charts results, not saved multi-panel dashboards. Saved, ready-made queries go in `deploy/questdb/dashboards.sql`, to paste in:
   - portfolio value over time (from `valuations`);
   - allocation by market and currency;
@@ -302,8 +288,8 @@ Both sources produce the same thing: a list of observations with a source, a doc
   - one stock's entry and exit points against its price;
   - subscriptions by month;
   - open conflicts.
-- **Per-user dashboards are out of scope:** the console sees every user. If they're wanted later, Grafana with QuestDB's read-only Postgres user and a per-user filter would be the next step.
-- **The notebook** can use the read-only user too, for analysis in pandas.
+- **Per-user dashboards are out of scope:** the console sees every user. If they're wanted later, Grafana with a per-user filter would be the next step.
+- **The notebook** can query port 9000 too (`/exec`), for analysis in pandas.
 
 ### 11. Docs, config
 - `docs/architecture.md`: a "Finance assistant" section with the flow, the de-dupe rules and the tenancy rules.
@@ -314,7 +300,7 @@ Both sources produce the same thing: a list of observations with a source, a doc
   - the EODHD key;
   - `qpdf`;
   - `task finance-forget`.
-- `.env.example`: `ROAMIND_QUESTDB_PASSWORD`, `ROAMIND_QUESTDB_READONLY_PASSWORD`, `EODHD_API_KEY`.
+- `.env.example`: `ROAMIND_QUESTDB_ADDR`, `EODHD_API_KEY`.
 - `README.md`: a feature line, and QuestDB on the dashboards list.
 - **Privacy:**
   - Holdings, trades and subscriptions stay in `data/questdb` and `data/roamind.db`.
@@ -325,7 +311,7 @@ Both sources produce the same thing: a list of observations with a source, a doc
 
 ## Phases
 Each phase is one branch and one PR.
-1. **QuestDB as a service:** process-compose, the locked-down config, the schemas, `memory/finance` with pgx, and the console on the tailnet.
+1. **QuestDB as a service:** process-compose, the config, the schemas, `memory/finance` with the official client, and the console on the tailnet.
 2. **Ledger from uploads:** accounts, `import_report` with the first parsers, the reconcile with conflicts, prices and FX, the channel, and `list_holdings`, `stock_history` and `profit`.
 3. **Ledger from mail:** the `finance` category, `extract`, PDF text, and `backfill()`.
 4. **Alerts:** `finance-daily`, `finance-weekly`, re-entry and the other rules, news, and subscriptions.
@@ -345,8 +331,11 @@ Isolation and deletion would be simpler (`DROP TABLE`), but every dashboard quer
 ### A model deciding duplicates
 A turn could compare a report with the mail it already saw. It would cost a turn per upload, could miscount, and its answer couldn't be tested. Code decides; the model only extracts rows from documents code can't parse.
 
-### Line protocol for writes
-QuestDB's ingestion protocol is faster, but writes here are a few rows. Postgres wire handles both reads and writes with one client and one password, and line protocol stays off.
+### Postgres wire with pgx
+Postgres wire would let the console stay read-only, with writes behind a password on a port the tailnet never sees. The tailnet is trusted, so QuestDB's official client was chosen, over one port.
+
+### The client's ingestion sender
+It's faster and buffers rows on disk, but it reports a refused write only later, in the background. Writes here are a few rows, which must be applied before the reconcile reads them, so they're `INSERT`s with `Exec`.
 
 ## Files
 New:
@@ -364,7 +353,7 @@ Changed:
 - `deploy/apps-script/Code.js` (`finance`, PDF text, `backfill`), `agent/mail.go`, `agent/prompts/system.md`
 - the sandbox image (`qpdf`), `docs/*`, `README.md`, `.env.example`
 
-New Go dependency: `github.com/jackc/pgx/v5` as a direct dependency of `memory`.
+New Go dependency: `github.com/questdb/go-questdb-client/v4` as a direct dependency of `memory`.
 
 ## Verification
 1. **Unit tests:**
@@ -383,8 +372,8 @@ New Go dependency: `github.com/jackc/pgx/v5` as a direct dependency of `memory`.
 2. **QuestDB:**
    - Writing the same rows twice leaves one copy (`DEDUP`).
    - `bin/worker -questdb-init` is safe to repeat.
-   - A write over HTTP is refused, and so is a login with the default password.
-   - `https://questdb.<tailnet>.ts.net` opens for a listed login, gives 403 for others, and refuses a `DROP TABLE`.
+   - A refused write fails the call that made it.
+   - `https://questdb.<tailnet>.ts.net` opens for a listed login, and gives 403 for others.
 3. **Live, phase 2:**
    - Upload a broker's tradebook and compare `list_holdings` with the app.
    - Upload it again: "already imported".

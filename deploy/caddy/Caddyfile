@@ -51,9 +51,9 @@
 }
 
 # QuestDB web console → https://questdb.<tailnet>.ts.net
-# Its HTTP is read-only (deploy/bin/run-questdb.sh), so a console session can
-# query and chart but not change or drop data. Saved queries are in
-# deploy/questdb/dashboards.sql. The console sees every user's finances.
+# QuestDB asks for no login; this block is its only gate. A console session
+# can change and drop data, and sees every user's finances. Saved queries are
+# in deploy/questdb/dashboards.sql.
 :443 {
 	bind tailscale/questdb
 	import tailnet_owner_only

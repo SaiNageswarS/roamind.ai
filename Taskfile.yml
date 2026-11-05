@@ -70,8 +70,7 @@ tasks:
       - mkdir -p "${ROAMIND_DATA_DIR:-./data}/memory/fastembed_cache"
       - cat memory/sql-schemas/*.sql | sqlite3 -bail "${ROAMIND_DATA_DIR:-./data}/roamind.db"
       - sqlite3 -bail "${ROAMIND_DATA_DIR:-./data}/roamind.db" ".read memory/seed/interests.sql"
-      # QuestDB's tables, from memory/questdb-schemas (HTTP is read-only, so
-      # the worker applies them over Postgres wire).
+      # QuestDB's tables, from memory/questdb-schemas.
       - ./bin/worker -questdb-init
       - |
         # A project whose config.json jq can't merge into is skipped, with a
@@ -209,11 +208,11 @@ tasks:
         mkdir -p bin
         mv "$tmp/questdb-{{.QUESTDB_VERSION}}-rt-linux-x86-64" {{.QUESTDB}}
 
-  # Locked down by deploy/bin/run-questdb.sh: loopback only, line protocol
-  # off, HTTP read-only, Postgres wire behind ROAMIND_QUESTDB_PASSWORD. The
-  # web console and REST API are on 9000, Postgres wire on 8812, health on
-  # 9003. process-compose runs it as `questdb`, in the foreground
-  # (task questdb -- -n); this starts it in the background without the rest.
+  # Configured by deploy/bin/run-questdb.sh: loopback only; QWP (what
+  # Roamind uses), the web console and REST API on 9000, health on 9003;
+  # Postgres wire and line protocol over TCP off. process-compose runs it as
+  # `questdb`, in the foreground (task questdb -- -n); this starts it in the
+  # background without the rest.
   questdb:
     desc: Start QuestDB in the background, downloading it first if needed (web console http://127.0.0.1:9000)
     deps: [questdb-install]
