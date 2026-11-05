@@ -49,11 +49,11 @@ Findings that shape the design:
 ## Flow
 
 ```
-broker mail ─▶ Apps Script (finance) ─▶ mail-message: check ─▶ extract (small model) ─▶ observe ┐
-report upload in #finance-<name> ─▶ chat turn ─▶ import_report (parser, or model rows) ─▶ observe ┤
-chat ("I sold 20 INFY") ─▶ chat turn ─▶ record_trade ─────────────────────────────────▶ observe ┤
+broker mail ─▶ Apps Script (finance) ─▶ mail-message: check ─▶ extract (small model) ─▶ record  ┐
+report upload in #finance-<name> ─▶ chat turn ─▶ import_report (parser, or model rows) ─▶ record  ┤
+chat ("I sold 20 INFY") ─▶ chat turn ─▶ record_trade ─────────────────────────────────▶ record  ┤
                                                                                                  ▼
-                              QuestDB observations (raw, one row per source line, dedup on source+line)
+                              QuestDB trade_events (raw, one row per source line, dedup on source+line)
                                                                                                  │ marks the user dirty
                                                                                                  ▼
                       finance-reconcile (per user, serialized): report if one covers it, else mail → trades
@@ -96,7 +96,7 @@ Shared tables have no `user_id`; every per-user table has one, as the first upse
 
 | Table | Timestamp | Upsert keys | What it holds |
 |---|---|---|---|
-| `observations` | trade date | `ts, user_id, source, line` | Every trade, dividend or charge as one source reported it, unchanged. `source` is `mail:<address>/<message id>`, `upload:<sha256>` or `chat:<thread>`; `line` is its row in that source. Columns: `account`, `isin`, `side` (buy, sell, vest, espp, dividend, transfer_in, transfer_out), `quantity`, `price`, `amount`, `fees`, `tax_withheld`, `currency`, `fx_rate` (the broker's, when given), `ref` (order or trade number), `doc` (contract_note, confirmation, tradebook, statement, chat), `received_at`. A source replayed writes the same rows, which dedup skips. |
+| `trade_events` | trade date | `ts, user_id, source, line` | Every trade, dividend or charge as one source reported it, unchanged. `source` is `mail:<address>/<message id>`, `upload:<sha256>` or `chat:<thread>`; `line` is its row in that source. Columns: `account`, `isin`, `side` (buy, sell, vest, espp, dividend, transfer_in, transfer_out), `quantity`, `price`, `amount`, `fees`, `tax_withheld`, `currency`, `fx_rate` (the broker's, when given), `ref` (order or trade number), `doc` (contract_note, confirmation, tradebook, statement, chat), `received_at`. A source replayed writes the same rows, which dedup skips. |
 | `trades` | trade date | `ts, user_id, account, isin, side` | The reconciled day-group (section 4): `quantity`, `avg_price`, `amount`, `fees`, `tax_withheld`, `currency`, `record` (the report, or the mail kept), `state` (confirmed by a report, provisional from mail or chat, void). Entry and exit points are these rows grouped by ISIN across accounts. |
 | `holdings_reported` | as-of date | `ts, user_id, account, isin` | Holdings a statement or CAS showed, to check the ledger against. They never change the trades. |
 | `valuations` | day | `ts, user_id, account, isin` | Written daily by `finance-daily`: `quantity`, `close`, `value`, `cost`, both in the instrument's currency and in the base currency. Dashboards and the weekly summary read this, not a recomputation. |
@@ -106,11 +106,11 @@ Positions, average cost, realized gains (oldest-first per account), entry and ex
 
 **SQLite (`memory/sql-schemas/12_finance.sql`): state, per user**
 - `fin_accounts(user_id, id, broker, number, currency, name, PK(user_id, id))`:
-  - An account is created on its first observation, from the broker and the masked account number in the mail or report.
+  - An account is created on its first trade event, from the broker and the masked account number in the mail or report.
   - The user names it in chat.
   - The `(user_id, broker, number)` pair is unique, which is how a mail or report is assigned to an account.
 - `finance_uploads(user_id, sha256, file, broker, account, doc, period_from, period_to, rows, imported_at, PK(user_id, sha256))`: the reports imported, with the period each covers.
-- `finance_dirty(user_id PK, since)`: users whose observations changed since their last reconcile.
+- `finance_dirty(user_id PK, since)`: users whose trade events changed since their last reconcile.
 - `finance_conflicts(user_id, id, account, isin, day, kind, detail, state open|resolved|dismissed, created_at)`: holdings that don't match the ledger.
 - `finance_notices(user_id, id, account, isin, day, side, kind, detail, posted_at)`: corrections and dropped mail trades, for the next post.
 - `alert_rules`:
@@ -123,12 +123,12 @@ Positions, average cost, realized gains (oldest-first per account), entry and ex
 - `users.base_currency` (default EUR), and `KindFinance` in `channels`.
 
 ### 3. Getting the data in
-Both sources produce the same thing: a list of observations with a source, a document kind and line numbers. Code then checks the rows; the model never decides what is a duplicate.
+Both sources produce the same thing: a list of trade events with a source, a document kind and line numbers. Code then checks the rows; the model never decides what is a duplicate.
 
 **Mail** (extends the email assistant):
 - The Apps Script gets a `finance` category: contract notes, trade, vest and ESPP confirmations, dividends, corporate actions, statements. For `finance` mail it also sends the text of PDF attachments, up to 20k characters, through Drive's OCR. A password-protected PDF is sent by name only.
-- `mail-message` gets a step, `extract`, for `finance` mail, in place of `relate`. It uses a small model (Haiku, or the script's DeepSeek), with a JSON schema for observations, since trades need no memory. A trade costs a fraction of a cent, not the $0.06–0.12 of a `relate` turn.
-- `save` checks the rows, writes them to `observations` (source `mail:<address>/<id>`, `line` its index), marks the user dirty and starts `finance-reconcile`.
+- `mail-message` gets a step, `extract`, for `finance` mail, in place of `relate`. It uses a small model (Haiku, or the script's DeepSeek), with a JSON schema for trade events, since trades need no memory. A trade costs a fraction of a cent, not the $0.06–0.12 of a `relate` turn.
+- `save` checks the rows, writes them to `trade_events` (source `mail:<address>/<id>`, `line` its index), marks the user dirty and starts `finance-reconcile`.
 - Rows that fail the checks go to `relate`, so the user hears about them. The checks:
   - the ISIN checksum;
   - quantity × price + fees within 1% of the amount;
@@ -142,18 +142,18 @@ Both sources produce the same thing: a list of observations with a source, a doc
   - stops if `finance_uploads` has the hash for this user ("already imported on 3 Nov");
   - parses it.
 - **Parsers come first.** Known CSV and XLSX formats have Go parsers in `connectors/statements`: one per broker export: a tradebook, a transaction or holdings statement, a stock plan's gains and benefit history. Each parser is added when the first real file of that format is seen.
-- **The model is the fallback**, for PDFs and unknown layouts. It reads the file and passes `rows` in the observation schema, and the tool runs the same checks as for mail. A report's own totals, when it has them, must match the sum of its rows.
+- **The model is the fallback**, for PDFs and unknown layouts. It reads the file and passes `rows` in the trade event schema, and the tool runs the same checks as for mail. A report's own totals, when it has them, must match the sum of its rows.
 - A CAS PDF is encrypted with the PAN. The turn asks for the password in the thread and decrypts it in the sandbox with `qpdf`, which is added to the sandbox image. The password isn't stored. A CAS gives `holdings_reported`, not trades.
-- Rows go to `observations` with source `upload:<sha256>`. The tool marks the user dirty, and the worker starts `finance-reconcile` after the turn, the way `goalChannelsTrigger` runs. The MCP server has no Hatchet client.
+- Rows go to `trade_events` with source `upload:<sha256>`. The tool marks the user dirty, and the worker starts `finance-reconcile` after the turn, the way `goalChannelsTrigger` runs. The MCP server has no Hatchet client.
 
-**Chat:** `record_trade` writes one observation with source `chat:<thread>`. It counts like mail, below it when both have the same fill.
+**Chat:** `record_trade` writes one trade event with source `chat:<thread>`. It counts like mail, below it when both have the same fill.
 
 ### 4. De-dupe: `finance-reconcile` (`memory/finance/reconcile.go`, pure Go)
 **Duplicates of the same input** never reach the reconcile. Each is stopped where it enters:
 
 | Duplicate | Stopped by |
 |---|---|
-| The same mail sent again | `mail_messages` (as today), then the `observations` upsert key `(source, line)` |
+| The same mail sent again | `mail_messages` (as today), then the `trade_events` upsert key `(source, line)` |
 | The same report uploaded again | its SHA-256 in `finance_uploads` |
 | A retried run or tool call | the same upsert keys: identical rows are skipped |
 
@@ -173,8 +173,8 @@ When a report later covers a period, the reconcile re-runs its day-groups: provi
 
 **Running it:**
 - **Serialized:** `finance-reconcile` is a Hatchet task per user, concurrency key `user_id`, so a user's groups are never reconciled twice at once.
-- **Order-independent:** its output depends only on the observations, so runs in any order converge.
-- **Waiting for writes:** before reading, it waits until `wal_tables()` shows `observations` applied up to the latest transaction, with a timeout and a retry.
+- **Order-independent:** its output depends only on the trade events, so runs in any order converge.
+- **Waiting for writes:** before reading, it waits until `wal_tables()` shows `trade_events` applied up to the latest transaction, with a timeout and a retry.
 - **What triggers it:** mail `save`, an upload turn, and `finance-daily` for any user left dirty.
 
 **What reaches the user:**
@@ -321,7 +321,7 @@ Each phase is one branch and one PR.
 At this volume SQLite would do. QuestDB was chosen by the user. It gives dedup upserts on every write, time-partitioned price history, and a console to look at the data. SQLite still holds what needs transactions and constraints.
 
 ### Trades in SQLite, mirrored to QuestDB
-That would give transactions and unique constraints for the ledger, at the cost of two copies of every trade kept in step. The reconcile is serialized per user and is a pure function of the observations, and dedup upserts make each write idempotent. So QuestDB can hold the ledger alone.
+That would give transactions and unique constraints for the ledger, at the cost of two copies of every trade kept in step. The reconcile is serialized per user and is a pure function of the trade events, and dedup upserts make each write idempotent. So QuestDB can hold the ledger alone.
 
 ### A table per user in QuestDB
 Isolation and deletion would be simpler (`DROP TABLE`), but every dashboard query and every shared join would be built per user, and the table count would grow with users. Shared tables with `user_id`, behind one store package, were chosen.
@@ -355,14 +355,14 @@ New Go dependency: `github.com/questdb/go-questdb-client/v4` as a direct depende
 
 ## Verification
 1. **Unit tests:**
-   - The reconcile, on fixed observations:
+   - The reconcile, on fixed trade events:
      - a confirmation and a contract note for one order count once;
      - two orders of one day each count;
      - a covering report wins over mail, and a different quantity is a notice, not a conflict;
      - a mail trade missing from a covering report is voided, with a notice;
      - an uncovered mail trade is provisional, and becomes confirmed when a report covering it arrives;
      - a holdings mismatch opens a conflict, which closes when the numbers agree;
-     - observations in any order give the same trades.
+     - trade events in any order give the same trades.
    - Ledger maths: oldest-first matching per account, splits, transfers keeping cost, dividends with withholding, profit in the instrument's currency and in EUR.
    - Tenancy: two users' data, each function returning only its user's rows.
    - Parsers, on redacted real files.

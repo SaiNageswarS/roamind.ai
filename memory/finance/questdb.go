@@ -1,5 +1,5 @@
 // Package finance is the finance assistant's ledger in QuestDB: market data
-// shared by every user, and each user's observations, trades, holdings and
+// shared by every user, and each user's trade events, trades, holdings and
 // valuations. Its tables are defined in memory/questdb-schemas and created by
 // `task init` (bin/worker -questdb-init); its state (accounts, uploads,
 // conflicts, alerts) is in the SQLite store.

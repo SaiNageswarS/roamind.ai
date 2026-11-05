@@ -8,10 +8,10 @@ import (
 	qdb "github.com/questdb/go-questdb-client/v4"
 )
 
-// Observation is a trade, dividend or charge as one source reported it
+// TradeEvent is a trade, dividend or charge as one source reported it
 // (02_ledger.sql). Source and Line are its key: a source written again
 // replaces its rows, and identical rows are skipped.
-type Observation struct {
+type TradeEvent struct {
 	Date        time.Time // the trade date
 	Source      string    // mail:<address>/<message id>, upload:<sha256>, chat:<thread>
 	Line        int       // its row in that source
@@ -30,19 +30,19 @@ type Observation struct {
 	ReceivedAt  time.Time
 }
 
-// AddObservations writes the user's observations, one INSERT each. They're
+// AddTradeEvents writes the user's trade events, one INSERT each. They're
 // readable once QuestDB has applied them (WaitApplied).
-func (d *DB) AddObservations(ctx context.Context, userID string, obs []Observation) error {
+func (d *DB) AddTradeEvents(ctx context.Context, userID string, events []TradeEvent) error {
 	if userID == "" {
 		return errNoUser
 	}
-	for _, o := range obs {
+	for _, o := range events {
 		if o.Date.IsZero() || o.Source == "" {
-			return fmt.Errorf("finance: observation %d of %q has no date or source", o.Line, o.Source)
+			return fmt.Errorf("finance: trade event %d of %q has no date or source", o.Line, o.Source)
 		}
 	}
-	for _, o := range obs {
-		err := d.exec(ctx, `INSERT INTO observations (ts, user_id, source, line, account, isin, side,
+	for _, o := range events {
+		err := d.exec(ctx, `INSERT INTO trade_events (ts, user_id, source, line, account, isin, side,
 				quantity, price, amount, fees, tax_withheld, currency, fx_rate, ref, doc, received_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7,
 				$8::DECIMAL(24, 8), $9::DECIMAL(20, 6), $10::DECIMAL(24, 8), $11::DECIMAL(24, 8), $12::DECIMAL(24, 8),
@@ -60,20 +60,20 @@ func (d *DB) AddObservations(ctx context.Context, userID string, obs []Observati
 				timestamp(b, 16, o.ReceivedAt)
 			})
 		if err != nil {
-			return fmt.Errorf("finance: observation %d of %q: %w", o.Line, o.Source, err)
+			return fmt.Errorf("finance: trade event %d of %q: %w", o.Line, o.Source, err)
 		}
 	}
 	return nil
 }
 
-// Observations is the user's observations dated from from up to, not
+// TradeEvents is the user's trade events dated from from up to, not
 // including, until, by date, source and line.
-func (d *DB) Observations(ctx context.Context, userID string, from, until time.Time) ([]Observation, error) {
-	var out []Observation
+func (d *DB) TradeEvents(ctx context.Context, userID string, from, until time.Time) ([]TradeEvent, error) {
+	var out []TradeEvent
 	err := d.query(ctx, `SELECT ts, source, line, account, isin, side,
 			quantity::STRING, price::STRING, amount::STRING, fees::STRING, tax_withheld::STRING,
 			currency, fx_rate::STRING, ref, doc, received_at
-		FROM observations
+		FROM trade_events
 		WHERE user_id = $1 AND ts >= $2 AND ts < $3
 		ORDER BY ts, source, line`,
 		func(b *qdb.QwpBinds) {
@@ -83,7 +83,7 @@ func (d *DB) Observations(ctx context.Context, userID string, from, until time.T
 		},
 		func(b *qdb.QwpColumnBatch, r int) error {
 			s := func(col int) string { return b.String(col, r) }
-			out = append(out, Observation{
+			out = append(out, TradeEvent{
 				Date: timeAt(b, 0, r), Source: s(1), Line: int(b.Int32(2, r)),
 				Account: s(3), ISIN: s(4), Side: s(5),
 				Quantity: trimDecimal(s(6)), Price: trimDecimal(s(7)), Amount: trimDecimal(s(8)),

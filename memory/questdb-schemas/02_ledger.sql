@@ -6,7 +6,7 @@
 
 -- Every trade, dividend or charge as one source reported it, unchanged. A
 -- source replayed writes the same rows, which dedup skips.
-CREATE TABLE IF NOT EXISTS observations (
+CREATE TABLE IF NOT EXISTS trade_events (
     ts           TIMESTAMP, -- the trade date
     user_id      SYMBOL,
     source       SYMBOL, -- mail:<address>/<message id>, upload:<sha256>, chat:<thread>
@@ -26,10 +26,10 @@ CREATE TABLE IF NOT EXISTS observations (
     received_at  TIMESTAMP
 ) TIMESTAMP(ts) PARTITION BY YEAR WAL
 DEDUP UPSERT KEYS(ts, user_id, source, line);
-ALTER TABLE observations DEDUP ENABLE UPSERT KEYS(ts, user_id, source, line);
+ALTER TABLE trade_events DEDUP ENABLE UPSERT KEYS(ts, user_id, source, line);
 
 -- One row per day-group (user, account, isin, trade date, side), written by
--- finance-reconcile from the observations; an upsert replaces it. An
+-- finance-reconcile from trade_events; an upsert replaces it. An
 -- uploaded report covering the day is the trade (confirmed); until one
 -- does, mail and chat are (provisional). Entry and exit points are these
 -- rows grouped by ISIN across accounts.
