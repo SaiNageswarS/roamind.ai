@@ -78,7 +78,7 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 		}
 	}
 
-	goal, news, skip, err := d.route(ctx, ev)
+	goal, kind, skip, err := d.route(ctx, ev)
 	if err != nil {
 		return out, err
 	}
@@ -126,8 +126,14 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 		}
 	}
 
+	var financeRef *protocol.FinanceRef
+	if kind == store.KindFinance {
+		if financeRef, err = d.financeRef(ctx, user.ID); err != nil {
+			return out, err
+		}
+	}
 	var newsRef *protocol.NewsRef
-	if news {
+	if kind == store.KindNews {
 		newsRef = &protocol.NewsRef{}
 		ins, err := d.Store.UserInterests(ctx, user.ID)
 		if err != nil {
@@ -180,6 +186,7 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 		Goal:          goal,
 		Exercise:      exercise,
 		News:          newsRef,
+		Finance:       financeRef,
 		Tools:         protocol.ToolsWorkspace,
 		ServerTools:   d.serverTools(ChatTurnName),
 	}, up.Apply)
@@ -219,26 +226,28 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 // In a goal channel, every message from a user with a goal there is a turn
 // about their goal (their @mentions there arrive twice, so the mention copy
 // is skipped); a channel can hold several users' goals, each in their own
-// memory. The user's news channel works the same way, with news turns.
-// Elsewhere, and for anyone else, private-channel messages start a turn only
-// through their @mention copy.
-func (d Deps) route(ctx context.Context, ev slack.Event) (*protocol.GoalRef, bool, string, error) {
+// memory. The user's news and finance channels work the same way, with
+// news and finance turns: kind is the channel's kind. Elsewhere, and for
+// anyone else, private-channel messages start a turn only through their
+// @mention copy.
+func (d Deps) route(ctx context.Context, ev slack.Event) (goal *protocol.GoalRef, kind, skip string, err error) {
 	var c *store.Channel
 	if ev.ChannelType == "group" || ev.Type == "app_mention" {
-		var err error
 		if c, err = d.Store.ChannelOf(ctx, ev.Channel, ev.User); err != nil {
-			return nil, false, "", err
+			return nil, "", "", err
 		}
 	}
 	switch {
 	case ev.Type == "message" && ev.ChannelType == "group" && c == nil:
-		return nil, false, "not addressed to the agent", nil
+		return nil, "", "not addressed to the agent", nil
 	case ev.Type == "app_mention" && c != nil:
-		return nil, false, "mention in own goal or news channel, handled as its message", nil
+		return nil, "", "mention in own goal, news or finance channel, handled as its message", nil
 	case c != nil && c.Kind == store.KindGoal:
-		return &protocol.GoalRef{Title: c.Title, Permalink: c.Ref}, false, "", nil
+		return &protocol.GoalRef{Title: c.Title, Permalink: c.Ref}, store.KindGoal, "", nil
+	case c != nil:
+		return nil, c.Kind, "", nil
 	}
-	return nil, c != nil && c.Kind == store.KindNews, "", nil
+	return nil, "", "", nil
 }
 
 // resolveUser maps the Slack sender to a user, creating it from the Slack

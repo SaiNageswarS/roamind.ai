@@ -38,6 +38,9 @@ hatchet server start (Hatchet CLI)        process-compose (`process-compose up`)
   - QuestDB asks for no login, and the console can change and drop data: the tailnet and Caddy's login check are the gates. The notebook, which shares this machine's network, can reach it too (`http://127.0.0.1:9000/exec?query=…`).
   - The console is `questdb.<tailnet>.ts.net`. It charts query results; saved queries to paste in are in `deploy/questdb/dashboards.sql`. It sees every user's finances, as the operator can read the SQLite store and every memory project.
   - The tables are `memory/questdb-schemas/*.sql`, which `task init` applies with `bin/worker -questdb-init`. Only `memory/finance` queries QuestDB, binding the user's id in every query on a user's rows.
+  - The worker runs without the finance assistant, with a warning, when QuestDB doesn't answer. Otherwise it passes QuestDB's address to `bin/mcp` (`--questdb`), whose finance tools read and write the ledger.
+  - **Market data:** `finance-market` runs daily at 7:00 (`FinanceMarketHour`, in `ROAMIND_TZ`). ECB rates and AMFI's NAVs of Indian funds need no key. Prices and splits of stocks and ETFs need `EODHD_API_KEY` (an EODHD plan with end-of-day data and search); without it, holdings show their cost but no value.
+  - **Encrypted PDFs:** a CAS or statement PDF with a password is opened in the turn's sandbox with `qpdf` (`sudo apt install qpdf`), with the password the user gives in the thread, never saved.
 - **The only public endpoint** is Hatchet's webhooks path, exposed through Tailscale Funnel: the Slack webhook, and the gmail webhook the mail scripts post to (see Email assistant in `docs/architecture.md`).
 - **Caution:** `hatchet server start` binds its ports on all interfaces (0.0.0.0), so tailnet and LAN peers can reach `:8889` directly, bypassing Caddy. Change the default admin password, and firewall those ports, e.g. `sudo ufw deny in on tailscale0 to any port 8889,7078 proto tcp`.
 

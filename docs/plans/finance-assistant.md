@@ -311,6 +311,12 @@ When a report later covers a period, the reconcile re-runs its day-groups: provi
 Each phase is one branch and one PR.
 1. **QuestDB as a service:** process-compose, the config, the schemas, `memory/finance` with the official client, and the console on the tailnet.
 2. **Ledger from uploads:** accounts, `import_report` with the first parsers, the reconcile with holdings checks, prices and FX, the channel, and `list_holdings`, `stock_history` and `profit`.
+   As built:
+   - **No parsers yet:** the model reads every report and passes its rows, which the tool checks. A parser is added when a real export of a format is at hand.
+   - **The base currency** is in `finance_settings`, not a column of `users`: `task init` reapplies every schema file, and `ALTER TABLE … ADD COLUMN` can't be repeated.
+   - **Notices** are returned by `import_report`, for the turn to tell the user; `finance_notices` and the posts that list them come with phase 4.
+   - **The channel** opens after a turn once the user has an account, rather than on their first finance question.
+   - **The tool reconciles at once,** so the turn's answer sees its import; `finance-reconcile` catches up on anyone left dirty.
 3. **Ledger from mail:** the `finance` category, `extract`, PDF text, and `backfill()`.
 4. **Alerts:** `finance-daily`, `finance-weekly`, re-entry and the other rules, news, and subscriptions.
 5. **Tax:** residence, the rules per country, `tax_estimate`, and the year-end report.

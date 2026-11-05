@@ -24,6 +24,7 @@ import (
 	"roamind.ai/channels/web"
 	"roamind.ai/connectors/feeds"
 	"roamind.ai/connectors/jobs"
+	"roamind.ai/connectors/market"
 	"roamind.ai/memory/finance"
 	"roamind.ai/memory/store"
 	"roamind.ai/memory/store/notes"
@@ -85,10 +86,27 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// The finance assistant needs QuestDB (process-compose's questdb).
+	questdbAddr := envOr("ROAMIND_QUESTDB_ADDR", finance.DefaultAddr)
+	openCtx, cancelOpen := context.WithTimeout(ctx, 10*time.Second)
+	fin, err := finance.Open(openCtx, questdbAddr)
+	cancelOpen()
+	if err != nil {
+		slog.Warn("no finance assistant", "err", err)
+		fin = nil
+	} else {
+		defer fin.Close()
+	}
+	if os.Getenv("EODHD_API_KEY") == "" && fin != nil {
+		slog.Warn("EODHD_API_KEY is not set; no prices of stocks and ETFs")
+	}
 	var toolsServer []string
 	if mcpBin != "" {
 		// claude runs it in the user's workspace, so the paths are absolute.
 		toolsServer = []string{mcpBin, "--data", dataDir}
+		if fin != nil {
+			toolsServer = append(toolsServer, "--questdb", questdbAddr)
+		}
 	} else {
 		slog.Warn("bin/mcp not found (task mcp); chat turns run without Roamind's tools")
 	}
@@ -148,6 +166,8 @@ func run() error {
 		Web:        webApp,
 		Jobs:       jobsClient,
 		JobsPerRun: jobsPerRun,
+		Finance:    fin,
+		Market:     market.New(30*time.Second, os.Getenv("EODHD_API_KEY")),
 		Location:   loc,
 	})
 	if mem != nil {
@@ -157,6 +177,10 @@ func run() error {
 			"crons_utc", workflows.LocalCrons(loc, time.Now(), workflows.NewsHours...))
 		slog.Info("job searches", "tz", loc.String(),
 			"crons_utc", workflows.LocalCrons(loc, time.Now(), workflows.JobSearchHours...))
+		if fin != nil {
+			slog.Info("finance market data", "tz", loc.String(),
+				"crons_utc", workflows.LocalCrons(loc, time.Now(), workflows.FinanceMarketHour))
+		}
 	}
 
 	if listen != nil {

@@ -180,6 +180,82 @@ func (d *DB) WaitApplied(ctx context.Context, tables ...string) error {
 	}
 }
 
+// insert writes rows into table, a few dozen per statement. Each row has a
+// value per column: a string (bound as text, "" as NULL, and cast when the
+// column has a cast, such as a DECIMAL), a time.Time (zero is NULL) or an
+// int.
+func (d *DB) insert(ctx context.Context, table string, cols []column, rows [][]any) error {
+	const perStatement = 50
+	for len(rows) > 0 {
+		n := min(len(rows), perStatement)
+		var sql strings.Builder
+		names := make([]string, len(cols))
+		for i, c := range cols {
+			names[i] = c.name
+		}
+		fmt.Fprintf(&sql, "INSERT INTO %s (%s) VALUES ", table, strings.Join(names, ", "))
+		for r := range n {
+			if r > 0 {
+				sql.WriteString(", ")
+			}
+			sql.WriteByte('(')
+			for i, c := range cols {
+				if i > 0 {
+					sql.WriteString(", ")
+				}
+				fmt.Fprintf(&sql, "$%d", r*len(cols)+i+1)
+				if c.cast != "" {
+					sql.WriteString("::" + c.cast)
+				}
+			}
+			sql.WriteByte(')')
+		}
+		batch := rows[:n]
+		var bindErr error
+		err := d.exec(ctx, sql.String(), func(b *qdb.QwpBinds) {
+			for r, row := range batch {
+				for i, v := range row {
+					at := r*len(cols) + i
+					switch v := v.(type) {
+					case string:
+						text(b, at, v)
+					case time.Time:
+						timestamp(b, at, v)
+					case int:
+						b.IntBind(at, int32(v))
+					default:
+						bindErr = fmt.Errorf("finance: can't bind %T", v)
+					}
+				}
+			}
+		})
+		if err := errors.Join(bindErr, err); err != nil {
+			return fmt.Errorf("finance: insert into %s: %w", table, err)
+		}
+		rows = rows[n:]
+	}
+	return nil
+}
+
+// column is a column insert writes, with the cast its text value needs.
+type column struct{ name, cast string }
+
+// Casts of text values.
+const (
+	castMoney = "DECIMAL(24, 8)" // amounts and quantities
+	castPrice = "DECIMAL(20, 6)" // the price of one unit
+	castRate  = "DECIMAL(20, 10)"
+)
+
+func cols(spec ...string) []column {
+	out := make([]column, len(spec))
+	for i, s := range spec {
+		name, cast, _ := strings.Cut(s, ":")
+		out[i] = column{name, cast}
+	}
+	return out
+}
+
 // text binds v as VARCHAR at i, or NULL when v is "". Symbols and decimals
 // are bound as text too; a decimal's statement casts it.
 func text(b *qdb.QwpBinds, i int, v string) {
@@ -218,3 +294,9 @@ func trimDecimal(s string) string {
 }
 
 var errNoUser = errors.New("finance: no user")
+
+// day is t as a calendar day, at midnight UTC.
+func day(t time.Time) time.Time {
+	y, m, d := t.Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+}
