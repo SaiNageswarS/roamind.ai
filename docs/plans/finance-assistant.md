@@ -32,13 +32,8 @@ Findings that shape the design:
   - It has no transactions across tables.
   - WAL writes are applied asynchronously, so a read straight after a write may not see it.
   - So it holds facts keyed by time. Mutable state (accounts, rules, subscriptions, conflicts, uploads) stays in SQLite. Reads that must see their own writes first wait for the WAL to be applied (section 5).
-- **QuestDB's open-source build has no row-level security or roles.** Each user's isolation is enforced in Roamind's code: every per-user table has a `user_id` column, and only the store package queries it. The console sees everything, so it is for the operator only, read-only.
-- **The console has the right switches.** A running instance's `SHOW PARAMETERS` lists:
-  - `http.security.readonly`, which disables commands that change data over HTTP;
-  - `http.user`/`http.password`;
-  - `pg.user`/`pg.password` (default `admin`/`quest`);
-  - a separate `pg.readonly.user`;
-  - `line.tcp.enabled` and `line.http.enabled`.
+- **QuestDB's open-source build has no row-level security or roles.** Each user's isolation is enforced in Roamind's code: every per-user table has a `user_id` column, and only the store package queries it. The console sees everything, so it is for the operator only.
+- **The tailnet is trusted.** The console and QWP share port 9000 and QuestDB asks for no login there, so the tailnet and Caddy's login check are the gates. QuestDB's `http.security.readonly` would make the console query-only, but it refuses QWP writes too.
 
   Each maps to a `QDB_…` environment variable.
 - **Market data:**
@@ -54,19 +49,19 @@ Findings that shape the design:
 ## Flow
 
 ```
-broker mail ─▶ Apps Script (finance) ─▶ mail-message: check ─▶ extract (small model) ─▶ observe ┐
-report upload in #finance-<name> ─▶ chat turn ─▶ import_report (parser, or model rows) ─▶ observe ┤
-chat ("I sold 20 INFY") ─▶ chat turn ─▶ record_trade ─────────────────────────────────▶ observe ┤
+broker mail ─▶ Apps Script (finance) ─▶ mail-message: check ─▶ extract (small model) ─▶ record  ┐
+report upload in #finance-<name> ─▶ chat turn ─▶ import_report (parser, or model rows) ─▶ record  ┤
+chat ("I sold 20 INFY") ─▶ chat turn ─▶ record_trade ─────────────────────────────────▶ record  ┤
                                                                                                  ▼
-                              QuestDB observations (raw, one row per source line, dedup on source+line)
+                              QuestDB trade_events (raw, one row per source line, dedup on source+line)
                                                                                                  │ marks the user dirty
                                                                                                  ▼
-                      finance-reconcile (per user, serialized): group → pick source of record → trades
+                      finance-reconcile (per user, serialized): report if one covers it, else mail → trades
                                          conflicts ─▶ SQLite ─▶ named in #finance-<name>
                                                                                                  ▼
 finance-daily: prices, FX, actions ─▶ valuations ─▶ rules in Go ─▶ alert turn ─▶ #finance-<name>
 finance-weekly: figures from QuestDB ─▶ summary turn ─▶ #finance-<name>
-QuestDB console (read-only) ◀── Caddy questdb.<tailnet>.ts.net ◀── operator
+QuestDB console ◀── Caddy questdb.<tailnet>.ts.net ◀── operator
 ```
 
 ## Design
@@ -78,16 +73,11 @@ QuestDB console (read-only) ◀── Caddy questdb.<tailnet>.ts.net ◀── o
   - `init` and the `worker` wait for it.
   - `task questdb` stays for a manual start without the rest of the stack.
 - **Ports, all on loopback** (as now):
-  - 9000: the console and REST API;
-  - 8812: Postgres wire;
+  - 9000: QWP, the console and REST API;
   - 9003: health.
-- **What gets turned off or locked down:**
-  - Line protocol is turned off (`QDB_LINE_TCP_ENABLED=false`, `QDB_LINE_HTTP_ENABLED=false`). Roamind writes through Postgres wire, and one protocol is less to secure.
-  - HTTP is read-only (`QDB_HTTP_SECURITY_READONLY=true`), so the console, and anything reaching port 9000, can only query.
-  - The Postgres password is `ROAMIND_QUESTDB_PASSWORD` from `.env`, passed as `QDB_PG_PASSWORD`; the default `quest` is refused at start.
-  - `pg.readonly.user` is enabled with `ROAMIND_QUESTDB_READONLY_PASSWORD`, for the notebook and any later dashboard tool.
-- **The Go client** is `github.com/jackc/pgx/v5`, already in `worker/go.sum` (indirectly). Writes are `INSERT`s of a few rows; the volume is tiny (~300 trades a user a year, ~15k price rows a year).
-- **Schemas** are `CREATE TABLE IF NOT EXISTS` files in `memory/questdb-schemas/*.sql`, applied by `task init` with the worker's binary (`bin/worker -questdb-init`), since HTTP is read-only and there's no `psql` to assume. A changed dedup key list is applied with `ALTER TABLE … DEDUP ENABLE UPSERT KEYS`.
+- **What gets turned off:** Postgres wire (`QDB_PG_ENABLED=false`), line protocol over TCP and UDP, and telemetry. Line protocol over HTTP stays on, because QWP needs it.
+- **The Go client** is QuestDB's official one, `github.com/questdb/go-questdb-client/v4`, over QWP. Writes are `INSERT`s run with `Exec`, which fails on a refused write; the client's ingestion sender would report a refusal only later, in the background. The volume is tiny (~300 trades a user a year, ~15k price rows a year).
+- **Schemas** are `CREATE TABLE IF NOT EXISTS` files in `memory/questdb-schemas/*.sql`, applied by `task init` with the worker's binary (`bin/worker -questdb-init`). A changed dedup key list is applied with `ALTER TABLE … DEDUP ENABLE UPSERT KEYS`.
 
 ### 2. Data
 Shared tables have no `user_id`; every per-user table has one, as the first upsert key after the timestamp. Money and quantities are `DECIMAL(24, 8)`; prices of a unit are `DECIMAL(20, 6)`. Every QuestDB table is a WAL table.
@@ -106,8 +96,8 @@ Shared tables have no `user_id`; every per-user table has one, as the first upse
 
 | Table | Timestamp | Upsert keys | What it holds |
 |---|---|---|---|
-| `observations` | trade date | `ts, user_id, source, line` | Every trade, dividend or charge as one source reported it, unchanged. `source` is `mail:<address>/<message id>`, `upload:<sha256>` or `chat:<thread>`; `line` is its row in that source. Columns: `account`, `isin`, `side` (buy, sell, vest, espp, dividend, transfer_in, transfer_out), `quantity`, `price`, `amount`, `fees`, `tax_withheld`, `currency`, `fx_rate` (the broker's, when given), `ref` (order or trade number), `doc` (contract_note, confirmation, tradebook, statement, chat), `received_at`. A source replayed writes the same rows, which dedup skips. |
-| `trades` | trade date | `ts, user_id, account, isin, side` | The reconciled day-group (section 4): `quantity`, `avg_price`, `amount`, `fees`, `tax_withheld`, `currency`, `record` (the source it came from), `sources` (how many agreed), `state` (active, void). Entry and exit points are these rows grouped by ISIN across accounts. |
+| `trade_events` | trade date | `ts, user_id, source, line` | Every trade, dividend or charge as one source reported it, unchanged. `source` is `mail:<address>/<message id>`, `upload:<sha256>` or `chat:<thread>`; `line` is its row in that source. Columns: `account`, `isin`, `side` (buy, sell, vest, espp, dividend, transfer_in, transfer_out), `quantity`, `price`, `amount`, `fees`, `tax_withheld`, `currency`, `fx_rate` (the broker's, when given), `ref` (order or trade number), `doc` (contract_note, confirmation, tradebook, statement, chat), `received_at`. A source replayed writes the same rows, which dedup skips. |
+| `trades` | trade date | `ts, user_id, account, isin, side` | The reconciled day-group (section 4): `quantity`, `avg_price`, `amount`, `fees`, `tax_withheld`, `currency`, `record` (the report, or the mail kept), `state` (confirmed by a report, provisional from mail or chat, void). Entry and exit points are these rows grouped by ISIN across accounts. |
 | `holdings_reported` | as-of date | `ts, user_id, account, isin` | Holdings a statement or CAS showed, to check the ledger against. They never change the trades. |
 | `valuations` | day | `ts, user_id, account, isin` | Written daily by `finance-daily`: `quantity`, `close`, `value`, `cost`, both in the instrument's currency and in the base currency. Dashboards and the weekly summary read this, not a recomputation. |
 | `subscription_charges` | charge date | `ts, user_id, key, source` | `amount`, `currency` |
@@ -116,12 +106,13 @@ Positions, average cost, realized gains (oldest-first per account), entry and ex
 
 **SQLite (`memory/sql-schemas/12_finance.sql`): state, per user**
 - `fin_accounts(user_id, id, broker, number, currency, name, PK(user_id, id))`:
-  - An account is created on its first observation, from the broker and the masked account number in the mail or report.
+  - An account is created on its first trade event, from the broker and the masked account number in the mail or report.
   - The user names it in chat.
   - The `(user_id, broker, number)` pair is unique, which is how a mail or report is assigned to an account.
 - `finance_uploads(user_id, sha256, file, broker, account, doc, period_from, period_to, rows, imported_at, PK(user_id, sha256))`: the reports imported, with the period each covers.
-- `finance_dirty(user_id PK, since)`: users whose observations changed since their last reconcile.
-- `finance_conflicts(user_id, id, account, isin, day, side, kind, detail, state open|resolved, resolution, created_at)`: what the reconcile couldn't settle by itself.
+- `finance_dirty(user_id PK, since)`: users whose trade events changed since their last reconcile.
+- `finance_conflicts(user_id, id, account, isin, day, kind, detail, state open|resolved|dismissed, created_at)`: holdings that don't match the ledger.
+- `finance_notices(user_id, id, account, isin, day, side, kind, detail, posted_at)`: corrections and dropped mail trades, for the next post.
 - `alert_rules`:
   - columns: `(user_id, id, kind, isin, listing, scope, direction, threshold, margin, target, expires_on, state)`;
   - `kind` is `move`, `level`, `drawdown`, `concentration`, `allocation` or `reentry`.
@@ -132,12 +123,12 @@ Positions, average cost, realized gains (oldest-first per account), entry and ex
 - `users.base_currency` (default EUR), and `KindFinance` in `channels`.
 
 ### 3. Getting the data in
-Both sources produce the same thing: a list of observations with a source, a document kind and line numbers. Code then checks the rows; the model never decides what is a duplicate.
+Both sources produce the same thing: a list of trade events with a source, a document kind and line numbers. Code then checks the rows; the model never decides what is a duplicate.
 
 **Mail** (extends the email assistant):
 - The Apps Script gets a `finance` category: contract notes, trade, vest and ESPP confirmations, dividends, corporate actions, statements. For `finance` mail it also sends the text of PDF attachments, up to 20k characters, through Drive's OCR. A password-protected PDF is sent by name only.
-- `mail-message` gets a step, `extract`, for `finance` mail, in place of `relate`. It uses a small model (Haiku, or the script's DeepSeek), with a JSON schema for observations, since trades need no memory. A trade costs a fraction of a cent, not the $0.06–0.12 of a `relate` turn.
-- `save` checks the rows, writes them to `observations` (source `mail:<address>/<id>`, `line` its index), marks the user dirty and starts `finance-reconcile`.
+- `mail-message` gets a step, `extract`, for `finance` mail, in place of `relate`. It uses a small model (Haiku, or the script's DeepSeek), with a JSON schema for trade events, since trades need no memory. A trade costs a fraction of a cent, not the $0.06–0.12 of a `relate` turn.
+- `save` checks the rows, writes them to `trade_events` (source `mail:<address>/<id>`, `line` its index), marks the user dirty and starts `finance-reconcile`.
 - Rows that fail the checks go to `relate`, so the user hears about them. The checks:
   - the ISIN checksum;
   - quantity × price + fees within 1% of the amount;
@@ -151,47 +142,44 @@ Both sources produce the same thing: a list of observations with a source, a doc
   - stops if `finance_uploads` has the hash for this user ("already imported on 3 Nov");
   - parses it.
 - **Parsers come first.** Known CSV and XLSX formats have Go parsers in `connectors/statements`: one per broker export: a tradebook, a transaction or holdings statement, a stock plan's gains and benefit history. Each parser is added when the first real file of that format is seen.
-- **The model is the fallback**, for PDFs and unknown layouts. It reads the file and passes `rows` in the observation schema, and the tool runs the same checks as for mail. A report's own totals, when it has them, must match the sum of its rows.
+- **The model is the fallback**, for PDFs and unknown layouts. It reads the file and passes `rows` in the trade event schema, and the tool runs the same checks as for mail. A report's own totals, when it has them, must match the sum of its rows.
 - A CAS PDF is encrypted with the PAN. The turn asks for the password in the thread and decrypts it in the sandbox with `qpdf`, which is added to the sandbox image. The password isn't stored. A CAS gives `holdings_reported`, not trades.
-- Rows go to `observations` with source `upload:<sha256>`. The tool marks the user dirty, and the worker starts `finance-reconcile` after the turn, the way `goalChannelsTrigger` runs. The MCP server has no Hatchet client.
+- Rows go to `trade_events` with source `upload:<sha256>`. The tool marks the user dirty, and the worker starts `finance-reconcile` after the turn, the way `goalChannelsTrigger` runs. The MCP server has no Hatchet client.
 
-**Chat:** `record_trade` writes one observation with source `chat:<thread>`, the lowest priority.
+**Chat:** `record_trade` writes one trade event with source `chat:<thread>`. It counts like mail, below it when both have the same fill.
 
 ### 4. De-dupe: `finance-reconcile` (`memory/finance/reconcile.go`, pure Go)
 **Duplicates of the same input** never reach the reconcile. Each is stopped where it enters:
 
 | Duplicate | Stopped by |
 |---|---|
-| The same mail sent again | `mail_messages` (as today), then the `observations` upsert key `(source, line)` |
+| The same mail sent again | `mail_messages` (as today), then the `trade_events` upsert key `(source, line)` |
 | The same report uploaded again | its SHA-256 in `finance_uploads` |
 | A retried run or tool call | the same upsert keys: identical rows are skipped |
 
-**The same trade from different sources** is settled per day-group G = `(user, account, isin, trade date, side)`, the unit the user sees as an entry or exit point. For each G it changed:
-1. **Read the observations of G and group them by family:** reports, mail, chat.
-2. **Within a family, merge copies of one fill:**
+**Reports are the golden set; mail keeps the ledger current until one arrives.** A report the user uploads (a tradebook, a statement) is the platform's own record, so where one covers a trade, it is the trade. Mail is how the ledger updates itself between uploads. Each trade is settled per day-group G = `(user, account, isin, trade date, side)`, the unit the user sees as an entry or exit point. For each G it changed:
+1. **Covered by a report?** A G is covered when an upload in `finance_uploads` for that account has a period containing G's date.
+2. **Covered: the report's rows are the trade,** `state = confirmed`: quantity summed, price averaged by quantity, fees summed. Mail and chat rows for G are ignored, so mail plus report can't double a trade. Where they said something else, the next post says what the report changed ("INFY 3 Nov: mail said 40, the statement says 50"). Nothing waits on the user.
+3. **Covered, but the report has no row for G:** the mail or chat trade is dropped (`state = void`), and the post says so ("in mail, not in the statement": a cancelled order, or a misread mail).
+4. **Not covered: the mail and chat rows are the trade,** `state = provisional`. Copies of one fill are merged first:
    - rows with the same `ref` are one fill;
    - rows without a `ref` are one fill when quantity is equal and price is within 0.1%;
-   - the copy from the better document is kept: a contract note or tradebook over a confirmation.
+   - the copy from the better document is kept: a contract note over an order confirmation, mail over chat.
 
    This is how an "order executed" mail and the contract note for the same order count once, while two real orders of the same day, each with its own mail, both count.
-3. **Pick the family of record:** a report covering G's date for that account, then mail, then chat. G's trade is that family's fills: quantity summed, price averaged by quantity, fees summed. Families are never added together, so mail plus report can't double a trade.
-4. **Compare the other families with it.**
-   - **Agreement:** quantity equal, and average price within 0.5% (fees and rounding differ between documents). The row's `sources` count goes up.
-   - **Disagreement:** a `finance_conflicts` row ("statement: 50 INFY bought on 3 Nov; mail: 40; using the statement").
-5. **Check coverage.** When a report covers an account's period, a G in that period with mail fills but none in the report is a conflict ("in mail, not in the statement": a cancelled order or a misread mail). The report wins, so the mail fills are left out until the user says otherwise.
-6. **Write G** to `trades` (the upsert replaces it), or with `state = void` when no family has it any more.
+5. **Write G** to `trades` (the upsert replaces it), or with `state = void` when nothing has it any more.
+
+When a report later covers a period, the reconcile re-runs its day-groups: provisional trades become confirmed, or void when the report hasn't got them. `list_holdings` marks figures resting on provisional trades.
 
 **Running it:**
 - **Serialized:** `finance-reconcile` is a Hatchet task per user, concurrency key `user_id`, so a user's groups are never reconciled twice at once.
-- **Order-independent:** its output depends only on the observations, so runs in any order converge.
-- **Waiting for writes:** before reading, it waits until `wal_tables()` shows `observations` applied up to the latest transaction, with a timeout and a retry.
+- **Order-independent:** its output depends only on the trade events, so runs in any order converge.
+- **Waiting for writes:** before reading, it waits until `wal_tables()` shows `trade_events` applied up to the latest transaction, with a timeout and a retry.
 - **What triggers it:** mail `save`, an upload turn, and `finance-daily` for any user left dirty.
 
-**Conflicts reach the user:**
-- They are listed in the next post in `#finance-<name>`.
-- `list_conflicts` and `resolve_conflict(id, use: report|mail|chat|both)` let the user settle them in chat. `both` is for two real trades that looked like one.
-- A resolution is stored and re-applied by later reconciles.
-- **Holdings checks:** the reconcile compares computed positions with the latest `holdings_reported` for each account. A difference is a conflict too ("CAS shows 120 INFY; trades give 110").
+**What reaches the user:**
+- **Corrections** (step 2) and **dropped mail trades** (step 3) are listed once in the next post in `#finance-<name>`. They're information: the report has already settled them.
+- **Holdings checks are the only conflicts.** The reconcile compares computed positions with the latest `holdings_reported` for each account ("CAS shows 120 INFY; trades give 110": a report for a gap is missing, or a transfer wasn't recorded). They stay open until the numbers agree, after an upload or a `record_trade`, or the user dismisses them (`list_conflicts`, `dismiss_conflict`).
 
 ### 5. Several users
 - **Tables:**
@@ -219,7 +207,7 @@ Both sources produce the same thing: a list of observations with a source, a doc
   - `stock_history`: all of a stock's entry and exit points;
   - `profit`: totals by stock, market and year;
   - `tax_estimate`: by tax year and country, with "tax if sold now" and the days until an Indian holding becomes long-term;
-  - `import_report`, `record_trade`, `list_conflicts`, `resolve_conflict`;
+  - `import_report`, `record_trade`, `list_conflicts`, `dismiss_conflict`;
   - `list_alerts`, `set_alert`, `mute_alert`;
   - `list_subscriptions`, `save_subscription`, `cancel_subscription`;
   - `set_tax_residence`, `set_base_currency`.
@@ -281,7 +269,7 @@ Both sources produce the same thing: a list of observations with a source, a doc
 - **Caddy:** a new block in `deploy/caddy/Caddyfile`:
 
   ```
-  # QuestDB console (read-only) → https://questdb.<tailnet>.ts.net
+  # QuestDB console → https://questdb.<tailnet>.ts.net
   :443 {
   	bind tailscale/questdb
   	import tailnet_owner_only
@@ -290,11 +278,7 @@ Both sources produce the same thing: a list of observations with a source, a doc
   ```
 
   Only `ROAMIND_DASHBOARD_USERS` get in, as for Hatchet and the notebook. The new device needs a `TS_AUTHKEY` or an approval on its first run (`docs/deployment.md`).
-- **Two gates:**
-  - Caddy's login check;
-  - QuestDB's read-only HTTP, so a console session can't change or drop data.
-
-  Port 9000 stays on loopback, so the console is reached only through Caddy.
+- **The gate is Caddy's login check,** on a trusted tailnet. A console session can change and drop data. Port 9000 stays on loopback, so the console is reached only through Caddy.
 - **What's in the console:** a SQL editor that charts results, not saved multi-panel dashboards. Saved, ready-made queries go in `deploy/questdb/dashboards.sql`, to paste in:
   - portfolio value over time (from `valuations`);
   - allocation by market and currency;
@@ -302,8 +286,8 @@ Both sources produce the same thing: a list of observations with a source, a doc
   - one stock's entry and exit points against its price;
   - subscriptions by month;
   - open conflicts.
-- **Per-user dashboards are out of scope:** the console sees every user. If they're wanted later, Grafana with QuestDB's read-only Postgres user and a per-user filter would be the next step.
-- **The notebook** can use the read-only user too, for analysis in pandas.
+- **Per-user dashboards are out of scope:** the console sees every user. If they're wanted later, Grafana with a per-user filter would be the next step.
+- **The notebook** can query port 9000 too (`/exec`), for analysis in pandas.
 
 ### 11. Docs, config
 - `docs/architecture.md`: a "Finance assistant" section with the flow, the de-dupe rules and the tenancy rules.
@@ -314,7 +298,7 @@ Both sources produce the same thing: a list of observations with a source, a doc
   - the EODHD key;
   - `qpdf`;
   - `task finance-forget`.
-- `.env.example`: `ROAMIND_QUESTDB_PASSWORD`, `ROAMIND_QUESTDB_READONLY_PASSWORD`, `EODHD_API_KEY`.
+- `.env.example`: `ROAMIND_QUESTDB_ADDR`, `EODHD_API_KEY`.
 - `README.md`: a feature line, and QuestDB on the dashboards list.
 - **Privacy:**
   - Holdings, trades and subscriptions stay in `data/questdb` and `data/roamind.db`.
@@ -325,8 +309,8 @@ Both sources produce the same thing: a list of observations with a source, a doc
 
 ## Phases
 Each phase is one branch and one PR.
-1. **QuestDB as a service:** process-compose, the locked-down config, the schemas, `memory/finance` with pgx, and the console on the tailnet.
-2. **Ledger from uploads:** accounts, `import_report` with the first parsers, the reconcile with conflicts, prices and FX, the channel, and `list_holdings`, `stock_history` and `profit`.
+1. **QuestDB as a service:** process-compose, the config, the schemas, `memory/finance` with the official client, and the console on the tailnet.
+2. **Ledger from uploads:** accounts, `import_report` with the first parsers, the reconcile with holdings checks, prices and FX, the channel, and `list_holdings`, `stock_history` and `profit`.
 3. **Ledger from mail:** the `finance` category, `extract`, PDF text, and `backfill()`.
 4. **Alerts:** `finance-daily`, `finance-weekly`, re-entry and the other rules, news, and subscriptions.
 5. **Tax:** residence, the rules per country, `tax_estimate`, and the year-end report.
@@ -337,7 +321,7 @@ Each phase is one branch and one PR.
 At this volume SQLite would do. QuestDB was chosen by the user. It gives dedup upserts on every write, time-partitioned price history, and a console to look at the data. SQLite still holds what needs transactions and constraints.
 
 ### Trades in SQLite, mirrored to QuestDB
-That would give transactions and unique constraints for the ledger, at the cost of two copies of every trade kept in step. The reconcile is serialized per user and is a pure function of the observations, and dedup upserts make each write idempotent. So QuestDB can hold the ledger alone.
+That would give transactions and unique constraints for the ledger, at the cost of two copies of every trade kept in step. The reconcile is serialized per user and is a pure function of the trade events, and dedup upserts make each write idempotent. So QuestDB can hold the ledger alone.
 
 ### A table per user in QuestDB
 Isolation and deletion would be simpler (`DROP TABLE`), but every dashboard query and every shared join would be built per user, and the table count would grow with users. Shared tables with `user_id`, behind one store package, were chosen.
@@ -345,8 +329,11 @@ Isolation and deletion would be simpler (`DROP TABLE`), but every dashboard quer
 ### A model deciding duplicates
 A turn could compare a report with the mail it already saw. It would cost a turn per upload, could miscount, and its answer couldn't be tested. Code decides; the model only extracts rows from documents code can't parse.
 
-### Line protocol for writes
-QuestDB's ingestion protocol is faster, but writes here are a few rows. Postgres wire handles both reads and writes with one client and one password, and line protocol stays off.
+### Postgres wire with pgx
+Postgres wire would let the console stay read-only, with writes behind a password on a port the tailnet never sees. The tailnet is trusted, so QuestDB's official client was chosen, over one port.
+
+### The client's ingestion sender
+It's faster and buffers rows on disk, but it reports a refused write only later, in the background. Writes here are a few rows, which must be applied before the reconcile reads them, so they're `INSERT`s with `Exec`.
 
 ## Files
 New:
@@ -364,18 +351,18 @@ Changed:
 - `deploy/apps-script/Code.js` (`finance`, PDF text, `backfill`), `agent/mail.go`, `agent/prompts/system.md`
 - the sandbox image (`qpdf`), `docs/*`, `README.md`, `.env.example`
 
-New Go dependency: `github.com/jackc/pgx/v5` as a direct dependency of `memory`.
+New Go dependency: `github.com/questdb/go-questdb-client/v4` as a direct dependency of `memory`.
 
 ## Verification
 1. **Unit tests:**
-   - The reconcile, on fixed observations:
+   - The reconcile, on fixed trade events:
      - a confirmation and a contract note for one order count once;
      - two orders of one day each count;
-     - a report wins over mail and records the agreement;
-     - a quantity mismatch makes a conflict;
-     - a mail trade missing from a covering report is left out and flagged;
-     - a resolution is re-applied;
-     - observations in any order give the same trades.
+     - a covering report wins over mail, and a different quantity is a notice, not a conflict;
+     - a mail trade missing from a covering report is voided, with a notice;
+     - an uncovered mail trade is provisional, and becomes confirmed when a report covering it arrives;
+     - a holdings mismatch opens a conflict, which closes when the numbers agree;
+     - trade events in any order give the same trades.
    - Ledger maths: oldest-first matching per account, splits, transfers keeping cost, dividends with withholding, profit in the instrument's currency and in EUR.
    - Tenancy: two users' data, each function returning only its user's rows.
    - Parsers, on redacted real files.
@@ -383,13 +370,14 @@ New Go dependency: `github.com/jackc/pgx/v5` as a direct dependency of `memory`.
 2. **QuestDB:**
    - Writing the same rows twice leaves one copy (`DEDUP`).
    - `bin/worker -questdb-init` is safe to repeat.
-   - A write over HTTP is refused, and so is a login with the default password.
-   - `https://questdb.<tailnet>.ts.net` opens for a listed login, gives 403 for others, and refuses a `DROP TABLE`.
+   - A refused write fails the call that made it.
+   - `https://questdb.<tailnet>.ts.net` opens for a listed login, and gives 403 for others.
 3. **Live, phase 2:**
    - Upload a broker's tradebook and compare `list_holdings` with the app.
    - Upload it again: "already imported".
-   - Upload an overlapping statement: no doubled trades, agreements counted.
+   - Upload an overlapping statement: no doubled trades; mail trades in its period become confirmed.
 4. **Live, phase 3:**
-   - Backfill one account's mail over a month that a report already covers: no new trades, and conflicts only where they're real.
+   - Backfill one account's mail over a month that a report already covers: no new trades, and notices only where mail and the report differ.
+   - Mail for a day after the last report gives a provisional trade at once.
    - The next contract note updates the holding.
 5. **Live, phase 4:** a `level` alert just below a held stock's price fires once. After a real exit, the re-entry rule shows in `list_alerts`. The Monday summary matches the brokers' apps within FX.

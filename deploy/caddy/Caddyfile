@@ -49,3 +49,13 @@
 	import tailnet_owner_only
 	reverse_proxy 127.0.0.1:8890
 }
+
+# QuestDB web console → https://questdb.<tailnet>.ts.net
+# QuestDB asks for no login; this block is its only gate. A console session
+# can change and drop data, and sees every user's finances. Saved queries are
+# in deploy/questdb/dashboards.sql.
+:443 {
+	bind tailscale/questdb
+	import tailnet_owner_only
+	reverse_proxy 127.0.0.1:9000
+}
