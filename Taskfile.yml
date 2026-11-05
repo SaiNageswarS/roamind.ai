@@ -16,6 +16,8 @@ vars:
   XCADDY_VERSION: v0.4.7
   CLASP_VERSION: 2.4.2
   VLLM_VERSION: 0.30.0
+  QUESTDB_VERSION: 10.1.0
+  QUESTDB: bin/questdb-{{.QUESTDB_VERSION}}
   SEARCH_MODELS: Qwen/Qwen3-Embedding-0.6B Qwen/Qwen3-Reranker-0.6B
   # How init brings a project's bm config.json ($cfg) up to date: the
   # settings in memory/basic-memory-config.json over it, keeping bm's own
@@ -188,6 +190,41 @@ tasks:
       - uv tool install "vllm=={{.VLLM_VERSION}}" --python 3.12 --managed-python
       - for: {var: SEARCH_MODELS}
         cmd: '"$(uv tool dir)/vllm/bin/hf" download {{.ITEM}} >/dev/null'
+
+  # QuestDB holds the finance assistant's time series. The "rt" build
+  # bundles its Java runtime.
+  questdb-install:
+    desc: Download QuestDB into bin/questdb-<version>, unless it is there
+    status: ['test -x {{.QUESTDB}}/bin/questdb.sh']
+    cmds:
+      - |
+        tmp="$(mktemp -d)"
+        trap 'rm -rf "$tmp"' EXIT
+        curl -fL --retry 3 -o "$tmp/questdb.tar.gz" \
+          "https://github.com/questdb/questdb/releases/download/{{.QUESTDB_VERSION}}/questdb-{{.QUESTDB_VERSION}}-rt-linux-x86-64.tar.gz"
+        tar -xzf "$tmp/questdb.tar.gz" -C "$tmp"
+        mkdir -p bin
+        mv "$tmp/questdb-{{.QUESTDB_VERSION}}-rt-linux-x86-64" {{.QUESTDB}}
+
+  # Its data goes in data/questdb. It listens on loopback only, as QuestDB
+  # binds every interface by default: the web console and REST API on 9000,
+  # Postgres wire on 8812 (user admin, password quest), line protocol on
+  # 9009 and health metrics on 9003.
+  questdb:
+    desc: Start QuestDB in the background, downloading it first if needed (web console http://127.0.0.1:9000)
+    deps: [questdb-install]
+    env:
+      QDB_HTTP_BIND_TO: 127.0.0.1:9000
+      QDB_HTTP_MIN_NET_BIND_TO: 127.0.0.1:9003
+      QDB_PG_NET_BIND_TO: 127.0.0.1:8812
+      QDB_LINE_TCP_NET_BIND_TO: 127.0.0.1:9009
+    cmds:
+      - '{{.QUESTDB}}/bin/questdb.sh start -d "$(realpath -m "${ROAMIND_DATA_DIR:-./data}/questdb")"'
+
+  questdb-stop:
+    desc: Stop QuestDB
+    cmds:
+      - '{{.QUESTDB}}/bin/questdb.sh stop'
 
   # process-compose runs in the foreground without its TUI; systemd is the
   # daemon (Linger keeps the user manager up from boot). Attach to it with
