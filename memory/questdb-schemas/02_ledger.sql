@@ -29,8 +29,10 @@ DEDUP UPSERT KEYS(ts, user_id, source, line);
 ALTER TABLE observations DEDUP ENABLE UPSERT KEYS(ts, user_id, source, line);
 
 -- One row per day-group (user, account, isin, trade date, side), written by
--- finance-reconcile from the observations; an upsert replaces it. Entry and
--- exit points are these rows grouped by ISIN across accounts.
+-- finance-reconcile from the observations; an upsert replaces it. An
+-- uploaded report covering the day is the trade (confirmed); until one
+-- does, mail and chat are (provisional). Entry and exit points are these
+-- rows grouped by ISIN across accounts.
 CREATE TABLE IF NOT EXISTS trades (
     ts           TIMESTAMP, -- the trade date
     user_id      SYMBOL,
@@ -43,9 +45,8 @@ CREATE TABLE IF NOT EXISTS trades (
     fees         DECIMAL(24, 8),
     tax_withheld DECIMAL(24, 8),
     currency     SYMBOL,
-    record       SYMBOL, -- the source of record
-    sources      INT,    -- how many families agreed
-    state        SYMBOL  -- active, void
+    record       SYMBOL, -- the report, or the mail kept
+    state        SYMBOL  -- confirmed, provisional, void
 ) TIMESTAMP(ts) PARTITION BY YEAR WAL
 DEDUP UPSERT KEYS(ts, user_id, account, isin, side);
 ALTER TABLE trades DEDUP ENABLE UPSERT KEYS(ts, user_id, account, isin, side);
