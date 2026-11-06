@@ -50,7 +50,7 @@ Findings that shape the design:
 
 ```
 broker mail ─▶ Apps Script (finance) ─▶ mail-message: check ─▶ extract (small model) ─▶ record  ┐
-report upload in #finance-<name> ─▶ chat turn ─▶ import_report (parser, or model rows) ─▶ record  ┤
+report upload in #finance-<name> ─▶ chat turn ─▶ import_report (an agent-written parser) ─▶ record ┤
 chat ("I sold 20 INFY") ─▶ chat turn ─▶ record_trade ─────────────────────────────────▶ record  ┤
                                                                                                  ▼
                               QuestDB trade_events (raw, one row per source line, dedup on source+line)
@@ -132,14 +132,14 @@ Both sources produce the same thing: a list of trade events with a source, a doc
 - A one-off `backfill(fromDate)` in the script sends past broker mail. It goes through the same path, and dedup makes a second run harmless.
 
 **Reports uploaded in `#finance-<name>`:**
-- Files shared in the channel are downloaded into the workspace's `uploads/`, as in every channel. The finance turn calls `import_report(file, broker, account, doc, period_from, period_to, rows?)`.
-- The tool, not the model:
+- Files shared in the channel are downloaded into the workspace's `uploads/`, as in every channel.
+- **The agent writes the parser.** Formats change, so there are no parsers in the repo. The turn writes a Python parser for the broker and kind of report, saves it in the workspace's `parsers/` for the next upload, and runs it in its sandbox. The parser prints the import as JSON: the account, the period, every row and the report's own printed totals. The model never types a figure.
+- The turn calls `import_report(file, parser, parsed)`. The tool, not the model:
   - hashes the file;
   - stops if `finance_uploads` has the hash for this user ("already imported on 3 Nov");
-  - parses it.
-- **Parsers come first.** Known CSV and XLSX formats have Go parsers in `connectors/statements`: one per broker export: a tradebook, a transaction or holdings statement, a stock plan's gains and benefit history. Each parser is added when the first real file of that format is seen.
-- **The model is the fallback**, for PDFs and unknown layouts. It reads the file and passes `rows` in the trade event schema, and the tool runs the same checks as for mail. A report's own totals, when it has them, must match the sum of its rows.
-- A CAS PDF is encrypted with the PAN. The turn asks for the password in the thread and decrypts it in the sandbox with `qpdf`, which is added to the sandbox image. The password isn't stored.
+  - runs the same checks as for mail on every row, and the report's own totals must match the sum of its rows.
+- **A changed format** makes the saved parser fail or its rows be refused; the turn fixes the parser and runs it again, never the JSON.
+- A CAS PDF is encrypted with the PAN. The turn asks for the password in the thread and decrypts a copy in the sandbox with `qpdf`. The password isn't stored.
 - Rows go to `trade_events` with source `upload:<sha256>`. The tool marks the user dirty, and the worker starts `finance-reconcile` after the turn, the way `goalChannelsTrigger` runs. The MCP server has no Hatchet client.
 
 **Chat:** `record_trade` writes one trade event with source `chat:<thread>`. It counts like mail, below it when both have the same fill.
@@ -296,9 +296,9 @@ This is how a contract-note mail and the tradebook row for the same order count 
 ## Phases
 Each phase is one branch and one PR.
 1. **QuestDB as a service:** process-compose, the config, the schemas, `memory/finance` with the official client, and the console on the tailnet.
-2. **Ledger from uploads:** accounts, `import_report` with the first parsers, the reconcile, prices and FX, the channel, and `list_holdings`, `stock_history` and `profit`.
+2. **Ledger from uploads:** accounts, `import_report` with agent-written parsers, the reconcile, prices and FX, the channel, and `list_holdings`, `stock_history` and `profit`.
    As built:
-   - **No parsers yet:** the model reads every report and passes its rows, which the tool checks. A parser is added when a real export of a format is at hand.
+   - **Parsers are written by the agent,** not kept in the repo: a Python script per broker and kind of report in the user's workspace, run in the sandbox on `/opt/roamind/py` (`task report-python`), and rewritten when a format changes and its rows are refused.
    - **The base currency** is in `finance_settings`, not a column of `users`: `task init` reapplies every schema file, and `ALTER TABLE … ADD COLUMN` can't be repeated.
    - **The reconcile only de-dupes:** no confirmed, provisional or void state, no notices, no holdings checks or conflicts, and no `holdings_reported`.
    - **The channel** opens after a turn once the user has an account, rather than on their first finance question.

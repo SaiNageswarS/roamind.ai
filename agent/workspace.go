@@ -51,6 +51,11 @@ var workspaceSettings = mustJSON(map[string]any{
 	},
 })
 
+// ReportPython is the interpreter report parsers run on in the sandbox,
+// with pandas, openpyxl, xlrd, pdfplumber and pypdf (task report-python).
+// It is outside the home directory, which the sandbox can't read.
+const ReportPython = "/opt/roamind/py/bin/python"
+
 // webTools are the tools of a ToolsWeb turn; there is no Bash, so no
 // sandbox.
 var webTools = []string{"WebSearch", "WebFetch"}

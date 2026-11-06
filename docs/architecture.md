@@ -222,7 +222,7 @@ Gmail ─▶ Apps Script, per account (deploy/apps-script/Code.js), once a day
 One ledger of the user's investments across brokers and markets: holdings per stock across accounts, entry and exit points, profit, dividends, in a base currency. The plan, with the phases still to come (mail, alerts, tax), is `docs/plans/finance-assistant.md`.
 
 ```
-report uploaded in Slack ─▶ chat turn: the model reads the file ─▶ import_report ─┐
+report uploaded in Slack ─▶ chat turn: a parser it writes, run in the sandbox ─▶ import_report ─┐
 "I sold 20 INFY" ─▶ chat turn ─▶ record_trade ───────────────────────────────────┤
                                                        QuestDB trade_events (one row per source line)
                                                                                   │ finance.ReconcileUser
@@ -233,7 +233,7 @@ finance-market, daily ─▶ ECB rates, EODHD prices and splits, AMFI NAVs ─�
 ```
 
 - **Where data lives:** the ledger and market data are in QuestDB (`memory/questdb-schemas`); accounts, imported uploads, dirty users and settings are in SQLite (`memory/sql-schemas/12_finance.sql`). Only `memory/finance` queries QuestDB.
-- **Importing a report:** files shared in Slack land in the user's workspace. The turn reads the report and calls `import_report` with its rows and its period; there are no format parsers yet. The tool, not the model:
+- **Importing a report:** files shared in Slack land in the user's workspace. Broker formats change, so the repo has no parsers: the turn writes one in Python per broker and kind of report, in the workspace's `parsers/`, reuses it for the next upload, and runs it in the sandbox on `/opt/roamind/py` (`agent.ReportPython`: the system Python with pandas, openpyxl, xlrd, pdfplumber and pypdf, outside the home directory the sandbox can't read). The parser prints the import as JSON (`ParsedReport`): the account, the period, every row and the report's own printed totals. The turn passes the report, the parser and that JSON to `import_report`, so the model never types a figure. When a format changes, the parser fails or its rows are refused, and the turn fixes the parser. The tool, not the model:
   - hashes the file and refuses one already imported (`finance_uploads`);
   - checks every row: the ISIN checksum, the side, positive decimals, quantity × price within 1% of the amount (before fees), the date within the period, and the report's own totals when given. A refused import names each problem, and nothing is written;
   - makes the account from the broker and account number, writes the rows to `trade_events` (source `upload:<sha256>`), and reconciles at once, so the turn's answer sees the result.

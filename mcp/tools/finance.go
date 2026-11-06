@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -39,7 +40,14 @@ type ReportRow struct {
 
 // ImportReportInput is import_report's input.
 type ImportReportInput struct {
-	File           string      `json:"file" jsonschema:"the report's path in the workspace, as the upload was saved"`
+	File   string `json:"file" jsonschema:"the report's path in the workspace, as the upload was saved"`
+	Parser string `json:"parser" jsonschema:"the parser that read it: a Python script in parsers/ of the workspace"`
+	Parsed string `json:"parsed" jsonschema:"the JSON file the parser wrote for it, in the workspace: a ParsedReport"`
+}
+
+// ParsedReport is what a report parser prints: the report's account,
+// period, rows and its own totals, all read from the file.
+type ParsedReport struct {
 	Broker         string      `json:"broker" jsonschema:"the broker or platform that issued it, e.g. zerodha"`
 	AccountNumber  string      `json:"account_number,omitempty" jsonschema:"the account, client or demat number as the report shows it, masked digits and all; empty when it shows none"`
 	Currency       string      `json:"currency,omitempty" jsonschema:"the account's currency, when the report says"`
@@ -186,13 +194,26 @@ func financeTools(s *mcp.Server, d Deps) {
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "import_report",
-		Description: "Import a broker report the user uploaded (a tradebook, statement or contract note): " +
-			"read the file, then pass every trade and dividend row exactly as it lists them. A trade mail already reported " +
-			"counts once. Rows are checked (ISIN checksum, quantity × price against amount, dates in the period) and the import " +
-			"is refused with the problems listed, to fix and retry. The same file is never imported twice.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ImportReportInput) (*mcp.CallToolResult, ImportReportOutput, error) {
+		Description: "Import a broker report the user uploaded (a tradebook, statement or contract note), as parsed by a " +
+			"Python parser in parsers/ of the workspace. The parser takes the report's path and prints one JSON object: " +
+			parsedShape + ". Every row is checked (ISIN checksum, quantity × price against amount, dates in the period, " +
+			"the report's own totals against its rows) and the import is refused with the problems listed: fix the parser " +
+			"and run it again, never the JSON by hand. A trade mail already reported counts once. The same file is never " +
+			"imported twice.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args ImportReportInput) (*mcp.CallToolResult, ImportReportOutput, error) {
 		var out ImportReportOutput
-		path, err := workspaceFile(d, in.File)
+		path, err := workspaceFile(d, args.File)
+		if err != nil {
+			return nil, out, err
+		}
+		parser, err := workspaceFile(d, args.Parser)
+		if err != nil {
+			return nil, out, err
+		}
+		if filepath.Ext(parser) != ".py" || !inParsers(d, parser) {
+			return nil, out, fmt.Errorf("the parser must be a .py file in parsers/, not %s", args.Parser)
+		}
+		in, err := readParsed(d, args.Parsed)
 		if err != nil {
 			return nil, out, err
 		}
@@ -202,7 +223,7 @@ func financeTools(s *mcp.Server, d Deps) {
 		}
 		if prev, err := st.FinanceUploadOf(ctx, userID, sha); err != nil || prev != nil {
 			if prev != nil {
-				out.Message = fmt.Sprintf("%s was already imported on %s, into account %s", in.File, prev.ImportedAt.Format(time.DateOnly), prev.Account)
+				out.Message = fmt.Sprintf("%s was already imported on %s, into account %s", args.File, prev.ImportedAt.Format(time.DateOnly), prev.Account)
 			}
 			return nil, out, err
 		}
@@ -255,7 +276,8 @@ func financeTools(s *mcp.Server, d Deps) {
 			return nil, out, err
 		}
 		out.Account = acct.ID + " (" + acct.Label() + ")"
-		out.Message = fmt.Sprintf("imported %d rows into %s; the ledger has %d trades", len(in.Rows), out.Account, n)
+		out.Message = fmt.Sprintf("imported %d rows into %s with %s; the ledger has %d trades", len(in.Rows), out.Account,
+			filepath.Base(parser), n)
 		return nil, out, nil
 	})
 	mcp.AddTool(s, &mcp.Tool{
@@ -430,6 +452,47 @@ func financeTools(s *mcp.Server, d Deps) {
 		}
 		return nil, Done{Message: "totals are now in " + c}, nil
 	})
+}
+
+// parsedShape is ParsedReport, as import_report's description gives it.
+const parsedShape = `{"broker", "account_number" (as the report shows it, masked digits and all), "currency" (the account's), ` +
+	`"doc" (tradebook, statement or contract_note), "period_from", "period_to" (ISO dates), "rows": [{"date", "isin", "name", ` +
+	`"side" (buy, sell, vest, espp, dividend, transfer_in, transfer_out), "quantity", "price", "amount" (quantity × price ` +
+	`before fees), "fees", "tax_withheld", "currency", "ref" (order or trade number)}], "total_buy_amount", "total_sell_amount" ` +
+	`(the report's own printed totals of buys and sells before fees, read from it, not summed from the rows; omit when it ` +
+	`has none)}, every value a string, decimals with a dot and no thousands separators`
+
+// maxParsed is the largest parser output import_report reads.
+const maxParsed = 16 << 20
+
+// readParsed reads a parser's output from the workspace.
+func readParsed(d Deps, file string) (ParsedReport, error) {
+	var p ParsedReport
+	path, err := workspaceFile(d, file)
+	if err != nil {
+		return p, err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return p, err
+	}
+	defer f.Close()
+	dec := json.NewDecoder(io.LimitReader(f, maxParsed+1))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
+		return p, fmt.Errorf("%s is not the parser's JSON: %v; fix the parser and run it again", file, err)
+	}
+	return p, nil
+}
+
+// inParsers reports whether path is in the workspace's parsers/.
+func inParsers(d Deps, path string) bool {
+	ws, err := filepath.Abs(filepath.Join(d.DataDir, "users", d.UserID, "workspace", "parsers"))
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(ws, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
 }
 
 // workspaceFile is file's absolute path in the user's workspace

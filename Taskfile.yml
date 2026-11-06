@@ -18,6 +18,9 @@ vars:
   VLLM_VERSION: 0.30.0
   QUESTDB_VERSION: 10.1.0
   QUESTDB: bin/questdb-{{.QUESTDB_VERSION}}
+  # The Python that parsers of broker reports run on, in the agent's
+  # sandbox. It is outside the home directory, which the sandbox can't read.
+  REPORT_PYTHON: /opt/roamind/py
   SEARCH_MODELS: Qwen/Qwen3-Embedding-0.6B Qwen/Qwen3-Reranker-0.6B
   # How init brings a project's bm config.json ($cfg) up to date: the
   # settings in memory/basic-memory-config.json over it, keeping bm's own
@@ -223,6 +226,23 @@ tasks:
     desc: Stop QuestDB
     cmds:
       - '{{.QUESTDB}}/bin/questdb.sh stop'
+
+  # The agent writes a Python parser for each broker report format and runs
+  # it in its sandbox (import_report in mcp/tools/finance.go). This is the
+  # interpreter and libraries it runs on: the system Python with the locked
+  # deploy/report-python/requirements.txt, copied (not linked) out of uv's
+  # cache in the home directory. /opt/roamind must exist and be yours:
+  #   sudo install -d -o "$USER" /opt/roamind
+  report-python:
+    desc: Install the Python that report parsers run on into /opt/roamind/py
+    status: ['cmp -s deploy/report-python/requirements.txt {{.REPORT_PYTHON}}/requirements.txt']
+    preconditions:
+      - sh: test -w "$(dirname {{.REPORT_PYTHON}})"
+        msg: 'run: sudo install -d -o "$USER" {{dir .REPORT_PYTHON}}'
+    cmds:
+      - uv venv --allow-existing --python /usr/bin/python3 {{.REPORT_PYTHON}}
+      - uv pip install --link-mode copy --python {{.REPORT_PYTHON}}/bin/python --require-hashes -r deploy/report-python/requirements.txt
+      - cp deploy/report-python/requirements.txt {{.REPORT_PYTHON}}/requirements.txt
 
   # process-compose runs in the foreground without its TUI; systemd is the
   # daemon (Linger keeps the user manager up from boot). Attach to it with
