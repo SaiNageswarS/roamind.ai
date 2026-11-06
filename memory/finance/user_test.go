@@ -24,44 +24,28 @@ func TestReconcileUser(t *testing.T) {
 	}
 	oct10, nov3 := d("2026-10-10"), d("2026-11-03")
 
-	// Mail first: provisional.
-	if err := db.AddTradeEvents(ctx, user, []TradeEvent{buy("mail:me@x/m1", DocContractNote, "40", oct10), buy("mail:me@x/m2", DocContractNote, "5", nov3)}); err != nil {
+	// Mail first, then an October tradebook repeating the 10 October fill.
+	if err := db.AddTradeEvents(ctx, user, []TradeEvent{buy("mail:me@x/m1", DocContractNote, "50", oct10), buy("mail:me@x/m2", DocContractNote, "5", nov3)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.MarkFinanceDirty(ctx, user); err != nil {
 		t.Fatal(err)
 	}
-	res, err := ReconcileUser(ctx, db, st, user)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Provisional != 2 || res.Confirmed != 0 {
-		t.Fatalf("after mail: %+v", res)
+	if n, err := ReconcileUser(ctx, db, st, user); err != nil || n != 2 {
+		t.Fatalf("after mail: %d %v", n, err)
 	}
 	if mark, _ := st.FinanceDirty(ctx, user); mark != 0 {
 		t.Error("still dirty after the reconcile")
 	}
-
-	// A tradebook for October says 50, and holds 50 as of the 31st.
 	if err := db.AddTradeEvents(ctx, user, []TradeEvent{buy("upload:tb1", DocTradebook, "50", oct10)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.PutHoldings(ctx, user, []Holding{{Date: d("2026-10-31"), Account: "a1", ISIN: infy, Quantity: "60", Source: "upload:tb1"}}); err != nil {
-		t.Fatal(err)
+	if n, err := ReconcileUser(ctx, db, st, user); err != nil || n != 2 {
+		t.Fatalf("after the tradebook: %d %v", n, err)
 	}
-	if err := st.SaveFinanceUpload(ctx, store.FinanceUpload{UserID: user, SHA256: "tb1", File: "tb.csv", Account: "a1", Doc: DocTradebook,
-		PeriodFrom: "2026-10-01", PeriodTo: "2026-10-31", Rows: 1}); err != nil {
-		t.Fatal(err)
-	}
-	if res, err = ReconcileUser(ctx, db, st, user); err != nil {
-		t.Fatal(err)
-	}
-	if res.Confirmed != 1 || res.Provisional != 1 || len(res.Notices) != 1 || res.Notices[0].Kind != NoticeCorrected {
-		t.Fatalf("after the tradebook: %+v", res)
-	}
-	// The report shows 60 on the 31st; its trades give 50.
-	if len(res.Conflicts) != 1 || res.Conflicts[0].Detail != "the report of 2026-10-31 shows 60; the trades give 50" {
-		t.Fatalf("conflicts = %+v", res.Conflicts)
+	trades, err := db.Trades(ctx, user)
+	if err != nil || len(trades) != 2 || trades[0].Quantity != "50" || trades[0].Record != "upload:tb1" {
+		t.Fatalf("trades = %+v %v", trades, err)
 	}
 
 	pf, err := db.Portfolio(ctx, user, "EUR", d("2026-11-05"))
@@ -73,7 +57,7 @@ func TestReconcileUser(t *testing.T) {
 	}
 	s := pf.Stocks[0]
 	is(t, "quantity", s.Quantity, "55")
-	if !s.Provisional || len(s.Points) != 2 || s.Points[0].State != Confirmed || s.Points[1].State != Provisional {
+	if len(s.Points) != 2 {
 		t.Errorf("stock = %+v", s)
 	}
 	// No price or INR rate yet: the value is missing, and says why.

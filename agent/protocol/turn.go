@@ -85,7 +85,7 @@ const (
 	// ServerItems is tracking the state of the user's tasks and events.
 	ServerItems = "items"
 	// ServerFinance is the user's brokerage accounts: importing reports,
-	// and their holdings, profit and conflicts.
+	// and their holdings and profit.
 	ServerFinance = "finance"
 )
 
@@ -109,8 +109,6 @@ type FinanceRef struct {
 	// Accounts are the user's brokerage accounts, as list_accounts names
 	// them.
 	Accounts []string `json:"accounts,omitempty"`
-	// Conflicts is how many conflicts are open.
-	Conflicts int `json:"conflicts,omitempty"`
 }
 
 // GoalRef names a goal note in the user's memory.

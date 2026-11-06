@@ -20,28 +20,12 @@ type Trade struct {
 	Fees        string
 	TaxWithheld string
 	Currency    string
-	Record      string // the source of record: the report, or the mail kept
-	State       string // confirmed, provisional or void
-}
-
-// States of a trade.
-const (
-	// Confirmed is a trade an uploaded report holds.
-	Confirmed = "confirmed"
-	// Provisional is a trade from mail or chat that no report covers yet.
-	Provisional = "provisional"
-	// Void is a trade nothing holds any more, or that a report covering its
-	// day doesn't have.
-	Void = "void"
-)
-
-func (t Trade) key() [4]string {
-	return [4]string{t.Date.Format(time.DateOnly), t.Account, t.ISIN, t.Side}
+	Record      string // the source of the copy kept: the report, or the mail
 }
 
 var tradeCols = cols("ts", "user_id", "account", "isin", "side",
 	"quantity:"+castMoney, "avg_price:"+castPrice, "amount:"+castMoney, "fees:"+castMoney, "tax_withheld:"+castMoney,
-	"currency", "record", "state")
+	"currency", "record")
 
 // PutTrades writes the user's trades; each replaces the trade of its day,
 // account, ISIN and side.
@@ -52,24 +36,23 @@ func (d *DB) PutTrades(ctx context.Context, userID string, trades []Trade) error
 	rows := make([][]any, len(trades))
 	for i, t := range trades {
 		rows[i] = []any{day(t.Date), userID, t.Account, t.ISIN, t.Side,
-			t.Quantity, t.AvgPrice, t.Amount, t.Fees, t.TaxWithheld, t.Currency, t.Record, t.State}
+			t.Quantity, t.AvgPrice, t.Amount, t.Fees, t.TaxWithheld, t.Currency, t.Record}
 	}
 	return d.insert(ctx, "trades", tradeCols, rows)
 }
 
-// Trades returns the user's trades, void ones included, by date, account,
-// ISIN and side.
+// Trades returns the user's trades, by date, account, ISIN and side.
 func (d *DB) Trades(ctx context.Context, userID string) ([]Trade, error) {
 	var out []Trade
 	err := d.query(ctx, `SELECT ts, account, isin, side, quantity::STRING, avg_price::STRING, amount::STRING,
-			fees::STRING, tax_withheld::STRING, currency, record, state
+			fees::STRING, tax_withheld::STRING, currency, record
 		FROM trades WHERE user_id = $1 ORDER BY ts, account, isin, side`,
 		func(b *qdb.QwpBinds) { text(b, 0, userID) },
 		func(b *qdb.QwpColumnBatch, r int) error {
 			s := func(col int) string { return b.String(col, r) }
 			out = append(out, Trade{Date: timeAt(b, 0, r), Account: s(1), ISIN: s(2), Side: s(3),
 				Quantity: trimDecimal(s(4)), AvgPrice: trimDecimal(s(5)), Amount: trimDecimal(s(6)),
-				Fees: trimDecimal(s(7)), TaxWithheld: trimDecimal(s(8)), Currency: s(9), Record: s(10), State: s(11)})
+				Fees: trimDecimal(s(7)), TaxWithheld: trimDecimal(s(8)), Currency: s(9), Record: s(10)})
 			return nil
 		})
 	return out, err

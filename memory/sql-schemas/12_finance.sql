@@ -1,5 +1,5 @@
 -- The finance assistant's state, per user. Its ledger (trade events, trades,
--- reported holdings, prices) is in QuestDB: memory/questdb-schemas.
+-- prices) is in QuestDB: memory/questdb-schemas.
 
 -- Brokerage accounts, each made on its first report or trade. A report is
 -- matched to its account by the broker and the account number it shows.
@@ -16,8 +16,7 @@ CREATE TABLE IF NOT EXISTS fin_accounts (
 );
 
 -- Reports imported from uploads, by their SHA-256, so a file uploaded again
--- is refused. Its period is what it covers: for those days, the report's
--- trades are the account's trades, and mail's are not.
+-- is refused. Its period is the days its trades cover.
 CREATE TABLE IF NOT EXISTS finance_uploads (
     user_id     TEXT NOT NULL REFERENCES users(id),
     sha256      TEXT NOT NULL,
@@ -35,22 +34,6 @@ CREATE TABLE IF NOT EXISTS finance_uploads (
 CREATE TABLE IF NOT EXISTS finance_dirty (
     user_id TEXT PRIMARY KEY REFERENCES users(id),
     since   INTEGER NOT NULL -- unix nanoseconds of the latest change
-);
-
--- Holdings a report showed that the ledger doesn't match. The reconcile
--- opens one per difference and resolves it once the numbers agree.
-CREATE TABLE IF NOT EXISTS finance_conflicts (
-    id         INTEGER PRIMARY KEY,
-    user_id    TEXT NOT NULL REFERENCES users(id),
-    account    TEXT NOT NULL,
-    isin       TEXT NOT NULL,
-    day        TEXT NOT NULL, -- the report's as-of date
-    kind       TEXT NOT NULL, -- holdings
-    detail     TEXT NOT NULL,
-    state      TEXT NOT NULL, -- open, resolved, dismissed
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    UNIQUE (user_id, account, isin, day, kind)
 );
 
 -- Per-user settings. Profit in the base currency is converted at each

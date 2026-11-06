@@ -20,7 +20,7 @@ ORDER BY value DESC;
 SELECT t.ts, t.side, t.account, t.quantity, t.avg_price, p.close
 FROM trades t
 LEFT JOIN prices p ON p.isin = t.isin AND p.ts = t.ts
-WHERE t.user_id = '<user id>' AND t.isin = '<isin>' AND t.state != 'void'
+WHERE t.user_id = '<user id>' AND t.isin = '<isin>'
 ORDER BY t.ts;
 
 -- One stock's closes, to chart beside its entry and exit points.
@@ -29,7 +29,7 @@ SELECT ts, close FROM prices WHERE isin = '<isin>' ORDER BY ts;
 -- Trades a month, by side.
 SELECT ts, side, count() AS trades, sum(amount) AS amount
 FROM trades
-WHERE user_id = '<user id>' AND state != 'void'
+WHERE user_id = '<user id>'
 SAMPLE BY 1M ALIGN TO CALENDAR;
 
 -- Subscriptions by month.
@@ -37,10 +37,3 @@ SELECT ts, currency, sum(amount) AS spent
 FROM subscription_charges
 WHERE user_id = '<user id>'
 SAMPLE BY 1M ALIGN TO CALENDAR;
-
--- Provisional trades, from mail with no report covering them yet: the
--- period to upload a report for, per account.
-SELECT account, min(ts) AS since, count() AS trades
-FROM trades
-WHERE user_id = '<user id>' AND state = 'provisional'
-GROUP BY account;

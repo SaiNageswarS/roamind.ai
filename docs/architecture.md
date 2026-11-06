@@ -26,7 +26,7 @@ Slack ─HTTPS─▶ Tailscale Funnel (webhook path only) ─▶ Hatchet ─even
 | `connectors` | What pulls content in from outside, one package per kind, after Onyx's connectors: the RSS/Atom feed reader (`feeds`), market data for the finance assistant (`market`: ECB rates, AMFI NAVs, EODHD prices), job postings from applicant tracking systems (`jobs`: one file per ATS implementing `jobs.ATS`, `Match` and `Posting`; `Parse` tries the `systems` list in order, and a URL none matches is read from its page), and the public-only HTTP client both use for URLs that come from the agent or the web (`safehttp`), with a public-only proxy for the headless Chrome that renders posting pages. It depends on no other Roamind module |
 | `worker` | The Hatchet worker, laid out like Hatchet's Go quickstart: `cmd/worker`, `cmd/setup-webhook`, `client` (the Hatchet client) and `workflows`, one file per workflow with its tasks and wiring: `chat-turn`, `goal-channels`, `learning-exercises`, `learning-exercise`, `user-setup`, `news-shorts`, `news-digest`, `news-reaction`, `inbox-digests`, `inbox-digest`, `job-search`, `job-hunt`, `job-application`, `finance-reconcile`, `finance-channel`, `finance-market` |
 | `memory` | Roamind's data: the files below, `store` (the Go code that reads and writes the SQLite database), `store/notes` (users' Basic Memory notes) and `finance` (the finance ledger in QuestDB) |
-| `mcp` | Roamind's MCP server, which claude starts per chat turn over stdio, pinned to the turn's user: `cmd/mcp` (`bin/mcp`) and `tools`, one file per tool set (`interests.go`: following and adding news interests; `jobs.go`: asking the job assistant to draft applications; `finance.go`: importing broker reports, and holdings, profit and conflicts), served by name with `--tools`. Built on the official Go MCP SDK |
+| `mcp` | Roamind's MCP server, which claude starts per chat turn over stdio, pinned to the turn's user: `cmd/mcp` (`bin/mcp`) and `tools`, one file per tool set (`interests.go`: following and adding news interests; `jobs.go`: asking the job assistant to draft applications; `finance.go`: importing broker reports, and holdings and profit), served by name with `--tools`. Built on the official Go MCP SDK |
 
 `memory/` holds the data: its definitions, seed data and the Go code over it. The data files are read from disk, not embedded. `task init` (process-compose runs it before every worker start) applies them with the `sqlite3` CLI, `jq` and `cp`; each step is safe to repeat. The worker reads `basic-memory-config.json` and `basic-memory-schemas/`, at `ROAMIND_MEMORY_DIR` (default `./memory`), to set up new users' projects.
 
@@ -226,28 +226,25 @@ report uploaded in Slack ─▶ chat turn: the model reads the file ─▶ impor
 "I sold 20 INFY" ─▶ chat turn ─▶ record_trade ───────────────────────────────────┤
                                                        QuestDB trade_events (one row per source line)
                                                                                   │ finance.ReconcileUser
-                                       reports are the golden set, mail and chat provisional
+                                       the same fill from a report and from mail counts once
                                                                                   ▼
                                 QuestDB trades (one row per account, ISIN, day, side) ─▶ list_holdings, stock_history, profit
-                                        holdings_reported ─▶ conflicts (SQLite)
 finance-market, daily ─▶ ECB rates, EODHD prices and splits, AMFI NAVs ─▶ QuestDB fx, prices, corporate_actions
 ```
 
-- **Where data lives:** the ledger and market data are in QuestDB (`memory/questdb-schemas`); accounts, imported uploads, dirty users, conflicts and settings are in SQLite (`memory/sql-schemas/12_finance.sql`). Only `memory/finance` queries QuestDB.
-- **Importing a report:** files shared in Slack land in the user's workspace. The turn reads the report and calls `import_report` with its rows, its period and the holdings it shows; there are no format parsers yet. The tool, not the model:
+- **Where data lives:** the ledger and market data are in QuestDB (`memory/questdb-schemas`); accounts, imported uploads, dirty users and settings are in SQLite (`memory/sql-schemas/12_finance.sql`). Only `memory/finance` queries QuestDB.
+- **Importing a report:** files shared in Slack land in the user's workspace. The turn reads the report and calls `import_report` with its rows and its period; there are no format parsers yet. The tool, not the model:
   - hashes the file and refuses one already imported (`finance_uploads`);
   - checks every row: the ISIN checksum, the side, positive decimals, quantity × price within 1% of the amount (before fees), the date within the period, and the report's own totals when given. A refused import names each problem, and nothing is written;
-  - makes the account from the broker and account number, writes the rows to `trade_events` (source `upload:<sha256>`) and the holdings to `holdings_reported`, and reconciles at once, so the turn's answer sees the result.
+  - makes the account from the broker and account number, writes the rows to `trade_events` (source `upload:<sha256>`), and reconciles at once, so the turn's answer sees the result.
 - **The reconcile** (`finance.Reconcile`, pure; `finance.ReconcileUser` with the databases), per day-group (account, ISIN, day, side):
-  - **reports are the golden set:** a day-group with report rows is those rows, `confirmed`. Mail and chat that said otherwise make a notice, which the tool returns;
-  - **a day a report covers but has no row for** voids the mail or chat trade, with a notice: a cancelled order, or a misread mail;
-  - **otherwise mail and chat are the trade,** `provisional`, until a report covers the day;
-  - **copies of one fill** from different sources count once: the same order number, else the same quantity and a price within 0.1%. Rows of one source are never copies of each other;
-  - **holdings:** each account's latest reported holdings are compared with what its trades give on that day. Differences are the only conflicts (`finance_conflicts`), resolved once the numbers agree, or dismissed.
+  - **copies of one fill** from different sources count once: the same order number, else the same quantity and a price within 0.1% (an amount within 0.1% for dividends). Rows of one source are never copies of each other;
+  - **the copy kept** is the uploaded report's, then mail's by document (contract note before confirmation), then chat's;
+  - **nothing is dropped or deleted:** a fill only one source has is a fill, and `trade_events` is never changed.
   - It depends only on its input, so an overlapping run is fixed by the next. `finance-reconcile`, serialized per user, runs after a turn that left the user dirty, and the daily `finance-market` run picks up anyone else.
 - **The ledger** (`finance.Ledger`): sells take the oldest lots first, per account, fees included in cost and taken from proceeds; transfers move lots with their cost; splits and bonuses scale lots before their ex-date. Gains in the base currency take proceeds at the sale day's ECB rate and cost at each lot's. A figure that needs a missing price or rate is left out, and the tools say why.
 - **Market data,** fetched once for every instrument any user holds (`connectors/market`, through `safehttp`): ECB euro rates for every currency; for stocks and ETFs, with `EODHD_API_KEY`, the listing in the instrument's currency (on its home exchange when it has one) found once by ISIN, then daily bars and splits; for Indian funds (`INF…`), AMFI's NAVs. Only ISINs, tickers and dates are sent.
-- **The channel:** once a user has an account, `finance-channel` opens `#finance-<name>`. The owner's messages there are finance turns, with their accounts and open conflicts in the prompt. Chat turns everywhere get the `finance` tool set.
+- **The channel:** once a user has an account, `finance-channel` opens `#finance-<name>`. The owner's messages there are finance turns, with their accounts in the prompt. Chat turns everywhere get the `finance` tool set.
 - **Tenancy:** every per-user table has `user_id`, every query binds it, and the tools are pinned to the turn's user (`TestTenancy`, `TestFinance`). Uploads are read only from the user's own workspace.
 
 ## Job assistant (web channel)

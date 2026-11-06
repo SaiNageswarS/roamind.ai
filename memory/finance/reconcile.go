@@ -2,61 +2,19 @@ package finance
 
 import (
 	"cmp"
-	"fmt"
 	"math/big"
 	"slices"
 	"strings"
 	"time"
 )
 
-// Coverage is the days each account's uploaded reports cover, by account.
-type Coverage map[string][]Period
-
-// Period is a run of days, both ends included.
-type Period struct{ From, To time.Time }
-
-// Covers reports whether a report of account covers day.
-func (c Coverage) Covers(account string, day time.Time) bool {
-	for _, p := range c[account] {
-		if !day.Before(p.From) && !day.After(p.To) {
-			return true
-		}
-	}
-	return false
-}
-
-// Notice is something a report changed in the ledger, for the user to hear
-// about once: it needs nothing from them.
-type Notice struct {
-	Date    time.Time
-	Account string
-	ISIN    string
-	Side    string
-	Kind    string // corrected or dropped
-	Detail  string
-}
-
-// Kinds of notice.
-const (
-	// NoticeCorrected is a report holding a trade that mail or chat
-	// reported otherwise.
-	NoticeCorrected = "corrected"
-	// NoticeDropped is a mail or chat trade a report covering its day
-	// doesn't have: a cancelled order, or a misread mail.
-	NoticeDropped = "dropped"
-)
-
 // Reconcile settles the trade events into trades, one per day-group
-// (account, ISIN, day, side). Uploaded reports are the golden set:
-//   - a day-group with report rows is those rows, confirmed;
-//   - one a report covers but has no rows for is void, and mail or chat
-//     rows for it are dropped;
-//   - otherwise its mail and chat rows are the trade, provisional.
-//
-// Copies of one fill, as two sources reported it, count once (sameFill).
-// Every trade in previous that no day-group has any more comes back void.
-// The result depends only on its input, not on the events' order.
-func Reconcile(events []TradeEvent, cover Coverage, previous []Trade) ([]Trade, []Notice) {
+// (account, ISIN, day, side), counting each fill once: the same fill
+// reported by a report and by mail (or by two mails) is one fill, and the
+// copy from the better document is kept (docRank). Nothing is ever
+// dropped: an event no other source has is a fill of its own. The result
+// depends only on its input, not on the events' order.
+func Reconcile(events []TradeEvent) []Trade {
 	groups := map[[4]string][]TradeEvent{}
 	for _, e := range events {
 		k := [4]string{day(e.Date).Format(time.DateOnly), e.Account, e.ISIN, e.Side}
@@ -68,52 +26,13 @@ func Reconcile(events []TradeEvent, cover Coverage, previous []Trade) ([]Trade, 
 	}
 	slices.SortFunc(keys, func(a, b [4]string) int { return slices.Compare(a[:], b[:]) })
 
-	var trades []Trade
-	var notices []Notice
-	seen := map[[4]string]bool{}
+	trades := make([]Trade, 0, len(keys))
 	for _, k := range keys {
 		g := groups[k]
-		var reported, other []TradeEvent
-		for _, e := range g {
-			if family(e.Source) == familyReport {
-				reported = append(reported, e)
-			} else {
-				other = append(other, e)
-			}
-		}
-		first := g[0]
-		t := Trade{Date: day(first.Date), Account: first.Account, ISIN: first.ISIN, Side: first.Side}
-		notice := Notice{Date: t.Date, Account: t.Account, ISIN: t.ISIN, Side: t.Side}
-		switch {
-		case len(reported) > 0:
-			t = total(t, mergeFills(reported), Confirmed)
-			if len(other) > 0 {
-				said := total(t, mergeFills(other), Provisional)
-				if !agree(said, t) {
-					notice.Kind = NoticeCorrected
-					notice.Detail = fmt.Sprintf("%s said %s; the report says %s", sourceName(said.Record), describe(said), describe(t))
-					notices = append(notices, notice)
-				}
-			}
-		case cover.Covers(t.Account, t.Date):
-			said := total(t, mergeFills(other), Provisional)
-			t.State = Void
-			notice.Kind = NoticeDropped
-			notice.Detail = fmt.Sprintf("%s said %s; the report covering %s doesn't have it", sourceName(said.Record), describe(said), t.Date.Format(time.DateOnly))
-			notices = append(notices, notice)
-		default:
-			t = total(t, mergeFills(other), Provisional)
-		}
-		seen[k] = true
-		trades = append(trades, t)
+		t := Trade{Date: day(g[0].Date), Account: g[0].Account, ISIN: g[0].ISIN, Side: g[0].Side}
+		trades = append(trades, total(t, mergeFills(g)))
 	}
-	for _, p := range previous {
-		if p.State != Void && !seen[p.key()] {
-			p.State = Void
-			trades = append(trades, p)
-		}
-	}
-	return trades, notices
+	return trades
 }
 
 // Families of source, by the prefix of TradeEvent.Source.
@@ -128,24 +47,21 @@ func family(source string) string {
 	return f
 }
 
-func sourceName(source string) string {
-	switch family(source) {
-	case familyMail:
-		return "mail"
-	case familyChat:
-		return "chat"
-	}
-	return "a report"
-}
-
-// docRank orders documents from the most to the least trusted, for the
-// copy of a fill that is kept.
+// docRank orders the copies of a fill from the most to the least trusted,
+// for the one that is kept: an uploaded report's, then mail's by document,
+// then chat's.
 func docRank(e TradeEvent) int {
 	switch family(e.Source) {
+	case familyReport:
+		return docOrder(e.Doc)
 	case familyChat:
-		return 10
+		return 20
 	}
-	switch e.Doc {
+	return 10 + docOrder(e.Doc)
+}
+
+func docOrder(doc string) int {
+	switch doc {
 	case DocTradebook:
 		return 0
 	case DocContractNote:
@@ -220,8 +136,8 @@ func gross(e TradeEvent) *big.Rat {
 }
 
 // total is t with the fills' figures summed, the price averaged by
-// quantity, in state.
-func total(t Trade, fills []fill, state string) Trade {
+// quantity.
+func total(t Trade, fills []fill) Trade {
 	var qty, amount, fees, tax *big.Rat
 	for _, f := range fills {
 		qty = add(qty, dec(f.Quantity))
@@ -234,27 +150,5 @@ func total(t Trade, fills []fill, state string) Trade {
 	if len(fills) > 0 {
 		t.Currency, t.Record = fills[0].Currency, fills[0].Source
 	}
-	t.State = state
 	return t
-}
-
-// agree reports whether mail's trade a matches the report's r: the same
-// quantity and an average price within 0.5%, or for rows without a
-// quantity, an amount within 0.5%.
-func agree(a, r Trade) bool {
-	qa, qr := dec(a.Quantity), dec(r.Quantity)
-	if qa != nil || qr != nil {
-		return eq(qa, qr) && (a.AvgPrice == "" || r.AvgPrice == "" || near(dec(a.AvgPrice), dec(r.AvgPrice), agreeTolerance))
-	}
-	return near(dec(a.Amount), dec(r.Amount), agreeTolerance)
-}
-
-func describe(t Trade) string {
-	if t.Quantity == "" {
-		return t.Amount + " " + t.Currency
-	}
-	if t.AvgPrice == "" {
-		return t.Quantity
-	}
-	return t.Quantity + " @ " + t.AvgPrice + " " + t.Currency
 }

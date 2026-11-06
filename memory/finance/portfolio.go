@@ -35,9 +35,6 @@ type Stock struct {
 	Close                                        *big.Rat
 	CloseCurrency                                string
 	CloseDate                                    time.Time
-	// Provisional is true when a figure rests on a trade no report has
-	// confirmed yet.
-	Provisional bool
 	// Points are the stock's entries and exits, by date.
 	Points []Point
 }
@@ -58,7 +55,6 @@ type Point struct {
 	Quantity string
 	Price    string
 	Currency string
-	State    string
 }
 
 // BuildPortfolio values the user's positions at the latest closes and
@@ -82,7 +78,6 @@ func BuildPortfolio(trades []Trade, actions []CorporateAction, rates *Rates, bas
 	missing := map[string]bool{}
 	for _, p := range pf.positions {
 		s := stock(p.ISIN)
-		s.Provisional = s.Provisional || p.Provisional
 		q := p.Quantity()
 		if q.Sign() > 0 {
 			s.Quantity.Add(s.Quantity, q)
@@ -97,12 +92,12 @@ func BuildPortfolio(trades []Trade, actions []CorporateAction, rates *Rates, bas
 		}
 	}
 	for _, t := range trades {
-		if t.State == Void || t.Side == SideDividend {
+		if t.Side == SideDividend {
 			continue
 		}
 		s := stock(t.ISIN)
 		s.Points = append(s.Points, Point{Date: t.Date, Side: t.Side, Account: t.Account, Quantity: t.Quantity,
-			Price: t.AvgPrice, Currency: t.Currency, State: t.State})
+			Price: t.AvgPrice, Currency: t.Currency})
 	}
 	for _, s := range byISIN {
 		slices.SortFunc(s.Points, func(a, b Point) int { return cmp.Or(a.Date.Compare(b.Date), cmp.Compare(a.Account, b.Account)) })
@@ -215,66 +210,6 @@ func (pf Portfolio) Profit(by string) ([]ProfitLine, error) {
 	}
 	slices.SortFunc(out, func(a, b ProfitLine) int { return cmp.Compare(a.Key, b.Key) })
 	return out, nil
-}
-
-// Mismatch is a reported holding the trades don't give.
-type Mismatch struct {
-	Account  string
-	ISIN     string
-	Day      time.Time
-	Reported *big.Rat
-	Ledger   *big.Rat
-}
-
-// CheckHoldings compares each account's latest reported holdings with
-// what its trades give on the report's day. A stock the trades give but
-// the report doesn't list counts as reported 0.
-func CheckHoldings(trades []Trade, actions []CorporateAction, reported []Holding) []Mismatch {
-	byAccount := map[string][]Holding{}
-	for _, h := range reported {
-		byAccount[h.Account] = append(byAccount[h.Account], h)
-	}
-	accounts := make([]string, 0, len(byAccount))
-	for a := range byAccount {
-		accounts = append(accounts, a)
-	}
-	slices.Sort(accounts)
-	var out []Mismatch
-	for _, a := range accounts {
-		hs := byAccount[a]
-		on := hs[0].Date
-		var own []Trade
-		for _, t := range trades {
-			if t.Account == a {
-				own = append(own, t)
-			}
-		}
-		ledger := map[string]*big.Rat{}
-		for _, p := range Ledger(own, actions, nil, "", on) {
-			ledger[p.ISIN] = p.Quantity()
-		}
-		listed := map[string]*big.Rat{}
-		for _, h := range hs {
-			listed[h.ISIN] = add(listed[h.ISIN], dec(h.Quantity))
-		}
-		isins := make([]string, 0, len(listed)+len(ledger))
-		for i := range listed {
-			isins = append(isins, i)
-		}
-		for i := range ledger {
-			if _, ok := listed[i]; !ok {
-				isins = append(isins, i)
-			}
-		}
-		slices.Sort(isins)
-		for _, i := range isins {
-			r, l := cmp.Or(listed[i], zero()), cmp.Or(ledger[i], zero())
-			if r.Cmp(l) != 0 {
-				out = append(out, Mismatch{Account: a, ISIN: i, Day: on, Reported: r, Ledger: l})
-			}
-		}
-	}
-	return out
 }
 
 // Portfolio reads the user's trades and the market data, and values them.

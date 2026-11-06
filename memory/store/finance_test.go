@@ -84,49 +84,6 @@ func TestFinanceUploadsAndDirty(t *testing.T) {
 	}
 }
 
-func TestFinanceConflicts(t *testing.T) {
-	ctx := context.Background()
-	s := open(t)
-	jobsUsers(t, s, "a", "b")
-	c := func(isin, detail string) FinanceConflict {
-		return FinanceConflict{Account: "a1", ISIN: isin, Day: "2026-10-31", Kind: ConflictHoldings, Detail: detail}
-	}
-	if err := s.SyncFinanceConflicts(ctx, "a", []FinanceConflict{c("X1", "120 vs 110"), c("X2", "5 vs 4")}); err != nil {
-		t.Fatal(err)
-	}
-	open, _ := s.FinanceConflicts(ctx, "a", ConflictOpen)
-	if len(open) != 2 {
-		t.Fatalf("open = %+v", open)
-	}
-	var x2 int64
-	for _, o := range open {
-		if o.ISIN == "X2" {
-			x2 = o.ID
-		}
-	}
-	if ok, _ := s.DismissFinanceConflict(ctx, "b", x2); ok {
-		t.Error("b dismissed a's conflict")
-	}
-	if ok, err := s.DismissFinanceConflict(ctx, "a", x2); !ok || err != nil {
-		t.Fatal(ok, err)
-	}
-	// X1 now agrees; X2 still differs, and stays dismissed.
-	if err := s.SyncFinanceConflicts(ctx, "a", []FinanceConflict{c("X2", "6 vs 4")}); err != nil {
-		t.Fatal(err)
-	}
-	all, _ := s.FinanceConflicts(ctx, "a", "")
-	states := map[string]string{}
-	for _, o := range all {
-		states[o.ISIN] = o.State + " " + o.Detail
-	}
-	if states["X1"] != "resolved 120 vs 110" || states["X2"] != "dismissed 6 vs 4" {
-		t.Errorf("states = %v", states)
-	}
-	if got, _ := s.FinanceConflicts(ctx, "b", ""); len(got) != 0 {
-		t.Errorf("b's conflicts = %+v", got)
-	}
-}
-
 func TestBaseCurrency(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)

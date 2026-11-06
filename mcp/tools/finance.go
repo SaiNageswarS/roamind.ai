@@ -37,37 +37,24 @@ type ReportRow struct {
 	Ref         string `json:"ref,omitempty" jsonschema:"the order or trade number, when shown"`
 }
 
-// ReportHolding is a holding a report shows.
-type ReportHolding struct {
-	ISIN     string `json:"isin"`
-	Name     string `json:"name,omitempty"`
-	Quantity string `json:"quantity" jsonschema:"shares or units held, a decimal"`
-	Value    string `json:"value,omitempty" jsonschema:"the value the report gives it"`
-	Currency string `json:"currency,omitempty"`
-}
-
 // ImportReportInput is import_report's input.
 type ImportReportInput struct {
-	File           string          `json:"file" jsonschema:"the report's path in the workspace, as the upload was saved"`
-	Broker         string          `json:"broker" jsonschema:"the broker or platform that issued it, e.g. zerodha"`
-	AccountNumber  string          `json:"account_number,omitempty" jsonschema:"the account, client or demat number as the report shows it, masked digits and all; empty when it shows none"`
-	Currency       string          `json:"currency,omitempty" jsonschema:"the account's currency, when the report says"`
-	Doc            string          `json:"doc" jsonschema:"tradebook, statement, contract_note or holdings (holdings only)"`
-	PeriodFrom     string          `json:"period_from,omitempty" jsonschema:"the first day the report's trades cover, ISO; required but for holdings"`
-	PeriodTo       string          `json:"period_to,omitempty" jsonschema:"its last day, ISO"`
-	Rows           []ReportRow     `json:"rows,omitempty" jsonschema:"every trade and dividend in the report, one per row as it lists them"`
-	AsOf           string          `json:"as_of,omitempty" jsonschema:"the date of the holdings it shows, ISO; required with holdings"`
-	Holdings       []ReportHolding `json:"holdings,omitempty" jsonschema:"the holdings it shows, if any"`
-	TotalBuyAmount string          `json:"total_buy_amount,omitempty" jsonschema:"the report's own total of buys before fees, when it gives one; checked against the rows"`
-	TotalSell      string          `json:"total_sell_amount,omitempty" jsonschema:"its total of sells before fees, when it gives one"`
+	File           string      `json:"file" jsonschema:"the report's path in the workspace, as the upload was saved"`
+	Broker         string      `json:"broker" jsonschema:"the broker or platform that issued it, e.g. zerodha"`
+	AccountNumber  string      `json:"account_number,omitempty" jsonschema:"the account, client or demat number as the report shows it, masked digits and all; empty when it shows none"`
+	Currency       string      `json:"currency,omitempty" jsonschema:"the account's currency, when the report says"`
+	Doc            string      `json:"doc" jsonschema:"tradebook, statement or contract_note"`
+	PeriodFrom     string      `json:"period_from" jsonschema:"the first day the report's trades cover, ISO"`
+	PeriodTo       string      `json:"period_to" jsonschema:"its last day, ISO"`
+	Rows           []ReportRow `json:"rows" jsonschema:"every trade and dividend in the report, one per row as it lists them"`
+	TotalBuyAmount string      `json:"total_buy_amount,omitempty" jsonschema:"the report's own total of buys before fees, when it gives one; checked against the rows"`
+	TotalSell      string      `json:"total_sell_amount,omitempty" jsonschema:"its total of sells before fees, when it gives one"`
 }
 
 // ImportReportOutput is import_report's result.
 type ImportReportOutput struct {
-	Message   string   `json:"message"`
-	Account   string   `json:"account,omitempty"`
-	Notices   []string `json:"notices,omitempty"`
-	Conflicts []string `json:"conflicts,omitempty"`
+	Message string `json:"message"`
+	Account string `json:"account,omitempty"`
 }
 
 // RecordTradeInput is record_trade's input.
@@ -99,21 +86,20 @@ type ListAccountsOutput struct {
 // HoldingLine is a stock across accounts, as list_holdings shows it.
 // Money is in the base currency unless it says otherwise.
 type HoldingLine struct {
-	Name        string        `json:"name"`
-	ISIN        string        `json:"isin"`
-	Market      string        `json:"market"`
-	Quantity    string        `json:"quantity"`
-	Accounts    []AccountLine `json:"accounts,omitempty"`
-	Cost        string        `json:"cost,omitempty"`
-	Value       string        `json:"value,omitempty"`
-	Unrealized  string        `json:"unrealized_gain,omitempty"`
-	Realized    string        `json:"realized_gain,omitempty"`
-	Dividends   string        `json:"dividends,omitempty"`
-	Close       string        `json:"close,omitempty" jsonschema:"latest close, in close_currency"`
-	CloseCcy    string        `json:"close_currency,omitempty"`
-	CloseDate   string        `json:"close_date,omitempty"`
-	Provisional bool          `json:"provisional,omitempty" jsonschema:"some of it rests on mail or chat trades no report has confirmed yet"`
-	Points      []PointEntry  `json:"recent_points,omitempty"`
+	Name       string        `json:"name"`
+	ISIN       string        `json:"isin"`
+	Market     string        `json:"market"`
+	Quantity   string        `json:"quantity"`
+	Accounts   []AccountLine `json:"accounts,omitempty"`
+	Cost       string        `json:"cost,omitempty"`
+	Value      string        `json:"value,omitempty"`
+	Unrealized string        `json:"unrealized_gain,omitempty"`
+	Realized   string        `json:"realized_gain,omitempty"`
+	Dividends  string        `json:"dividends,omitempty"`
+	Close      string        `json:"close,omitempty" jsonschema:"latest close, in close_currency"`
+	CloseCcy   string        `json:"close_currency,omitempty"`
+	CloseDate  string        `json:"close_date,omitempty"`
+	Points     []PointEntry  `json:"recent_points,omitempty"`
 }
 
 // AccountLine is one account's part of a stock.
@@ -132,7 +118,6 @@ type PointEntry struct {
 	Quantity string `json:"quantity"`
 	Price    string `json:"price,omitempty"`
 	Currency string `json:"currency"`
-	State    string `json:"state" jsonschema:"confirmed by a report, or provisional from mail or chat"`
 }
 
 // ListHoldingsOutput is list_holdings' result.
@@ -181,31 +166,6 @@ type ProfitOutput struct {
 	Missing      []string      `json:"missing,omitempty"`
 }
 
-// ConflictEntry is a conflict as list_conflicts shows it.
-type ConflictEntry struct {
-	ID      int64  `json:"id"`
-	Account string `json:"account"`
-	ISIN    string `json:"isin"`
-	Day     string `json:"day"`
-	Detail  string `json:"detail"`
-	State   string `json:"state"`
-}
-
-// ListConflictsInput is list_conflicts' input.
-type ListConflictsInput struct {
-	State string `json:"state,omitempty" jsonschema:"open, resolved or dismissed; open by default"`
-}
-
-// ListConflictsOutput is list_conflicts' result.
-type ListConflictsOutput struct {
-	Conflicts []ConflictEntry `json:"conflicts"`
-}
-
-// ConflictInput names a conflict.
-type ConflictInput struct {
-	ID int64 `json:"id" jsonschema:"the conflict's id, from list_conflicts"`
-}
-
 // CurrencyInput is set_base_currency's input.
 type CurrencyInput struct {
 	Currency string `json:"currency" jsonschema:"ISO currency code, e.g. EUR or INR"`
@@ -217,20 +177,18 @@ var (
 )
 
 // financeTools adds the tools of the user's finances: importing reports,
-// recording trades, and every figure about their holdings, profit and
-// conflicts. Figures come from the ledger (memory/finance); the model
+// recording trades, and every figure about their holdings and profit. Figures come from the ledger (memory/finance); the model
 // never computes them.
 func financeTools(s *mcp.Server, d Deps) {
 	st, db, userID := d.Store, d.Finance, d.UserID
-	reconcile := func(ctx context.Context) (finance.Result, error) {
+	reconcile := func(ctx context.Context) (int, error) {
 		return finance.ReconcileUser(ctx, db, st, userID)
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "import_report",
-		Description: "Import a broker report the user uploaded (a tradebook, statement, contract note or holdings report): " +
-			"read the file, then pass every trade and dividend row, and the holdings it shows, exactly as it lists them. " +
-			"For the days of its period, the report's trades become the account's trades; mail and chat trades there are " +
-			"replaced. Rows are checked (ISIN checksum, quantity × price against amount, dates in the period) and the import " +
+		Description: "Import a broker report the user uploaded (a tradebook, statement or contract note): " +
+			"read the file, then pass every trade and dividend row exactly as it lists them. A trade mail already reported " +
+			"counts once. Rows are checked (ISIN checksum, quantity × price against amount, dates in the period) and the import " +
 			"is refused with the problems listed, to fix and retry. The same file is never imported twice.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ImportReportInput) (*mcp.CallToolResult, ImportReportOutput, error) {
 		var out ImportReportOutput
@@ -248,39 +206,19 @@ func financeTools(s *mcp.Server, d Deps) {
 			}
 			return nil, out, err
 		}
-		if err := oneOf("doc", in.Doc, finance.DocTradebook, finance.DocStatement, finance.DocContractNote, "holdings"); err != nil {
+		if err := oneOf("doc", in.Doc, finance.DocTradebook, finance.DocStatement, finance.DocContractNote); err != nil {
 			return nil, out, err
 		}
-		var problems []string
-		var from, to time.Time
-		if in.Doc != "holdings" {
-			from, to, problems = period(in.PeriodFrom, in.PeriodTo)
-		} else if len(in.Rows) > 0 {
-			problems = append(problems, "a holdings report has no rows; use statement for one with trades")
-		}
+		from, to, problems := period(in.PeriodFrom, in.PeriodTo)
 		for i, r := range in.Rows {
 			for _, p := range checkRow(r, from, to) {
 				problems = append(problems, fmt.Sprintf("row %d: %s", i+1, p))
 			}
 		}
-		var asOf time.Time
-		if len(in.Holdings) > 0 {
-			if asOf, err = time.Parse(time.DateOnly, in.AsOf); err != nil || !isoDay.MatchString(in.AsOf) {
-				problems = append(problems, "as_of must be the ISO date of the holdings")
-			}
-		}
-		for i, h := range in.Holdings {
-			if !finance.ValidISIN(strings.TrimSpace(h.ISIN)) {
-				problems = append(problems, fmt.Sprintf("holding %d: %q is not a valid ISIN", i+1, h.ISIN))
-			}
-			if q, err := finance.ParseDec(h.Quantity); err != nil || q == nil || q.Sign() < 0 {
-				problems = append(problems, fmt.Sprintf("holding %d: quantity %q is not a decimal of zero or more", i+1, h.Quantity))
-			}
-		}
 		problems = append(problems, checkTotal("total_buy_amount", in.TotalBuyAmount, in.Rows, finance.SideBuy)...)
 		problems = append(problems, checkTotal("total_sell_amount", in.TotalSell, in.Rows, finance.SideSell)...)
-		if len(in.Rows) == 0 && len(in.Holdings) == 0 {
-			problems = append(problems, "the report has no rows and no holdings")
+		if len(in.Rows) == 0 {
+			problems = append(problems, "the report has no rows")
 		}
 		if len(problems) > 0 {
 			if len(problems) > 20 {
@@ -299,12 +237,7 @@ func financeTools(s *mcp.Server, d Deps) {
 		for i, r := range in.Rows {
 			events[i] = event(r, acct.ID, source, i+1, in.Doc, now)
 		}
-		holdings := make([]finance.Holding, len(in.Holdings))
-		for i, h := range in.Holdings {
-			holdings[i] = finance.Holding{Date: asOf, Account: acct.ID, ISIN: strings.TrimSpace(h.ISIN), Quantity: h.Quantity,
-				Value: h.Value, Currency: strings.ToUpper(h.Currency), Source: source}
-		}
-		if err := saveInstruments(ctx, db, in.Rows, in.Holdings); err != nil {
+		if err := saveInstruments(ctx, db, in.Rows); err != nil {
 			return nil, out, err
 		}
 		if _, err := st.MarkFinanceDirty(ctx, userID); err != nil {
@@ -313,34 +246,22 @@ func financeTools(s *mcp.Server, d Deps) {
 		if err := db.AddTradeEvents(ctx, userID, events); err != nil {
 			return nil, out, err
 		}
-		if err := db.PutHoldings(ctx, userID, holdings); err != nil {
-			return nil, out, err
-		}
 		if err := st.SaveFinanceUpload(ctx, store.FinanceUpload{UserID: userID, SHA256: sha, File: filepath.Base(path), Account: acct.ID,
 			Doc: in.Doc, PeriodFrom: in.PeriodFrom, PeriodTo: in.PeriodTo, Rows: len(in.Rows)}); err != nil {
 			return nil, out, err
 		}
-		res, err := reconcile(ctx)
+		n, err := reconcile(ctx)
 		if err != nil {
 			return nil, out, err
 		}
 		out.Account = acct.ID + " (" + acct.Label() + ")"
-		out.Message = fmt.Sprintf("imported %d rows and %d holdings into %s; the ledger has %d confirmed and %d provisional trades",
-			len(in.Rows), len(in.Holdings), out.Account, res.Confirmed, res.Provisional)
-		for _, n := range res.Notices {
-			if n.Account == acct.ID && !n.Date.Before(from) && !n.Date.After(to) {
-				out.Notices = append(out.Notices, fmt.Sprintf("%s %s %s: %s", n.Date.Format(time.DateOnly), n.ISIN, n.Side, n.Detail))
-			}
-		}
-		for _, c := range res.Conflicts {
-			out.Conflicts = append(out.Conflicts, fmt.Sprintf("#%d %s %s: %s", c.ID, c.Account, c.ISIN, c.Detail))
-		}
+		out.Message = fmt.Sprintf("imported %d rows into %s; the ledger has %d trades", len(in.Rows), out.Account, n)
 		return nil, out, nil
 	})
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "record_trade",
-		Description: "Record a trade or dividend the user tells you about, in one of their accounts. It counts until a report " +
-			"covering its day is imported, which replaces it.",
+		Description: "Record a trade or dividend the user tells you about, in one of their accounts. A report or mail of the " +
+			"same fill later counts it once.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in RecordTradeInput) (*mcp.CallToolResult, Done, error) {
 		acct, err := st.FinAccountOf(ctx, userID, in.Account)
 		if err != nil {
@@ -353,7 +274,7 @@ func financeTools(s *mcp.Server, d Deps) {
 			return nil, Done{}, errors.New(strings.Join(ps, "; "))
 		}
 		now := time.Now()
-		if err := saveInstruments(ctx, db, []ReportRow{in.ReportRow}, nil); err != nil {
+		if err := saveInstruments(ctx, db, []ReportRow{in.ReportRow}); err != nil {
 			return nil, Done{}, err
 		}
 		if _, err := st.MarkFinanceDirty(ctx, userID); err != nil {
@@ -366,7 +287,7 @@ func financeTools(s *mcp.Server, d Deps) {
 		if _, err := reconcile(ctx); err != nil {
 			return nil, Done{}, err
 		}
-		return nil, Done{Message: fmt.Sprintf("recorded %s %s %s in %s, provisional until a report confirms it", in.Side, in.Quantity, in.ISIN, acct.Label())}, nil
+		return nil, Done{Message: fmt.Sprintf("recorded %s %s %s in %s", in.Side, in.Quantity, in.ISIN, acct.Label())}, nil
 	})
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_accounts",
@@ -495,35 +416,6 @@ func financeTools(s *mcp.Server, d Deps) {
 				Dividends: money(l.Dividends), Unrealized: money(l.Unrealized)})
 		}
 		return nil, out, nil
-	})
-	mcp.AddTool(s, &mcp.Tool{
-		Name: "list_conflicts",
-		Description: "Holdings a report showed that the user's trades don't give, open until the numbers agree: usually a " +
-			"report for a gap is missing, or a transfer wasn't recorded.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ListConflictsInput) (*mcp.CallToolResult, ListConflictsOutput, error) {
-		state := cmp.Or(in.State, store.ConflictOpen)
-		if err := oneOf("state", state, store.ConflictOpen, store.ConflictResolved, store.ConflictDismissed); err != nil {
-			return nil, ListConflictsOutput{}, err
-		}
-		cs, err := st.FinanceConflicts(ctx, userID, state)
-		out := ListConflictsOutput{Conflicts: []ConflictEntry{}}
-		for _, c := range cs {
-			out.Conflicts = append(out.Conflicts, ConflictEntry{ID: c.ID, Account: c.Account, ISIN: c.ISIN, Day: c.Day, Detail: c.Detail, State: c.State})
-		}
-		return nil, out, err
-	})
-	mcp.AddTool(s, &mcp.Tool{
-		Name:        "dismiss_conflict",
-		Description: "Dismiss an open conflict the user says is fine as it is.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ConflictInput) (*mcp.CallToolResult, Done, error) {
-		ok, err := st.DismissFinanceConflict(ctx, userID, in.ID)
-		if err != nil {
-			return nil, Done{}, err
-		}
-		if !ok {
-			return nil, Done{}, fmt.Errorf("no open conflict #%d; list_conflicts shows them", in.ID)
-		}
-		return nil, Done{Message: fmt.Sprintf("dismissed #%d", in.ID)}, nil
 	})
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "set_base_currency",
@@ -682,9 +574,9 @@ func event(r ReportRow, account, source string, line int, doc string, received t
 		Ref: strings.TrimSpace(r.Ref), Doc: doc, ReceivedAt: received}
 }
 
-// saveInstruments records the instruments the rows and holdings name that
-// aren't known yet, or are known without a name.
-func saveInstruments(ctx context.Context, db *finance.DB, rows []ReportRow, holdings []ReportHolding) error {
+// saveInstruments records the instruments the rows name that aren't known
+// yet, or are known without a name.
+func saveInstruments(ctx context.Context, db *finance.DB, rows []ReportRow) error {
 	known, err := db.Instruments(ctx)
 	if err != nil {
 		return err
@@ -704,9 +596,6 @@ func saveInstruments(ctx context.Context, db *finance.DB, rows []ReportRow, hold
 	for _, r := range rows {
 		note(r.ISIN, r.Name, r.Currency)
 	}
-	for _, h := range holdings {
-		note(h.ISIN, h.Name, h.Currency)
-	}
 	var ins []finance.Instrument
 	for _, in := range add {
 		ins = append(ins, in)
@@ -717,7 +606,7 @@ func saveInstruments(ctx context.Context, db *finance.DB, rows []ReportRow, hold
 func holdingLine(s finance.Stock, labels map[string]string) HoldingLine {
 	l := HoldingLine{Name: cmp.Or(s.Name, s.ISIN), ISIN: s.ISIN, Market: s.Market, Quantity: finance.DecText(s.Quantity, 8),
 		Cost: money(s.Cost), Value: money(s.Value), Unrealized: money(s.Unrealized), Realized: money(s.Realized),
-		Dividends: money(s.Dividends), Close: finance.DecText(s.Close, 6), CloseCcy: s.CloseCurrency, Provisional: s.Provisional}
+		Dividends: money(s.Dividends), Close: finance.DecText(s.Close, 6), CloseCcy: s.CloseCurrency}
 	if !s.CloseDate.IsZero() {
 		l.CloseDate = s.CloseDate.Format(time.DateOnly)
 	}
@@ -727,7 +616,7 @@ func holdingLine(s finance.Stock, labels map[string]string) HoldingLine {
 	}
 	for _, p := range s.Points {
 		l.Points = append(l.Points, PointEntry{Date: p.Date.Format(time.DateOnly), Side: p.Side, Account: cmp.Or(labels[p.Account], p.Account),
-			Quantity: p.Quantity, Price: p.Price, Currency: p.Currency, State: p.State})
+			Quantity: p.Quantity, Price: p.Price, Currency: p.Currency})
 	}
 	return l
 }

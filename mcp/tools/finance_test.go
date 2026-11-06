@@ -106,8 +106,7 @@ func TestFinance(t *testing.T) {
 	}
 	report := func(file string, rows ...map[string]any) map[string]any {
 		return map[string]any{"file": file, "broker": "Zerodha", "account_number": "XX1234", "doc": "tradebook",
-			"period_from": "2026-10-01", "period_to": "2026-10-31", "rows": rows,
-			"as_of": "2026-10-31", "holdings": []map[string]any{{"isin": "INE009A01021", "quantity": "50"}}}
+			"period_from": "2026-10-01", "period_to": "2026-10-31", "rows": rows}
 	}
 
 	// Bad rows are refused, with every problem named.
@@ -129,7 +128,7 @@ func TestFinance(t *testing.T) {
 	}
 
 	msg, isErr = call("import_report", report("tradebook.csv", row("2026-10-10", "buy", "50", "1500")))
-	if isErr || !strings.Contains(msg, "imported 1 rows and 1 holdings into a1 (zerodha XX1234)") || !strings.Contains(msg, "1 confirmed") {
+	if isErr || !strings.Contains(msg, "imported 1 rows into a1 (zerodha XX1234); the ledger has 1 trades") {
 		t.Fatalf("import: %s", msg)
 	}
 	if msg, _ := call("import_report", report("tradebook.csv", row("2026-10-10", "buy", "50", "1500"))); !strings.Contains(msg, "already imported") {
@@ -137,7 +136,7 @@ func TestFinance(t *testing.T) {
 	}
 
 	if msg, isErr := call("record_trade", map[string]any{"account": "a1", "date": "2026-11-03", "isin": "INE009A01021",
-		"side": "sell", "quantity": "10", "price": "1600", "currency": "INR"}); isErr || !strings.Contains(msg, "provisional") {
+		"side": "sell", "quantity": "10", "price": "1600", "currency": "INR"}); isErr || !strings.Contains(msg, "recorded sell 10") {
 		t.Fatalf("record_trade: %s", msg)
 	}
 	if msg, _ := call("record_trade", map[string]any{"account": "nope", "date": "2026-11-03", "isin": "INE009A01021",
@@ -154,8 +153,8 @@ func TestFinance(t *testing.T) {
 		t.Fatalf("list_holdings = %s %v", msg, err)
 	}
 	hl := h.Holdings[0]
-	if hl.Name != "Infosys" || hl.Quantity != "40" || !hl.Provisional || len(hl.Accounts) != 1 || hl.Accounts[0].Account != "Kite" ||
-		hl.Accounts[0].AvgCost != "1500" || len(hl.Points) != 2 || hl.Points[1].State != finance.Provisional {
+	if hl.Name != "Infosys" || hl.Quantity != "40" || len(hl.Accounts) != 1 || hl.Accounts[0].Account != "Kite" ||
+		hl.Accounts[0].AvgCost != "1500" || len(hl.Points) != 2 {
 		t.Errorf("holding = %+v", hl)
 	}
 	if len(h.Missing) == 0 {
@@ -175,9 +174,6 @@ func TestFinance(t *testing.T) {
 	}
 	if msg, _ := call("set_base_currency", map[string]any{"currency": "inr"}); !strings.Contains(msg, "INR") {
 		t.Errorf("set_base_currency: %s", msg)
-	}
-	if msg, _ := call("list_conflicts", nil); msg != `{"conflicts":[]}` {
-		t.Errorf("conflicts with matching holdings: %s", msg)
 	}
 
 	// Another user sees none of it.

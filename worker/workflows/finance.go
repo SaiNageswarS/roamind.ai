@@ -47,11 +47,7 @@ type FinanceChannelOutput struct {
 
 // FinanceReconcileOutput is what a reconcile did.
 type FinanceReconcileOutput struct {
-	Confirmed   int `json:"confirmed"`
-	Provisional int `json:"provisional"`
-	Void        int `json:"void"`
-	Notices     int `json:"notices"`
-	Conflicts   int `json:"conflicts"`
+	Trades int `json:"trades"`
 }
 
 func perUser() hatchet.TaskOption {
@@ -63,9 +59,8 @@ func perUser() hatchet.TaskOption {
 // FinanceReconcile declares the finance-reconcile task.
 func FinanceReconcile(c *hatchet.Client, d Deps) *hatchet.StandaloneTask {
 	return c.NewStandaloneTask(FinanceReconcileName, func(ctx hatchet.Context, in FinanceUserInput) (FinanceReconcileOutput, error) {
-		res, err := finance.ReconcileUser(ctx, d.Finance, d.Store, in.UserID)
-		return FinanceReconcileOutput{Confirmed: res.Confirmed, Provisional: res.Provisional, Void: res.Void,
-			Notices: len(res.Notices), Conflicts: len(res.Conflicts)}, err
+		n, err := finance.ReconcileUser(ctx, d.Finance, d.Store, in.UserID)
+		return FinanceReconcileOutput{Trades: n}, err
 	},
 		hatchet.WithWorkflowDescription("Settle a user's trade events into trades"),
 		perUser(),
@@ -149,9 +144,7 @@ func (d Deps) financeRef(ctx context.Context, userID string) (*protocol.FinanceR
 	for _, a := range as {
 		ref.Accounts = append(ref.Accounts, a.ID+" "+a.Label())
 	}
-	cs, err := d.Store.FinanceConflicts(ctx, userID, store.ConflictOpen)
-	ref.Conflicts = len(cs)
-	return ref, err
+	return ref, nil
 }
 
 // FinanceMarketOutput is what a finance-market run fetched.

@@ -20,8 +20,6 @@ type Position struct {
 	Income   []Income
 	// Oversold is quantity sold beyond what the trades bought.
 	Oversold *big.Rat
-	// Provisional is true when a trade it rests on is provisional.
-	Provisional bool
 }
 
 // Lot is shares bought on one day and still held.
@@ -89,14 +87,14 @@ func acquires(side string) bool {
 func disposes(side string) bool { return side == SideSell || side == SideTransferOut }
 
 // Ledger computes each account's positions from the trades up to and
-// including until (void ones aside), applying splits and bonuses before
+// including until, applying splits and bonuses before
 // the trades of their ex-date. Sells take the oldest lots first, per
 // account; a transfer out takes them with their cost and realizes
 // nothing, and a transfer in arrives at its price.
 func Ledger(trades []Trade, actions []CorporateAction, rates *Rates, base string, until time.Time) []*Position {
 	byKey := map[[2]string][]Trade{}
 	for _, t := range trades {
-		if t.State == Void || t.Date.After(until) {
+		if t.Date.After(until) {
 			continue
 		}
 		k := [2]string{t.Account, t.ISIN}
@@ -135,9 +133,6 @@ func Ledger(trades []Trade, actions []CorporateAction, rates *Rates, base string
 		}
 		for _, t := range ts {
 			applyUpTo(t.Date, true)
-			if t.State == Provisional {
-				p.Provisional = true
-			}
 			qty, amount, fees := dec(t.Quantity), gross(TradeEvent{Amount: t.Amount, Quantity: t.Quantity, Price: t.AvgPrice}), dec(t.Fees)
 			switch {
 			case acquires(t.Side) && qty != nil && qty.Sign() > 0:

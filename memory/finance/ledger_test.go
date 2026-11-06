@@ -17,7 +17,7 @@ func d(s string) time.Time {
 func tr(date, account, side, qty, price, fees, currency string) Trade {
 	q, p := dec(qty), dec(price)
 	return Trade{Date: d(date), Account: account, ISIN: "US0378331005", Side: side, Quantity: qty, AvgPrice: price,
-		Amount: DecText(mul(q, p), 8), Fees: fees, Currency: currency, State: Confirmed}
+		Amount: DecText(mul(q, p), 8), Fees: fees, Currency: currency}
 }
 
 func is(t *testing.T, label string, got *big.Rat, want string) {
@@ -88,7 +88,7 @@ func TestLedgerSplitsAndTransfers(t *testing.T) {
 		// After the split, prices and quantities are in new shares.
 		tr("2026-03-02", "a1", SideSell, "20", "110", "", "USD"),
 		tr("2026-04-01", "a1", SideTransferOut, "10", "", "", "USD"),
-		{Date: d("2026-04-01"), Account: "a2", ISIN: "US0378331005", Side: SideTransferIn, Quantity: "10", AvgPrice: "100", Amount: "1000", Currency: "USD", State: Confirmed},
+		{Date: d("2026-04-01"), Account: "a2", ISIN: "US0378331005", Side: SideTransferIn, Quantity: "10", AvgPrice: "100", Amount: "1000", Currency: "USD"},
 	}, []CorporateAction{split}, rates, "EUR", d("2026-12-31"))
 	by := map[string]*Position{}
 	for _, p := range ps {
@@ -111,9 +111,8 @@ func TestLedgerSplitsAndTransfers(t *testing.T) {
 func TestLedgerDividendsAndOverselling(t *testing.T) {
 	ps := Ledger([]Trade{
 		tr("2026-01-05", "a1", SideBuy, "10", "100", "", "USD"),
-		{Date: d("2026-02-10"), Account: "a1", ISIN: "US0378331005", Side: SideDividend, Amount: "25", TaxWithheld: "3.75", Currency: "USD", State: Provisional},
+		{Date: d("2026-02-10"), Account: "a1", ISIN: "US0378331005", Side: SideDividend, Amount: "25", TaxWithheld: "3.75", Currency: "USD"},
 		tr("2026-06-10", "a1", SideSell, "12", "150", "", "USD"),
-		{Date: d("2026-07-01"), Account: "a1", ISIN: "US0378331005", Side: SideBuy, Quantity: "1", AvgPrice: "1", Amount: "1", Currency: "USD", State: Void},
 	}, nil, rates, "EUR", d("2026-12-31"))
 	p := ps[0]
 	is(t, "dividend", p.Income[0].Amount, "25")
@@ -123,9 +122,6 @@ func TestLedgerDividendsAndOverselling(t *testing.T) {
 	// Only the 10 shares held are a sale: 10 × 150 − 1000.
 	is(t, "gain", p.Sales[0].Gain, "500")
 	is(t, "held", p.Quantity(), "0")
-	if !p.Provisional {
-		t.Error("a provisional dividend didn't mark the position")
-	}
 }
 
 func TestRatesConvert(t *testing.T) {
@@ -139,12 +135,12 @@ func TestRatesConvert(t *testing.T) {
 	}
 }
 
-func TestProfitAndHoldingsCheck(t *testing.T) {
+func TestProfit(t *testing.T) {
 	trades := []Trade{
 		tr("2026-01-05", "a1", SideBuy, "10", "100", "", "USD"),
 		tr("2026-06-10", "a1", SideSell, "5", "120", "", "USD"),
-		{Date: d("2026-06-15"), Account: "a1", ISIN: "US0378331005", Side: SideDividend, Amount: "11", Currency: "USD", State: Confirmed},
-		{Date: d("2026-02-04"), Account: "a1", ISIN: "INE009A01021", Side: SideBuy, Quantity: "2", AvgPrice: "9000", Amount: "18000", Currency: "INR", State: Confirmed},
+		{Date: d("2026-06-15"), Account: "a1", ISIN: "US0378331005", Side: SideDividend, Amount: "11", Currency: "USD"},
+		{Date: d("2026-02-04"), Account: "a1", ISIN: "INE009A01021", Side: SideBuy, Quantity: "2", AvgPrice: "9000", Amount: "18000", Currency: "INR"},
 	}
 	closes := map[string]Price{"US0378331005": {Close: "125", Currency: "USD"}}
 	rates := NewRates([]FX{
@@ -174,9 +170,4 @@ func TestProfitAndHoldingsCheck(t *testing.T) {
 		t.Error("profit by week")
 	}
 
-	// The report lists Apple only; the trades also hold INFY.
-	ms := CheckHoldings(trades, nil, []Holding{{Date: d("2026-06-30"), Account: "a1", ISIN: "US0378331005", Quantity: "5"}})
-	if len(ms) != 1 || ms[0].ISIN != "INE009A01021" || ms[0].Reported.Sign() != 0 || DecText(ms[0].Ledger, 2) != "2" {
-		t.Errorf("mismatches = %+v", ms)
-	}
 }

@@ -29,10 +29,9 @@ DEDUP UPSERT KEYS(ts, user_id, source, line);
 ALTER TABLE trade_events DEDUP ENABLE UPSERT KEYS(ts, user_id, source, line);
 
 -- One row per day-group (user, account, isin, trade date, side), written by
--- finance-reconcile from trade_events; an upsert replaces it. An
--- uploaded report covering the day is the trade (confirmed); until one
--- does, mail and chat are (provisional). Entry and exit points are these
--- rows grouped by ISIN across accounts.
+-- finance-reconcile from trade_events with each fill counted once: the
+-- same fill from a report and from mail is one. An upsert replaces it.
+-- Entry and exit points are these rows grouped by ISIN across accounts.
 CREATE TABLE IF NOT EXISTS trades (
     ts           TIMESTAMP, -- the trade date
     user_id      SYMBOL,
@@ -45,26 +44,10 @@ CREATE TABLE IF NOT EXISTS trades (
     fees         DECIMAL(24, 8),
     tax_withheld DECIMAL(24, 8),
     currency     SYMBOL,
-    record       SYMBOL, -- the report, or the mail kept
-    state        SYMBOL  -- confirmed, provisional, void
+    record       SYMBOL  -- the source of the copy kept
 ) TIMESTAMP(ts) PARTITION BY YEAR WAL
 DEDUP UPSERT KEYS(ts, user_id, account, isin, side);
 ALTER TABLE trades DEDUP ENABLE UPSERT KEYS(ts, user_id, account, isin, side);
-
--- Holdings a statement or CAS showed, to check the ledger against; they
--- never change the trades.
-CREATE TABLE IF NOT EXISTS holdings_reported (
-    ts       TIMESTAMP, -- the as-of date
-    user_id  SYMBOL,
-    account  SYMBOL,
-    isin     SYMBOL,
-    quantity DECIMAL(24, 8),
-    value    DECIMAL(24, 8),
-    currency SYMBOL,
-    source   SYMBOL
-) TIMESTAMP(ts) PARTITION BY YEAR WAL
-DEDUP UPSERT KEYS(ts, user_id, account, isin);
-ALTER TABLE holdings_reported DEDUP ENABLE UPSERT KEYS(ts, user_id, account, isin);
 
 -- A daily snapshot by finance-daily, in the instrument's currency and the
 -- user's base currency; dashboards and the weekly summary read this.

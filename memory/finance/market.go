@@ -323,65 +323,10 @@ func (d *DB) Splits(ctx context.Context) ([]CorporateAction, error) {
 // their first trade: the instruments whose prices are fetched.
 func (d *DB) HeldISINs(ctx context.Context) (map[string]time.Time, error) {
 	out := map[string]time.Time{}
-	err := d.query(ctx, `SELECT isin, min(ts) FROM trades WHERE state != 'void' GROUP BY isin`, nil,
+	err := d.query(ctx, `SELECT isin, min(ts) FROM trades GROUP BY isin`, nil,
 		func(b *qdb.QwpColumnBatch, r int) error {
 			out[b.String(0, r)] = timeAt(b, 1, r)
 			return nil
 		})
 	return out, err
-}
-
-// Holding is a holding a report showed (holdings_reported).
-type Holding struct {
-	Date     time.Time // the report's as-of date
-	Account  string
-	ISIN     string
-	Quantity string
-	Value    string
-	Currency string
-	Source   string
-}
-
-var holdingCols = cols("ts", "user_id", "account", "isin", "quantity:"+castMoney, "value:"+castMoney, "currency", "source")
-
-// PutHoldings writes holdings a report of the user showed.
-func (d *DB) PutHoldings(ctx context.Context, userID string, hs []Holding) error {
-	if userID == "" {
-		return errNoUser
-	}
-	rows := make([][]any, len(hs))
-	for i, h := range hs {
-		rows[i] = []any{day(h.Date), userID, h.Account, h.ISIN, h.Quantity, h.Value, h.Currency, h.Source}
-	}
-	return d.insert(ctx, "holdings_reported", holdingCols, rows)
-}
-
-// LatestHoldings returns, for each of the user's accounts, the holdings of
-// its latest report of holdings.
-func (d *DB) LatestHoldings(ctx context.Context, userID string) ([]Holding, error) {
-	var all []Holding
-	err := d.query(ctx, `SELECT ts, account, isin, quantity::STRING, value::STRING, currency, source
-		FROM holdings_reported WHERE user_id = $1 ORDER BY ts`,
-		func(b *qdb.QwpBinds) { text(b, 0, userID) },
-		func(b *qdb.QwpColumnBatch, r int) error {
-			all = append(all, Holding{Date: timeAt(b, 0, r), Account: b.String(1, r), ISIN: b.String(2, r),
-				Quantity: trimDecimal(b.String(3, r)), Value: trimDecimal(b.String(4, r)), Currency: b.String(5, r), Source: b.String(6, r)})
-			return nil
-		})
-	if err != nil {
-		return nil, err
-	}
-	latest := map[string]time.Time{}
-	for _, h := range all {
-		if h.Date.After(latest[h.Account]) {
-			latest[h.Account] = h.Date
-		}
-	}
-	var out []Holding
-	for _, h := range all {
-		if h.Date.Equal(latest[h.Account]) {
-			out = append(out, h)
-		}
-	}
-	return out, nil
 }

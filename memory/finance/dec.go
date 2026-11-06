@@ -89,9 +89,6 @@ func eq(a, b *big.Rat) bool { return a != nil && b != nil && a.Cmp(b) == 0 }
 var (
 	// copyTolerance is how close two copies of one fill's price are.
 	copyTolerance = big.NewRat(1, 1000)
-	// agreeTolerance is how close mail's average price is to a report's
-	// for them to agree: fees and rounding differ between documents.
-	agreeTolerance = big.NewRat(5, 1000)
 	// amountTolerance is how close quantity × price is to a row's amount.
 	amountTolerance = big.NewRat(1, 100)
 )

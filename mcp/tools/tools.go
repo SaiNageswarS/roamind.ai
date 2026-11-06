@@ -12,7 +12,7 @@
 //   - items (items.go): the state of the user's tasks and events, and when
 //     to remind them of each.
 //   - finance (finance.go): importing the user's broker reports, and their
-//     holdings, entry and exit points, profit and conflicts.
+//     holdings, entry and exit points and profit.
 package tools
 
 import (
