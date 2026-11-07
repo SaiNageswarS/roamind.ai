@@ -214,3 +214,33 @@ func TestNewRatesUnsorted(t *testing.T) {
 		t.Error("a rate from after the day was used")
 	}
 }
+
+func TestLedgerTransferKeepsLots(t *testing.T) {
+	ps := Ledger([]Trade{
+		tr("2026-01-05", "a1", SideBuy, "10", "100", "", "USD"),
+		tr("2026-02-05", "a1", SideBuy, "10", "120", "", "USD"),
+		tr("2026-05-10", "a1", SideTransferOut, "15", "", "", "USD"),
+		// The other broker shows the transfer two days later, at its own
+		// price that day.
+		{Date: d("2026-05-12"), Account: "a2", ISIN: "US0378331005", Side: SideTransferIn, Quantity: "15", AvgPrice: "180", Amount: "2700", Currency: "USD"},
+		tr("2026-06-10", "a2", SideSell, "12", "200", "", "USD"),
+	}, nil, rates, "EUR", d("2026-12-31"))
+	by := map[string]*Position{}
+	for _, p := range ps {
+		by[p.Account] = p
+	}
+	is(t, "a1 left", by["a1"].Quantity(), "5")
+	is(t, "a1 cost left", by["a1"].Cost(), "600")
+	// a2 has the January lot and half the February one, at their costs.
+	s := by["a2"].Sales[0]
+	is(t, "cost of the 12 sold", s.Cost, "1240")
+	is(t, "gain", s.Gain, "1160")
+	if !s.Acquired.Equal(d("2026-01-05")) {
+		t.Errorf("acquired %v, want the January buy", s.Acquired)
+	}
+	is(t, "a2 left", by["a2"].Quantity(), "3")
+	// A transfer in that matches no transfer out arrives at its price.
+	lone := Ledger([]Trade{{Date: d("2026-05-12"), Account: "a2", ISIN: "US0378331005", Side: SideTransferIn, Quantity: "3", AvgPrice: "180", Amount: "540", Currency: "USD"}},
+		nil, rates, "EUR", d("2026-12-31"))
+	is(t, "lone transfer in", lone[0].Cost(), "540")
+}

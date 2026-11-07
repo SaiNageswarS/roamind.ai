@@ -89,20 +89,21 @@ func TestTradeEvents(t *testing.T) {
 		t.Errorf("TradeEvents =\n%+v\nwant\n%+v", got, obs)
 	}
 
-	// The same source and line again replaces the row.
-	fixed := obs[1]
-	fixed.Quantity = "5"
+	// The source written again replaces it whole: its line 1 is now a day
+	// later, and its line 2 is gone.
+	fixed := obs[0]
+	fixed.Date, fixed.Quantity = day.AddDate(0, 0, 1), "5"
 	if err := d.AddTradeEvents(ctx, "obs-user", []TradeEvent{fixed}); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.WaitApplied(ctx, "trade_events"); err != nil {
 		t.Fatal(err)
 	}
-	got, err = d.TradeEvents(ctx, "obs-user", day, day.AddDate(0, 0, 1))
+	got, err = d.TradeEvents(ctx, "obs-user", day, day.AddDate(0, 0, 2))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[1].Quantity != "5" {
+	if len(got) != 1 || got[0].Quantity != "5" || !got[0].Date.Equal(fixed.Date) {
 		t.Errorf("after the correction: %+v", got)
 	}
 

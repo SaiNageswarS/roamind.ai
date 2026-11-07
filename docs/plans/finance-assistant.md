@@ -304,6 +304,12 @@ Each phase is one branch and one PR.
    - **The channel** opens after a turn once the user has an account, rather than on their first finance question.
    - **The tool reconciles at once,** so the turn's answer sees its import; `finance-reconcile` catches up on anyone left dirty.
 3. **Ledger from mail:** the `finance` category, `extract`, PDF text, and `backfill()`.
+   As built:
+   - **Trusted senders:** mail goes to the ledger only from the domains each user trusts (`finance_senders`, set in chat), signed by that domain as Gmail's `Authentication-Results` says. No broker is named in the repo. Finance mail from other domains is listed for the user to decide.
+   - **No `relate` for broker mail:** `check` routes trusted mail to `extract` and `save`. Rows that fail the checks are named in the finance channel, not sent to `relate`. Finance mail from untrusted domains isn't related either.
+   - **ISINs:** a mail that gives a symbol and no ISIN gets one from the listings, else EODHD's search; the model never writes an ISIN the mail doesn't show.
+   - **Backfill** is `backfill(search, after)` in the script: the user's own Gmail search for their broker's mail.
+   - Everything below was built too.
    Before mail goes live, the de-dupe needs (found in review of phase 2):
    - **Partial and aggregated fills:** an order of 50 filled as 30 + 20 in a contract note, and one mail of 50, are one fill. Match each source's unmatched rows of a day-group, summed, against another source's.
    - **Best, not first, match:** pair copies by exact or ref match first, then by the nearest price, so two near-identical executions don't take each other's copies.

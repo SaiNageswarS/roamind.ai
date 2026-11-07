@@ -26,6 +26,9 @@ import (
 //
 //	check → relate → save
 //
+// A broker's mail from a domain the user trusts goes to their ledger
+// instead: relate reads its trades, and save writes them (finance_mail.go).
+//
 // Each Gmail account's Apps Script (deploy/apps-script) gives its new mail
 // a broad category and posts it to the gmail webhook, which Hatchet checks
 // the signature of and turns into a MailEventKey event. check finds the
@@ -79,19 +82,27 @@ func mailSignature(secret string, in MailInput) string {
 type mailCheck struct {
 	Skip   string `json:"skip"`
 	UserID string `json:"user_id,omitempty"`
+	// Trusted is the user's trusted domain of a broker's mail, which goes
+	// to their ledger; empty for the rest, which goes to their memory.
+	Trusted string `json:"trusted,omitempty"`
 }
 
 // mailRelate is relate's result.
 type mailRelate struct {
 	Related agent.RelatedMail `json:"related"`
-	CostUSD float64           `json:"cost_usd,omitempty"`
+	// Trades are a broker's mail's, read for the ledger.
+	Trades  *agent.ExtractedTrades `json:"trades,omitempty"`
+	CostUSD float64                `json:"cost_usd,omitempty"`
 }
 
 // mailSave is save's result.
 type mailSave struct {
 	Notes []string `json:"notes,omitempty"` // permalinks written
-	// Dropped are the items not saved, each with why.
+	// Dropped are the items, or a broker mail's trades, not saved, each
+	// with why.
 	Dropped []string `json:"dropped,omitempty"`
+	// Trades is how many trades of a broker's mail went to the ledger.
+	Trades int `json:"trades,omitempty"`
 }
 
 // MailMessage declares the mail-message workflow. Runs are serialized
@@ -120,6 +131,9 @@ func MailMessage(c *hatchet.Client, d Deps) *hatchet.Workflow {
 		if err := ctx.ParentOutput(check, &chk); err != nil {
 			return mailRelate{}, err
 		}
+		if chk.Trusted != "" {
+			return d.extractTrades(ctx, in, chk)
+		}
 		return d.relateMail(ctx, in, chk)
 	},
 		hatchet.WithParents(check),
@@ -136,6 +150,9 @@ func MailMessage(c *hatchet.Client, d Deps) *hatchet.Workflow {
 		}
 		if err := ctx.ParentOutput(relate, &rel); err != nil {
 			return mailSave{}, err
+		}
+		if chk.Trusted != "" {
+			return d.saveTrades(ctx, in, chk, rel.Trades)
 		}
 		return d.saveMail(ctx, in, chk, rel)
 	},
@@ -188,17 +205,26 @@ func (d Deps) checkMail(ctx context.Context, in MailInput) (mailCheck, error) {
 	if err != nil {
 		return out, err
 	}
-	if u == nil || u.MemoryProject == "" || d.Memory == nil {
+	if u != nil && d.Finance != nil {
+		if out.Trusted, out.Skip, err = d.financeMail(ctx, u.ID, in); err != nil || out.Skip != "" {
+			return out, err
+		}
+	}
+	if out.Trusted == "" && (u == nil || u.MemoryProject == "" || d.Memory == nil) {
 		out.Skip = "the user has no memory"
 		return out, nil
 	}
+	category := in.Category
+	if out.Trusted != "" {
+		category = "finance" // the ledger's, whatever the script said
+	}
 	ok, err := d.Store.PickMessage(ctx, store.MailMessage{Address: acct.Address, MessageID: in.MessageID,
-		UserID: u.ID, Category: in.Category, Subject: in.Subject, Link: in.Link}, d.now().Add(-MailStuckAfter))
+		UserID: u.ID, Category: category, Subject: in.Subject, Link: in.Link}, d.now().Add(-MailStuckAfter))
 	if err != nil {
 		return out, err
 	}
 	if !ok {
-		out.Skip = "the message was sent before"
+		out.Skip, out.Trusted = "the message was sent before", ""
 		return out, nil
 	}
 	out.UserID = u.ID

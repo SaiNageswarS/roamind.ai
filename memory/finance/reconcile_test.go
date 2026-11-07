@@ -142,3 +142,67 @@ func TestReconcileUnknownPrice(t *testing.T) {
 		t.Errorf("trade = %+v; want 15 without an amount", got)
 	}
 }
+
+func TestReconcilePartsOfOneOrder(t *testing.T) {
+	// An order of 50 filled as 30 + 20, which the contract note lists, and
+	// one confirmation mail of 50: one order.
+	got := one(t, Reconcile([]TradeEvent{
+		ev("mail:me@x/cn", 1, DocContractNote, "30", "1500", ""),
+		ev("mail:me@x/cn", 2, DocContractNote, "20", "1501", ""),
+		ev("mail:me@x/conf", 1, DocConfirmation, "50", "1500.40", ""),
+	}))
+	if got.Quantity != "50" {
+		t.Errorf("quantity = %s, want 50", got.Quantity)
+	}
+	// And the other way: a statement's one line of 50, and the mail's parts.
+	got = one(t, Reconcile([]TradeEvent{
+		ev("upload:st", 1, DocStatement, "50", "1500.40", ""),
+		ev("mail:me@x/cn", 1, DocContractNote, "30", "1500", ""),
+		ev("mail:me@x/cn", 2, DocContractNote, "20", "1501", ""),
+	}))
+	if got.Quantity != "50" || got.Record != "upload:st" {
+		t.Errorf("trade = %+v; want the statement's 50", got)
+	}
+}
+
+func TestReconcileNearestPrice(t *testing.T) {
+	// Two executions alike within 0.1%, both in a tradebook and a contract
+	// note: each pairs with its nearest copy.
+	got := one(t, Reconcile([]TradeEvent{
+		ev("upload:tb", 1, DocTradebook, "10", "100.00", ""),
+		ev("upload:tb", 2, DocTradebook, "10", "100.15", ""),
+		ev("mail:me@x/cn", 1, DocContractNote, "10", "100.08", ""),
+		ev("mail:me@x/cn", 2, DocContractNote, "10", "100.00", ""),
+	}))
+	if got.Quantity != "20" {
+		t.Errorf("quantity = %s, want 20", got.Quantity)
+	}
+}
+
+func TestReconcileRefs(t *testing.T) {
+	// A tradebook row has the trade and order numbers; the mail, the order
+	// number only.
+	got := one(t, Reconcile([]TradeEvent{
+		ev("upload:tb", 1, DocTradebook, "10", "1500", "T1001 O501"),
+		ev("mail:me@x/m1", 1, DocConfirmation, "10", "1500.20", "O501"),
+	}))
+	if got.Quantity != "10" {
+		t.Errorf("quantity = %s, want 10", got.Quantity)
+	}
+	// Two orders alike, each in its own mail: two trades.
+	got = one(t, Reconcile([]TradeEvent{
+		ev("mail:me@x/m1", 1, DocConfirmation, "10", "1500", "O501"),
+		ev("mail:me@x/m2", 1, DocConfirmation, "10", "1500", "O502"),
+	}))
+	if got.Quantity != "20" {
+		t.Errorf("quantity = %s, want 20", got.Quantity)
+	}
+	// An order's two executions in a contract note, with their charges, and
+	// the tradebook's one line for the order: the fees add up.
+	a, b := ev("mail:me@x/cn", 1, DocContractNote, "6", "1500", "O501"), ev("mail:me@x/cn", 2, DocContractNote, "4", "1500", "O501")
+	a.Fees, b.Fees = "3", "2"
+	got = one(t, Reconcile([]TradeEvent{ev("upload:tb", 1, DocTradebook, "10", "1500", "O501"), a, b}))
+	if got.Quantity != "10" || got.Fees != "5" {
+		t.Errorf("trade = %+v; want 10 with fees 5", got)
+	}
+}

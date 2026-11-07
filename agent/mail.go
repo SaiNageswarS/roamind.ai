@@ -22,11 +22,24 @@ type MailMessage struct {
 	Cc          string   `json:"cc,omitempty"`
 	Date        string   `json:"date,omitempty"` // RFC 3339
 	Subject     string   `json:"subject,omitempty"`
-	Category    string   `json:"category,omitempty"` // bill, travel, order, appointment, commitment, person, other
+	Category    string   `json:"category,omitempty"` // bill, travel, order, appointment, commitment, person, finance, other
 	Summary     string   `json:"summary,omitempty"`  // the script's one line
 	Text        string   `json:"text,omitempty"`
 	JSONLD      []string `json:"jsonld,omitempty"` // the schema.org scripts of its HTML
 	Attachments []string `json:"attachments,omitempty"`
+	// AuthResults is Gmail's Authentication-Results header: whether the
+	// sender's domain signed the mail (DKIM) and passed DMARC.
+	AuthResults string `json:"auth_results,omitempty"`
+	// PDFs are the text of its PDF attachments, for finance mail only.
+	PDFs []MailPDF `json:"pdfs,omitempty"`
+}
+
+// MailPDF is the text of a PDF attachment, or why there is none (a
+// password-protected one).
+type MailPDF struct {
+	Name  string `json:"name"`
+	Text  string `json:"text,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 // MailRelating is what the agent is given to relate a mail to the user's

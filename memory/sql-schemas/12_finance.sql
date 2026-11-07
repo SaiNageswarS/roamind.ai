@@ -42,3 +42,17 @@ CREATE TABLE IF NOT EXISTS finance_settings (
     user_id       TEXT PRIMARY KEY REFERENCES users(id),
     base_currency TEXT NOT NULL DEFAULT 'EUR'
 );
+
+-- The domains a user's broker mail comes from. Mail from a trusted domain,
+-- signed by it (DKIM, as Gmail checked it), is read into the ledger; finance
+-- mail from any other domain is only listed here, untrusted, for the user to
+-- trust or not. A domain covers its subdomains.
+CREATE TABLE IF NOT EXISTS finance_senders (
+    user_id    TEXT NOT NULL REFERENCES users(id),
+    domain     TEXT NOT NULL COLLATE NOCASE, -- lowercase, e.g. broker.example
+    trusted    INTEGER NOT NULL DEFAULT 0,
+    seen_at    INTEGER,                   -- the last finance mail from it; NULL before one
+    subject    TEXT NOT NULL DEFAULT '',  -- that mail's
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, domain)
+);

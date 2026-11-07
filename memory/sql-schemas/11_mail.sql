@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS mail_messages (
     address     TEXT NOT NULL COLLATE NOCASE,
     message_id  TEXT NOT NULL, -- Gmail's message id
     user_id     TEXT NOT NULL REFERENCES users(id),
-    category    TEXT NOT NULL, -- the script's: bill, travel, order, appointment, commitment, person, other
+    category    TEXT NOT NULL, -- the script's: bill, travel, order, appointment, commitment, person, other; finance for mail read into the ledger
     subject     TEXT NOT NULL,
     link        TEXT NOT NULL, -- the message in Gmail
     status      TEXT NOT NULL, -- picked, done, skipped (nothing to save), failed

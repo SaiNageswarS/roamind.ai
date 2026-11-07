@@ -210,6 +210,29 @@ func (c *Client) Search(ctx context.Context, isin string) ([]Listing, error) {
 	return mine, nil
 }
 
+// SearchSymbol returns the listings with ticker symbol that name their
+// ISIN: what a broker's mail that gives a symbol and no ISIN is about.
+func (c *Client) SearchSymbol(ctx context.Context, symbol string) ([]Listing, error) {
+	if c.EODHDKey == "" {
+		return nil, ErrNoKey
+	}
+	body, err := c.get(ctx, c.EODHD+"/api/search/"+url.PathEscape(symbol)+"?fmt=json&api_token="+url.QueryEscape(c.EODHDKey))
+	if err != nil {
+		return nil, err
+	}
+	var out []Listing
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("market: EODHD search: %w", err)
+	}
+	var mine []Listing
+	for _, l := range out {
+		if l.ISIN != "" && strings.EqualFold(l.Code, symbol) {
+			mine = append(mine, l)
+		}
+	}
+	return mine, nil
+}
+
 // Bar is a day's prices, unadjusted.
 type Bar struct {
 	Day                    time.Time

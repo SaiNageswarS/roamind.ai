@@ -27,6 +27,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	qdb "github.com/questdb/go-questdb-client/v4"
@@ -37,7 +38,13 @@ import (
 const DefaultAddr = "127.0.0.1:9000"
 
 // DB is a pool of QWP query sessions to QuestDB.
-type DB struct{ qdb *qdb.QuestDB }
+type DB struct {
+	qdb *qdb.QuestDB
+	// lastWrite is the latest version AddTradeEvents gave, so two writes of
+	// one source in the same microsecond still differ.
+	mu        sync.Mutex
+	lastWrite time.Time
+}
 
 // Open connects to QuestDB's HTTP port at addr (host:port) and checks it
 // answers a query. Connections are made as they're needed (lazy_connect),

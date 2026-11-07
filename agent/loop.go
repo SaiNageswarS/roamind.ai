@@ -103,7 +103,7 @@ func RunTurn(ctx context.Context, cfg Config, in protocol.TurnInput, emit Emit) 
 		Binary:       cfg.ClaudeBinary,
 		Dir:          dir,
 		SessionID:    in.SessionID,
-		Model:        cfg.Model,
+		Model:        orDefault(in.Model, cfg.Model),
 		SystemPrompt: sp.String(),
 		JSONSchema:   in.OutputSchema,
 	}

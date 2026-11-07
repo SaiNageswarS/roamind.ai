@@ -117,7 +117,9 @@ func (s *Store) StaleMailAccounts(ctx context.Context, userID string, before tim
 
 // PickMessage records m as picked, before its turn; ok is false when the
 // message was sent before, unless its turn failed then, or its run was
-// picked before stuckBefore and never finished, as when it was cancelled.
+// picked before stuckBefore and never finished, as when it was cancelled,
+// or it now goes to the ledger (category finance) and didn't then: a
+// broker's mail sent again after the user trusted its domain.
 func (s *Store) PickMessage(ctx context.Context, m MailMessage, stuckBefore time.Time) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO mail_messages (address, message_id, user_id, category, subject, link, status, picked_at)
@@ -125,7 +127,8 @@ func (s *Store) PickMessage(ctx context.Context, m MailMessage, stuckBefore time
 		ON CONFLICT (address, message_id) DO UPDATE SET
 			status = 'picked', category = excluded.category, subject = excluded.subject, link = excluded.link,
 			picked_at = excluded.picked_at, done_at = NULL
-		WHERE mail_messages.status = 'failed' OR (mail_messages.status = 'picked' AND mail_messages.picked_at < ?)`,
+		WHERE mail_messages.status = 'failed' OR (mail_messages.status = 'picked' AND mail_messages.picked_at < ?)
+			OR (excluded.category = 'finance' AND mail_messages.category != 'finance')`,
 		strings.TrimSpace(m.Address), m.MessageID, m.UserID, m.Category, m.Subject, m.Link, time.Now().Unix(),
 		stuckBefore.Unix())
 	if err != nil {
