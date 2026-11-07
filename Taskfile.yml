@@ -229,20 +229,21 @@ tasks:
 
   # The agent writes a Python parser for each broker report format and runs
   # it in its sandbox (import_report in mcp/tools/finance.go). This is the
-  # interpreter and libraries it runs on: the system Python with the locked
-  # deploy/report-python/requirements.txt, copied (not linked) out of uv's
-  # cache in the home directory. /opt/roamind must exist and be yours:
+  # interpreter and libraries it runs on, from deploy/report-python-env/uv.lock:
+  # on the system Python, and copied (not linked) out of uv's cache, because
+  # the sandbox can't read the home directory. /opt/roamind must exist and
+  # be yours:
   #   sudo install -d -o "$USER" /opt/roamind
   report-python:
-    desc: Install the Python that report parsers run on into /opt/roamind/py
-    status: ['cmp -s deploy/report-python/requirements.txt {{.REPORT_PYTHON}}/requirements.txt']
+    desc: Install the Python that report parsers run on into /opt/roamind/py, from deploy/report-python-env/uv.lock
+    sources: [deploy/report-python-env/pyproject.toml, deploy/report-python-env/uv.lock]
     preconditions:
       - sh: test -w "$(dirname {{.REPORT_PYTHON}})"
         msg: 'run: sudo install -d -o "$USER" {{dir .REPORT_PYTHON}}'
+    env:
+      UV_PROJECT_ENVIRONMENT: '{{.REPORT_PYTHON}}'
     cmds:
-      - uv venv --allow-existing --python /usr/bin/python3 {{.REPORT_PYTHON}}
-      - uv pip install --link-mode copy --python {{.REPORT_PYTHON}}/bin/python --require-hashes -r deploy/report-python/requirements.txt
-      - cp deploy/report-python/requirements.txt {{.REPORT_PYTHON}}/requirements.txt
+      - uv sync --project deploy/report-python-env --frozen --no-managed-python --python /usr/bin/python3 --link-mode copy
 
   # process-compose runs in the foreground without its TUI; systemd is the
   # daemon (Linger keeps the user manager up from boot). Attach to it with
