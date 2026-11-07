@@ -19,51 +19,59 @@ type TradeEvent struct {
 	ISIN        string
 	Side        string // buy, sell, vest, espp, dividend, transfer_in, transfer_out
 	Quantity    string
-	Price       string
-	Amount      string
-	Fees        string
-	TaxWithheld string
-	Currency    string
+	Price       string // of one unit
+	Amount      string // quantity × price before fees, or a dividend's gross amount; always positive
+	Fees        string // brokerage, taxes on the trade and other charges, positive
+	TaxWithheld string // on a dividend
+	Currency    string // of price, amount and fees
 	FXRate      string // the broker's, when given
 	Ref         string // order or trade number
 	Doc         string // contract_note, confirmation, tradebook, statement, chat
 	ReceivedAt  time.Time
 }
 
-// AddTradeEvents writes the user's trade events, one INSERT each. They're
-// readable once QuestDB has applied them (WaitApplied).
+// Sides of a trade event, and of a trade.
+const (
+	SideBuy         = "buy"
+	SideSell        = "sell"
+	SideVest        = "vest"
+	SideESPP        = "espp"
+	SideDividend    = "dividend"
+	SideTransferIn  = "transfer_in"
+	SideTransferOut = "transfer_out"
+)
+
+// Sides are every side, as the tools name them.
+var Sides = []string{SideBuy, SideSell, SideVest, SideESPP, SideDividend, SideTransferIn, SideTransferOut}
+
+// Kinds of document a trade event comes from.
+const (
+	DocTradebook    = "tradebook"
+	DocContractNote = "contract_note"
+	DocStatement    = "statement"
+	DocConfirmation = "confirmation"
+	DocChat         = "chat"
+)
+
+var tradeEventCols = cols("ts", "user_id", "source", "line", "account", "isin", "side",
+	"quantity:"+castMoney, "price:"+castPrice, "amount:"+castMoney, "fees:"+castMoney, "tax_withheld:"+castMoney,
+	"currency", "fx_rate:"+castRate, "ref", "doc", "received_at")
+
+// AddTradeEvents writes the user's trade events. They're readable once
+// QuestDB has applied them (WaitApplied).
 func (d *DB) AddTradeEvents(ctx context.Context, userID string, events []TradeEvent) error {
 	if userID == "" {
 		return errNoUser
 	}
-	for _, o := range events {
+	rows := make([][]any, len(events))
+	for i, o := range events {
 		if o.Date.IsZero() || o.Source == "" {
 			return fmt.Errorf("finance: trade event %d of %q has no date or source", o.Line, o.Source)
 		}
+		rows[i] = []any{day(o.Date), userID, o.Source, o.Line, o.Account, o.ISIN, o.Side,
+			o.Quantity, o.Price, o.Amount, o.Fees, o.TaxWithheld, o.Currency, o.FXRate, o.Ref, o.Doc, o.ReceivedAt}
 	}
-	for _, o := range events {
-		err := d.exec(ctx, `INSERT INTO trade_events (ts, user_id, source, line, account, isin, side,
-				quantity, price, amount, fees, tax_withheld, currency, fx_rate, ref, doc, received_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7,
-				$8::DECIMAL(24, 8), $9::DECIMAL(20, 6), $10::DECIMAL(24, 8), $11::DECIMAL(24, 8), $12::DECIMAL(24, 8),
-				$13, $14::DECIMAL(20, 10), $15, $16, $17)`,
-			func(b *qdb.QwpBinds) {
-				timestamp(b, 0, o.Date)
-				for i, v := range []string{userID, o.Source} {
-					text(b, 1+i, v)
-				}
-				b.IntBind(3, int32(o.Line))
-				for i, v := range []string{o.Account, o.ISIN, o.Side, o.Quantity, o.Price, o.Amount, o.Fees,
-					o.TaxWithheld, o.Currency, o.FXRate, o.Ref, o.Doc} {
-					text(b, 4+i, v)
-				}
-				timestamp(b, 16, o.ReceivedAt)
-			})
-		if err != nil {
-			return fmt.Errorf("finance: trade event %d of %q: %w", o.Line, o.Source, err)
-		}
-	}
-	return nil
+	return d.insert(ctx, "trade_events", tradeEventCols, rows)
 }
 
 // TradeEvents is the user's trade events dated from from up to, not

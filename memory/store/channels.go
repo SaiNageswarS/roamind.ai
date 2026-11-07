@@ -16,6 +16,9 @@ const (
 	// KindInbox is the user's inbox channel, where their daily inbox
 	// digest is posted.
 	KindInbox = "inbox"
+	// KindFinance is the user's finance channel, where they upload reports
+	// and ask about their holdings.
+	KindFinance = "finance"
 )
 
 // Channel is a Slack channel the harness made for a user, for one purpose.

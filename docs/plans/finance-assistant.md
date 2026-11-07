@@ -31,7 +31,7 @@ Findings that shape the design:
   - It has no foreign keys and no unique constraints beyond dedup keys.
   - It has no transactions across tables.
   - WAL writes are applied asynchronously, so a read straight after a write may not see it.
-  - So it holds facts keyed by time. Mutable state (accounts, rules, subscriptions, conflicts, uploads) stays in SQLite. Reads that must see their own writes first wait for the WAL to be applied (section 5).
+  - So it holds facts keyed by time. Mutable state (accounts, rules, subscriptions, uploads) stays in SQLite. Reads that must see their own writes first wait for the WAL to be applied (section 5).
 - **QuestDB's open-source build has no row-level security or roles.** Each user's isolation is enforced in Roamind's code: every per-user table has a `user_id` column, and only the store package queries it. The console sees everything, so it is for the operator only.
 - **The tailnet is trusted.** The console and QWP share port 9000 and QuestDB asks for no login there, so the tailnet and Caddy's login check are the gates. QuestDB's `http.security.readonly` would make the console query-only, but it refuses QWP writes too.
 
@@ -50,14 +50,13 @@ Findings that shape the design:
 
 ```
 broker mail ─▶ Apps Script (finance) ─▶ mail-message: check ─▶ extract (small model) ─▶ record  ┐
-report upload in #finance-<name> ─▶ chat turn ─▶ import_report (parser, or model rows) ─▶ record  ┤
+report upload in #finance-<name> ─▶ chat turn ─▶ import_report (an agent-written parser) ─▶ record ┤
 chat ("I sold 20 INFY") ─▶ chat turn ─▶ record_trade ─────────────────────────────────▶ record  ┤
                                                                                                  ▼
                               QuestDB trade_events (raw, one row per source line, dedup on source+line)
                                                                                                  │ marks the user dirty
                                                                                                  ▼
-                      finance-reconcile (per user, serialized): report if one covers it, else mail → trades
-                                         conflicts ─▶ SQLite ─▶ named in #finance-<name>
+                      finance-reconcile (per user, serialized): the same fill from any two sources counts once → trades
                                                                                                  ▼
 finance-daily: prices, FX, actions ─▶ valuations ─▶ rules in Go ─▶ alert turn ─▶ #finance-<name>
 finance-weekly: figures from QuestDB ─▶ summary turn ─▶ #finance-<name>
@@ -97,8 +96,7 @@ Shared tables have no `user_id`; every per-user table has one, as the first upse
 | Table | Timestamp | Upsert keys | What it holds |
 |---|---|---|---|
 | `trade_events` | trade date | `ts, user_id, source, line` | Every trade, dividend or charge as one source reported it, unchanged. `source` is `mail:<address>/<message id>`, `upload:<sha256>` or `chat:<thread>`; `line` is its row in that source. Columns: `account`, `isin`, `side` (buy, sell, vest, espp, dividend, transfer_in, transfer_out), `quantity`, `price`, `amount`, `fees`, `tax_withheld`, `currency`, `fx_rate` (the broker's, when given), `ref` (order or trade number), `doc` (contract_note, confirmation, tradebook, statement, chat), `received_at`. A source replayed writes the same rows, which dedup skips. |
-| `trades` | trade date | `ts, user_id, account, isin, side` | The reconciled day-group (section 4): `quantity`, `avg_price`, `amount`, `fees`, `tax_withheld`, `currency`, `record` (the report, or the mail kept), `state` (confirmed by a report, provisional from mail or chat, void). Entry and exit points are these rows grouped by ISIN across accounts. |
-| `holdings_reported` | as-of date | `ts, user_id, account, isin` | Holdings a statement or CAS showed, to check the ledger against. They never change the trades. |
+| `trades` | trade date | `ts, user_id, account, isin, side` | The reconciled day-group (section 4): `quantity`, `avg_price`, `amount`, `fees`, `tax_withheld`, `currency`, `record` (the source of the copy kept). Entry and exit points are these rows grouped by ISIN across accounts. |
 | `valuations` | day | `ts, user_id, account, isin` | Written daily by `finance-daily`: `quantity`, `close`, `value`, `cost`, both in the instrument's currency and in the base currency. Dashboards and the weekly summary read this, not a recomputation. |
 | `subscription_charges` | charge date | `ts, user_id, key, source` | `amount`, `currency` |
 
@@ -111,8 +109,6 @@ Positions, average cost, realized gains (oldest-first per account), entry and ex
   - The `(user_id, broker, number)` pair is unique, which is how a mail or report is assigned to an account.
 - `finance_uploads(user_id, sha256, file, broker, account, doc, period_from, period_to, rows, imported_at, PK(user_id, sha256))`: the reports imported, with the period each covers.
 - `finance_dirty(user_id PK, since)`: users whose trade events changed since their last reconcile.
-- `finance_conflicts(user_id, id, account, isin, day, kind, detail, state open|resolved|dismissed, created_at)`: holdings that don't match the ledger.
-- `finance_notices(user_id, id, account, isin, day, side, kind, detail, posted_at)`: corrections and dropped mail trades, for the next post.
 - `alert_rules`:
   - columns: `(user_id, id, kind, isin, listing, scope, direction, threshold, margin, target, expires_on, state)`;
   - `kind` is `move`, `level`, `drawdown`, `concentration`, `allocation` or `reentry`.
@@ -136,14 +132,14 @@ Both sources produce the same thing: a list of trade events with a source, a doc
 - A one-off `backfill(fromDate)` in the script sends past broker mail. It goes through the same path, and dedup makes a second run harmless.
 
 **Reports uploaded in `#finance-<name>`:**
-- Files shared in the channel are downloaded into the workspace's `uploads/`, as in every channel. The finance turn calls `import_report(file, broker, account, doc, period_from, period_to, rows?)`.
-- The tool, not the model:
+- Files shared in the channel are downloaded into the workspace's `uploads/`, as in every channel.
+- **The agent writes the parser.** Formats change, so there are no parsers in the repo. The turn writes a Python parser for the broker and kind of report, saves it in the workspace's `parsers/` for the next upload, and runs it in its sandbox. The parser prints the import as JSON: the account, the period, every row and the report's own printed totals. The model never types a figure.
+- The turn calls `import_report(file, parser, parsed)`. The tool, not the model:
   - hashes the file;
   - stops if `finance_uploads` has the hash for this user ("already imported on 3 Nov");
-  - parses it.
-- **Parsers come first.** Known CSV and XLSX formats have Go parsers in `connectors/statements`: one per broker export: a tradebook, a transaction or holdings statement, a stock plan's gains and benefit history. Each parser is added when the first real file of that format is seen.
-- **The model is the fallback**, for PDFs and unknown layouts. It reads the file and passes `rows` in the trade event schema, and the tool runs the same checks as for mail. A report's own totals, when it has them, must match the sum of its rows.
-- A CAS PDF is encrypted with the PAN. The turn asks for the password in the thread and decrypts it in the sandbox with `qpdf`, which is added to the sandbox image. The password isn't stored. A CAS gives `holdings_reported`, not trades.
+  - runs the same checks as for mail on every row, and the report's own totals must match the sum of its rows.
+- **A changed format** makes the saved parser fail or its rows be refused; the turn fixes the parser and runs it again, never the JSON.
+- A CAS PDF is encrypted with the PAN. The turn asks for the password in the thread and decrypts a copy in the sandbox with `qpdf`. The password isn't stored.
 - Rows go to `trade_events` with source `upload:<sha256>`. The tool marks the user dirty, and the worker starts `finance-reconcile` after the turn, the way `goalChannelsTrigger` runs. The MCP server has no Hatchet client.
 
 **Chat:** `record_trade` writes one trade event with source `chat:<thread>`. It counts like mail, below it when both have the same fill.
@@ -157,29 +153,21 @@ Both sources produce the same thing: a list of trade events with a source, a doc
 | The same report uploaded again | its SHA-256 in `finance_uploads` |
 | A retried run or tool call | the same upsert keys: identical rows are skipped |
 
-**Reports are the golden set; mail keeps the ledger current until one arrives.** A report the user uploads (a tradebook, a statement) is the platform's own record, so where one covers a trade, it is the trade. Mail is how the ledger updates itself between uploads. Each trade is settled per day-group G = `(user, account, isin, trade date, side)`, the unit the user sees as an entry or exit point. For each G it changed:
-1. **Covered by a report?** A G is covered when an upload in `finance_uploads` for that account has a period containing G's date.
-2. **Covered: the report's rows are the trade,** `state = confirmed`: quantity summed, price averaged by quantity, fees summed. Mail and chat rows for G are ignored, so mail plus report can't double a trade. Where they said something else, the next post says what the report changed ("INFY 3 Nov: mail said 40, the statement says 50"). Nothing waits on the user.
-3. **Covered, but the report has no row for G:** the mail or chat trade is dropped (`state = void`), and the post says so ("in mail, not in the statement": a cancelled order, or a misread mail).
-4. **Not covered: the mail and chat rows are the trade,** `state = provisional`. Copies of one fill are merged first:
+**The same fill from two sources counts once.** A trade can reach the ledger from a report, from mail and from chat; the reconcile only makes sure it isn't counted twice. Nothing is deleted or voided, and there's no state per trade. Each trade is settled per day-group G = `(user, account, isin, trade date, side)`, the unit the user sees as an entry or exit point:
+1. **Merge copies of one fill** across sources:
    - rows with the same `ref` are one fill;
-   - rows without a `ref` are one fill when quantity is equal and price is within 0.1%;
-   - the copy from the better document is kept: a contract note over an order confirmation, mail over chat.
+   - rows without a `ref` are one fill when quantity is equal and price is within 0.1% (for dividends, the amount within 0.1%);
+   - rows of one source are never copies of each other: a report's two alike rows are two executions.
+2. **Keep the best copy:** an uploaded report's, then mail's by document (a contract note over an order confirmation), then chat's.
+3. **Write G** to `trades`, summed over its fills; the upsert replaces it.
 
-   This is how an "order executed" mail and the contract note for the same order count once, while two real orders of the same day, each with its own mail, both count.
-5. **Write G** to `trades` (the upsert replaces it), or with `state = void` when nothing has it any more.
-
-When a report later covers a period, the reconcile re-runs its day-groups: provisional trades become confirmed, or void when the report hasn't got them. `list_holdings` marks figures resting on provisional trades.
+This is how a contract-note mail and the tradebook row for the same order count once, while two real orders of the same day both count. A fill only one source has is a fill.
 
 **Running it:**
 - **Serialized:** `finance-reconcile` is a Hatchet task per user, concurrency key `user_id`, so a user's groups are never reconciled twice at once.
 - **Order-independent:** its output depends only on the trade events, so runs in any order converge.
 - **Waiting for writes:** before reading, it waits until `wal_tables()` shows `trade_events` applied up to the latest transaction, with a timeout and a retry.
 - **What triggers it:** mail `save`, an upload turn, and `finance-daily` for any user left dirty.
-
-**What reaches the user:**
-- **Corrections** (step 2) and **dropped mail trades** (step 3) are listed once in the next post in `#finance-<name>`. They're information: the report has already settled them.
-- **Holdings checks are the only conflicts.** The reconcile compares computed positions with the latest `holdings_reported` for each account ("CAS shows 120 INFY; trades give 110": a report for a gap is missing, or a transfer wasn't recorded). They stay open until the numbers agree, after an upload or a `record_trade`, or the user dismisses them (`list_conflicts`, `dismiss_conflict`).
 
 ### 5. Several users
 - **Tables:**
@@ -201,13 +189,13 @@ When a report later covers a period, the reconcile re-runs its day-groups: provi
   - or when the first finance mail arrives for them.
 
   It's made by a `finance-channel` task with `openChannel`. Its intro says what it tracks and that reports can be uploaded there.
-- The owner's plain messages are finance turns. They get the `finance` tool set and a prompt paragraph naming their accounts and their open conflicts.
+- The owner's plain messages are finance turns. They get the `finance` tool set and a prompt paragraph naming their accounts.
 - **Tools** (`mcp/tools/finance.go`):
   - `list_holdings`: one line per stock across accounts, with quantity per account, average cost, value, unrealized and realized gain, dividends, total, and the last few entry and exit points;
   - `stock_history`: all of a stock's entry and exit points;
   - `profit`: totals by stock, market and year;
   - `tax_estimate`: by tax year and country, with "tax if sold now" and the days until an Indian holding becomes long-term;
-  - `import_report`, `record_trade`, `list_conflicts`, `dismiss_conflict`;
+  - `import_report`, `record_trade`;
   - `list_alerts`, `set_alert`, `mute_alert`;
   - `list_subscriptions`, `save_subscription`, `cancel_subscription`;
   - `set_tax_residence`, `set_base_currency`.
@@ -245,8 +233,7 @@ When a report later covers a period, the reconcile re-runs its day-groups: provi
   - value by account, market and currency, and the week's change;
   - realized and unrealized profit, dividends, and the tax estimate so far this year;
   - the top movers, and concentration against the user's targets;
-  - the subscriptions' monthly total and renewals in the next 30 days;
-  - open conflicts.
+  - the subscriptions' monthly total and renewals in the next 30 days.
 - **Subscriptions** come from mail (`subscription` category, through `relate`) and from bank or card statements uploaded in the channel. Charges de-dupe like trades: by upsert key, then by `(key, charge date ± 2 days, amount)` across sources.
 
 ### 9. Tax
@@ -284,8 +271,7 @@ When a report later covers a period, the reconcile re-runs its day-groups: provi
   - allocation by market and currency;
   - realized gain by tax year;
   - one stock's entry and exit points against its price;
-  - subscriptions by month;
-  - open conflicts.
+  - subscriptions by month.
 - **Per-user dashboards are out of scope:** the console sees every user. If they're wanted later, Grafana with a per-user filter would be the next step.
 - **The notebook** can query port 9000 too (`/exec`), for analysis in pandas.
 
@@ -310,10 +296,24 @@ When a report later covers a period, the reconcile re-runs its day-groups: provi
 ## Phases
 Each phase is one branch and one PR.
 1. **QuestDB as a service:** process-compose, the config, the schemas, `memory/finance` with the official client, and the console on the tailnet.
-2. **Ledger from uploads:** accounts, `import_report` with the first parsers, the reconcile with holdings checks, prices and FX, the channel, and `list_holdings`, `stock_history` and `profit`.
+2. **Ledger from uploads:** accounts, `import_report` with agent-written parsers, the reconcile, prices and FX, the channel, and `list_holdings`, `stock_history` and `profit`.
+   As built:
+   - **Parsers are written by the agent,** not kept in the repo: a Python script per broker and kind of report in the user's workspace, run in the sandbox on `/opt/roamind/py` (`task report-python`), and rewritten when a format changes and its rows are refused.
+   - **The base currency** is in `finance_settings`, not a column of `users`: `task init` reapplies every schema file, and `ALTER TABLE … ADD COLUMN` can't be repeated.
+   - **The reconcile only de-dupes:** no confirmed, provisional or void state, no notices, no holdings checks or conflicts, and no `holdings_reported`.
+   - **The channel** opens after a turn once the user has an account, rather than on their first finance question.
+   - **The tool reconciles at once,** so the turn's answer sees its import; `finance-reconcile` catches up on anyone left dirty.
 3. **Ledger from mail:** the `finance` category, `extract`, PDF text, and `backfill()`.
+   Before mail goes live, the de-dupe needs (found in review of phase 2):
+   - **Partial and aggregated fills:** an order of 50 filled as 30 + 20 in a contract note, and one mail of 50, are one fill. Match each source's unmatched rows of a day-group, summed, against another source's.
+   - **Best, not first, match:** pair copies by exact or ref match first, then by the nearest price, so two near-identical executions don't take each other's copies.
+   - **Typed refs:** keep order and trade numbers apart, and compare a row against all of a fill's refs, not only the kept copy's.
+   - **Versioned sources:** a re-parsed mail that loses or moves rows leaves the old ones in `trade_events`, and their day-groups in `trades`. Write each source with a version and read only its latest, and remove the trades of day-groups that are gone.
+   - **Transfers keeping their dates:** match a `transfer_out` to the `transfer_in` between the user's accounts, and move the lots with their dates and costs, which India's holding period needs.
 4. **Alerts:** `finance-daily`, `finance-weekly`, re-entry and the other rules, news, and subscriptions.
+   Also needed: positions as of a day apart from their pricing, closes as of a day, and splits applied only up to the close's day; one split per ISIN, not per listing; prices quoted in pence (GBX) converted.
 5. **Tax:** residence, the rules per country, `tax_estimate`, and the year-end report.
+   Also needed: each sale's lots, with their dates and costs (`Sale` keeps only the oldest date), and withheld tax in the base currency.
 
 ## Considered
 
@@ -358,10 +358,8 @@ New Go dependency: `github.com/questdb/go-questdb-client/v4` as a direct depende
    - The reconcile, on fixed trade events:
      - a confirmation and a contract note for one order count once;
      - two orders of one day each count;
-     - a covering report wins over mail, and a different quantity is a notice, not a conflict;
-     - a mail trade missing from a covering report is voided, with a notice;
-     - an uncovered mail trade is provisional, and becomes confirmed when a report covering it arrives;
-     - a holdings mismatch opens a conflict, which closes when the numbers agree;
+     - a report row and the mail of the same fill count once, and the report's copy is kept;
+     - a fill only mail has is kept;
      - trade events in any order give the same trades.
    - Ledger maths: oldest-first matching per account, splits, transfers keeping cost, dividends with withholding, profit in the instrument's currency and in EUR.
    - Tenancy: two users' data, each function returning only its user's rows.
@@ -375,9 +373,9 @@ New Go dependency: `github.com/questdb/go-questdb-client/v4` as a direct depende
 3. **Live, phase 2:**
    - Upload a broker's tradebook and compare `list_holdings` with the app.
    - Upload it again: "already imported".
-   - Upload an overlapping statement: no doubled trades; mail trades in its period become confirmed.
+   - Upload an overlapping statement: no doubled trades.
 4. **Live, phase 3:**
-   - Backfill one account's mail over a month that a report already covers: no new trades, and notices only where mail and the report differ.
-   - Mail for a day after the last report gives a provisional trade at once.
+   - Backfill one account's mail over a month that a report already covers: no new trades.
+   - Mail for a day after the last report gives a trade at once.
    - The next contract note updates the holding.
 5. **Live, phase 4:** a `level` alert just below a held stock's price fires once. After a real exit, the re-entry rule shows in `list_alerts`. The Monday summary matches the brokers' apps within FX.

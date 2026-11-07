@@ -3,7 +3,7 @@
 // to the turn's user and serving the tool sets the turn's task gets (see
 // agent.Config.ToolsServer):
 //
-//	mcp --data DIR --user ID --tools interests,jobs,items
+//	mcp --data DIR --user ID --tools interests,jobs,items,finance [--questdb 127.0.0.1:9000]
 package main
 
 import (
@@ -22,6 +22,7 @@ import (
 
 	"roamind.ai/connectors/feeds"
 	"roamind.ai/mcp/tools"
+	"roamind.ai/memory/finance"
 	"roamind.ai/memory/store"
 )
 
@@ -36,7 +37,8 @@ func run(args []string) error {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	dataDir := fs.String("data", "./data", "data directory holding roamind.db")
 	user := fs.String("user", "", "the user the tools serve")
-	sets := fs.String("tools", "", "the tool sets to serve, comma-separated: interests, jobs, items")
+	sets := fs.String("tools", "", "the tool sets to serve, comma-separated: interests, jobs, items, finance")
+	questdb := fs.String("questdb", "", "QuestDB's HTTP address, for the finance tools")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -50,8 +52,15 @@ func run(args []string) error {
 	defer st.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	deps := tools.Deps{Store: st, Feeds: feeds.New(15 * time.Second), UserID: *user, DataDir: *dataDir}
+	if *questdb != "" {
+		if deps.Finance, err = finance.Open(ctx, *questdb); err != nil {
+			return err
+		}
+		defer deps.Finance.Close()
+	}
 	s := mcp.NewServer(&mcp.Implementation{Name: "roamind", Version: "v1"}, nil)
-	if err := tools.Register(s, tools.Deps{Store: st, Feeds: feeds.New(15 * time.Second), UserID: *user}, strings.FieldsFunc(*sets, func(r rune) bool { return r == ',' })); err != nil {
+	if err := tools.Register(s, deps, strings.FieldsFunc(*sets, func(r rune) bool { return r == ',' })); err != nil {
 		return err
 	}
 	return s.Run(ctx, &mcp.StdioTransport{})

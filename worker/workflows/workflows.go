@@ -25,6 +25,12 @@
 //     uploaded in the web app into the user's memory, also started by the
 //     listener.
 //   - job-application: check-skip → tailor → publish, per posting.
+//   - finance-reconcile: a user's trade events settled into trades, after a
+//     chat turn left them dirty, serialized per user (finance.go).
+//   - finance-channel: a user's finance channel, once they have an
+//     account.
+//   - finance-market: once a day, rates, prices and splits for the
+//     instruments users hold.
 package workflows
 
 import (
@@ -41,6 +47,8 @@ import (
 	"roamind.ai/channels/web"
 	"roamind.ai/connectors/feeds"
 	"roamind.ai/connectors/jobs"
+	"roamind.ai/connectors/market"
+	"roamind.ai/memory/finance"
 	"roamind.ai/memory/store"
 	"roamind.ai/memory/store/notes"
 )
@@ -94,8 +102,13 @@ type Deps struct {
 	Jobs *jobs.Client
 	// JobsPerRun caps the postings a job hunt picks; 0 means JobsPerRun.
 	JobsPerRun int
+	// Finance is the finance ledger in QuestDB; without it there is no
+	// finance assistant.
+	Finance *finance.DB
+	// Market reads rates and prices for it.
+	Market *market.Client
 	// Location is the timezone of the daily exercises, news shorts, inbox
-	// digests and job searches.
+	// digests, job searches and market data.
 	Location *time.Location
 	// Now defaults to time.Now.
 	Now func() time.Time
@@ -152,6 +165,11 @@ func Register(c *hatchet.Client, d Deps) (wfs []hatchet.WorkflowBase, listen fun
 			_, err := links.RunNoWait(topLevel(ctx), in)
 			return err
 		}),
+	}
+	if d.Finance != nil {
+		reconcile, channel := FinanceReconcile(c, d), FinanceChannel(c, d)
+		hooks = append(hooks, financeTrigger(reconcile, channel, d))
+		wfs = append(wfs, reconcile, channel, FinanceMarket(c, d, reconcile))
 	}
 	d.AfterTurn = func(ctx context.Context, u *store.User, t FinishedTurn) error {
 		var errs []error

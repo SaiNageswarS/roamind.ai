@@ -13,6 +13,7 @@
 //	09_items.sql      items.go
 //	10_inbox.sql      inbox.go
 //	11_mail.sql       mail.go
+//	12_finance.sql    finance.go
 //
 // Conversation content itself lives only in claude's session files.
 package store

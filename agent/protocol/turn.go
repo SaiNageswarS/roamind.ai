@@ -27,6 +27,8 @@ type TurnInput struct {
 	Exercise *ExerciseRef `json:"exercise,omitempty"`
 	// News is set for turns in the user's news-shorts channel.
 	News *NewsRef `json:"news,omitempty"`
+	// Finance is set for turns in the user's finance channel.
+	Finance *FinanceRef `json:"finance,omitempty"`
 	// Tools is the set of tools the turn gets: ToolsWorkspace, ToolsWeb,
 	// ToolsRecall or ToolsNone.
 	Tools string `json:"tools,omitempty"`
@@ -82,6 +84,9 @@ const (
 	ServerJobs = "jobs"
 	// ServerItems is tracking the state of the user's tasks and events.
 	ServerItems = "items"
+	// ServerFinance is the user's brokerage accounts: importing reports,
+	// and their holdings and profit.
+	ServerFinance = "finance"
 )
 
 // NewsRef is the context of a turn in the user's news-shorts channel.
@@ -97,6 +102,13 @@ type NewsRef struct {
 type InterestRef struct {
 	Interest string `json:"interest"`
 	Status   string `json:"status"` // active or muted
+}
+
+// FinanceRef is the context of a turn in the user's finance channel.
+type FinanceRef struct {
+	// Accounts are the user's brokerage accounts, as list_accounts names
+	// them.
+	Accounts []string `json:"accounts,omitempty"`
 }
 
 // GoalRef names a goal note in the user's memory.

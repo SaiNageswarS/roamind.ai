@@ -1,0 +1,22 @@
+# The Python environment report parsers run on: the agent writes a parser
+# for each broker report and runs it in its sandbox (import_report in
+# mcp/tools/finance.go). `task report-python` installs it into
+# /opt/roamind/py, on the system Python: the sandbox can't read the home
+# directory, where uv keeps its own Pythons. Add a package with
+#   uv add --project deploy/report-python-env --python /usr/bin/python3 <pkg>
+[project]
+name = "roamind-report-python"
+version = "0"
+requires-python = "==3.12.*"
+dependencies = [
+  "pandas",
+  "openpyxl",
+  "xlrd",
+  "pdfplumber",
+  "pypdf",
+]
+
+[tool.uv]
+package = false
+# Only releases at least two weeks old when locked.
+exclude-newer = "2026-10-23T00:00:00Z"

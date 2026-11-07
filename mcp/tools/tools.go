@@ -11,9 +11,12 @@
 //     job links.
 //   - items (items.go): the state of the user's tasks and events, and when
 //     to remind them of each.
+//   - finance (finance.go): importing the user's broker reports, and their
+//     holdings, entry and exit points and profit.
 package tools
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -21,6 +24,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"roamind.ai/connectors/feeds"
+	"roamind.ai/memory/finance"
 	"roamind.ai/memory/store"
 )
 
@@ -31,6 +35,11 @@ type Deps struct {
 	Feeds *feeds.Client
 	// UserID is the user the server is pinned to.
 	UserID string
+	// Finance is the finance ledger in QuestDB, for the finance tools.
+	Finance *finance.DB
+	// DataDir is Roamind's data directory, which holds the users'
+	// workspaces, where their uploads are.
+	DataDir string
 }
 
 // Tool sets, by their names for Register and --tools. The agent names them
@@ -39,6 +48,7 @@ const (
 	Interests = "interests"
 	Jobs      = "jobs"
 	Items     = "items"
+	Finance   = "finance"
 )
 
 // toolSets add each tool set's tools to a server.
@@ -46,6 +56,7 @@ var toolSets = map[string]func(*mcp.Server, Deps){
 	Interests: interests,
 	Jobs:      jobs,
 	Items:     items,
+	Finance:   financeTools,
 }
 
 // Register adds the named tool sets' tools to the server.
@@ -54,6 +65,9 @@ func Register(s *mcp.Server, d Deps, sets []string) error {
 		add, ok := toolSets[name]
 		if !ok {
 			return fmt.Errorf("unknown tool set %q", name)
+		}
+		if name == Finance && d.Finance == nil {
+			return errors.New("the finance tools need QuestDB (--questdb)")
 		}
 		add(s, d)
 	}

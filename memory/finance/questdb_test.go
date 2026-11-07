@@ -3,101 +3,47 @@ package finance
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"reflect"
-	"syscall"
 	"testing"
 	"time"
+
+	"roamind.ai/memory/finance/financetest"
 )
 
-// testDB is a QuestDB the tests start in a temporary directory, on free
-// ports, from the bin/questdb-<version> `task questdb-install` downloads,
-// with the schemas applied. It is nil, and the tests skip, when there is
-// none.
+// testDB is a QuestDB the tests start (financetest), with the schemas
+// applied. It is nil, and the tests skip, when bin/ has no QuestDB.
 var testDB *DB
 
 func TestMain(m *testing.M) {
-	stop, err := startQuestDB()
+	addr, stop, err := financetest.Start()
+	if err == nil && addr != "" {
+		err = openTestDB(addr)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "finance tests:", err)
 		os.Exit(1)
 	}
 	code := m.Run()
+	if testDB != nil {
+		testDB.Close()
+	}
 	stop()
 	os.Exit(code)
 }
 
-func startQuestDB() (stop func(), err error) {
-	homes, _ := filepath.Glob("../../bin/questdb-*/bin/questdb.sh")
-	if len(homes) == 0 {
-		return func() {}, nil
-	}
-	dir, err := os.MkdirTemp("", "questdb-test-")
-	if err != nil {
-		return nil, err
-	}
-	ports := make([]string, 2)
-	for i := range ports {
-		if ports[i], err = freePort(); err != nil {
-			return nil, err
-		}
-	}
-	cmd := exec.Command(homes[0], "start", "-n", "-d", dir, "-t", fmt.Sprintf("test-%d", os.Getpid()))
-	cmd.Env = append(os.Environ(),
-		"QDB_HTTP_BIND_TO=127.0.0.1:"+ports[0],
-		"QDB_HTTP_MIN_NET_BIND_TO=127.0.0.1:"+ports[1],
-		"QDB_PG_ENABLED=false",
-		"QDB_LINE_TCP_ENABLED=false",
-		"QDB_LINE_UDP_ENABLED=false",
-		"QDB_TELEMETRY_ENABLED=false",
-	)
-	// The tag lets it run beside another QuestDB. questdb.sh runs java as
-	// its child: stop kills the whole group.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	stop = func() {
-		if testDB != nil {
-			testDB.Close()
-		}
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-		_ = cmd.Wait()
-		os.RemoveAll(dir)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+func openTestDB(addr string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	for {
-		attempt, cancelAttempt := context.WithTimeout(ctx, 2*time.Second)
-		testDB, err = Open(attempt, "127.0.0.1:"+ports[0])
-		cancelAttempt()
-		if err == nil {
-			break
-		}
-		if ctx.Err() != nil {
-			stop()
-			return nil, fmt.Errorf("QuestDB didn't start: %w", err)
-		}
-		time.Sleep(200 * time.Millisecond)
+	var err error
+	if testDB, err = Open(ctx, addr); err != nil {
+		return err
 	}
-	if err := testDB.Init(ctx, "../questdb-schemas"); err != nil {
-		stop()
-		return nil, err
-	}
-	return stop, nil
-}
-
-func freePort() (string, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	schemas, err := financetest.Schemas()
 	if err != nil {
-		return "", err
+		return err
 	}
-	defer l.Close()
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	return port, err
+	return testDB.Init(ctx, schemas)
 }
 
 func db(t *testing.T) *DB {
@@ -219,6 +165,45 @@ func TestTrimDecimal(t *testing.T) {
 	for in, want := range map[string]string{"12.34500000": "12.345", "3.00000000": "3", "100": "100", "": ""} {
 		if got := trimDecimal(in); got != want {
 			t.Errorf("trimDecimal(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestOverScale checks a value with more decimals than its column holds is
+// rounded to the column's scale, which QuestDB would otherwise refuse.
+func TestOverScale(t *testing.T) {
+	d := db(t)
+	ctx := context.Background()
+	day := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+	e := TradeEvent{Date: day, Source: "upload:scale", Line: 1, Account: "a1", ISIN: "US0378331005", Side: SideBuy,
+		Quantity: "0.123456789", Price: "201.1234567", Amount: "24.83", Currency: "USD", Doc: DocStatement}
+	if err := d.AddTradeEvents(ctx, "scale-user", []TradeEvent{e}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.WaitApplied(ctx, "trade_events"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.TradeEvents(ctx, "scale-user", day, day.AddDate(0, 0, 1))
+	if err != nil || len(got) != 1 || got[0].Quantity != "0.12345679" || got[0].Price != "201.123457" {
+		t.Errorf("events = %+v %v", got, err)
+	}
+}
+
+func TestWaitAppliedUnknownTable(t *testing.T) {
+	if err := db(t).WaitApplied(context.Background(), "trade_events", "no_such_table"); err == nil {
+		t.Error("waited on a table QuestDB doesn't have")
+	}
+}
+
+func TestParseDec(t *testing.T) {
+	for _, s := range []string{"1512.35", "-3", "+2", ".5", "7.", " 10 "} {
+		if r, err := ParseDec(s); err != nil || r == nil {
+			t.Errorf("ParseDec(%q) = %v, %v", s, r, err)
+		}
+	}
+	for _, s := range []string{"1e3", "1/2", "0x10", "0b11", "1_000", "1,000", "--1", ".", "NaN", "Inf"} {
+		if _, err := ParseDec(s); err == nil {
+			t.Errorf("ParseDec(%q) accepted", s)
 		}
 	}
 }

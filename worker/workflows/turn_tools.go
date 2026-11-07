@@ -7,7 +7,7 @@ import "roamind.ai/agent/protocol"
 // none, and neither do turns that don't get the workspace tools, whose
 // input is third-party text.
 var TurnTools = map[string][]string{
-	ChatTurnName:         {protocol.ServerInterests, protocol.ServerJobs, protocol.ServerItems},
+	ChatTurnName:         {protocol.ServerInterests, protocol.ServerJobs, protocol.ServerItems, protocol.ServerFinance},
 	LearningExerciseName: {},
 	ResumeImportName:     {},
 }
@@ -26,11 +26,13 @@ func (d Deps) serverTools(task string) []string {
 
 // serves reports whether the worker can serve a tool set: jobs needs the
 // job assistant, which needs memory, where resumes are; items track notes
-// in memory.
+// in memory; finance needs QuestDB.
 func (d Deps) serves(set string) bool {
 	switch set {
 	case protocol.ServerJobs, protocol.ServerItems:
 		return d.Memory != nil
+	case protocol.ServerFinance:
+		return d.Finance != nil
 	}
 	return true
 }
