@@ -2,6 +2,7 @@ package finance
 
 import (
 	"context"
+	"math/big"
 	"time"
 
 	qdb "github.com/questdb/go-questdb-client/v4"
@@ -21,6 +22,15 @@ type Trade struct {
 	TaxWithheld string
 	Currency    string
 	Record      string // the source of the copy kept: the report, or the mail
+}
+
+// amount is the trade's amount, else quantity × average price; nil when
+// unknown.
+func (t Trade) amount() *big.Rat {
+	if a := dec(t.Amount); a != nil {
+		return a
+	}
+	return mul(dec(t.Quantity), dec(t.AvgPrice))
 }
 
 var tradeCols = cols("ts", "user_id", "account", "isin", "side",

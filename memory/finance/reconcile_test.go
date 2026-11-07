@@ -108,3 +108,37 @@ func TestReconcileOrderIndependent(t *testing.T) {
 		}
 	}
 }
+
+func TestReconcileFillsInFromCopies(t *testing.T) {
+	// A tradebook has no charges; the contract note mail of the same fill
+	// has them.
+	mail := ev("mail:me@x/m1", 1, DocContractNote, "50", "1512.35", "ord-7")
+	mail.Fees = "12.5"
+	got := one(t, Reconcile([]TradeEvent{ev("upload:tb", 1, DocTradebook, "50", "1512.35", ""), mail}))
+	if got.Record != "upload:tb" || got.Fees != "12.5" {
+		t.Errorf("trade = %+v; want the tradebook's, with the mail's fees", got)
+	}
+}
+
+func TestReconcileChatTradesAreTrades(t *testing.T) {
+	// Two trades told in chat, alike: each record_trade is its own source,
+	// and both count.
+	got := one(t, Reconcile([]TradeEvent{ev("chat:1", 1, DocChat, "10", "1500", ""), ev("chat:2", 1, DocChat, "10", "1500", "")}))
+	if got.Quantity != "20" {
+		t.Errorf("quantity = %s, want 20", got.Quantity)
+	}
+	// A chat trade the report has counts once.
+	got = one(t, Reconcile([]TradeEvent{ev("chat:1", 1, DocChat, "10", "1500", ""), ev("upload:tb", 1, DocTradebook, "10", "1500", "")}))
+	if got.Quantity != "10" || got.Record != "upload:tb" {
+		t.Errorf("trade = %+v", got)
+	}
+}
+
+func TestReconcileUnknownPrice(t *testing.T) {
+	// A trade told without its price leaves the day's amount unknown, not
+	// counted as 0.
+	got := one(t, Reconcile([]TradeEvent{ev("chat:1", 1, DocChat, "10", "", ""), ev("upload:tb", 1, DocTradebook, "5", "100", "")}))
+	if got.Quantity != "15" || got.Amount != "" || got.AvgPrice != "" {
+		t.Errorf("trade = %+v; want 15 without an amount", got)
+	}
+}

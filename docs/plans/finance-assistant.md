@@ -304,8 +304,16 @@ Each phase is one branch and one PR.
    - **The channel** opens after a turn once the user has an account, rather than on their first finance question.
    - **The tool reconciles at once,** so the turn's answer sees its import; `finance-reconcile` catches up on anyone left dirty.
 3. **Ledger from mail:** the `finance` category, `extract`, PDF text, and `backfill()`.
+   Before mail goes live, the de-dupe needs (found in review of phase 2):
+   - **Partial and aggregated fills:** an order of 50 filled as 30 + 20 in a contract note, and one mail of 50, are one fill. Match each source's unmatched rows of a day-group, summed, against another source's.
+   - **Best, not first, match:** pair copies by exact or ref match first, then by the nearest price, so two near-identical executions don't take each other's copies.
+   - **Typed refs:** keep order and trade numbers apart, and compare a row against all of a fill's refs, not only the kept copy's.
+   - **Versioned sources:** a re-parsed mail that loses or moves rows leaves the old ones in `trade_events`, and their day-groups in `trades`. Write each source with a version and read only its latest, and remove the trades of day-groups that are gone.
+   - **Transfers keeping their dates:** match a `transfer_out` to the `transfer_in` between the user's accounts, and move the lots with their dates and costs, which India's holding period needs.
 4. **Alerts:** `finance-daily`, `finance-weekly`, re-entry and the other rules, news, and subscriptions.
+   Also needed: positions as of a day apart from their pricing, closes as of a day, and splits applied only up to the close's day; one split per ISIN, not per listing; prices quoted in pence (GBX) converted.
 5. **Tax:** residence, the rules per country, `tax_estimate`, and the year-end report.
+   Also needed: each sale's lots, with their dates and costs (`Sale` keeps only the oldest date), and withheld tax in the base currency.
 
 ## Considered
 

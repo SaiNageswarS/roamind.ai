@@ -17,10 +17,10 @@ type Portfolio struct {
 	Stocks []Stock
 	// Totals in the base currency; a nil one couldn't be computed (Missing).
 	Cost, Value, Unrealized, Realized, Dividends *big.Rat
-	// Missing says why figures are missing: no price, or no rate.
+	// Missing says why figures are missing: no close, no rate, no price for
+	// a trade, or no buy for shares sold.
 	Missing   []string
 	positions []*Position
-	stocks    map[string]Instrument
 }
 
 // Stock is one ISIN across the user's accounts.
@@ -61,8 +61,7 @@ type Point struct {
 // today's rates.
 func BuildPortfolio(trades []Trade, actions []CorporateAction, rates *Rates, base string,
 	instruments map[string]Instrument, closes map[string]Price, now time.Time) Portfolio {
-	pf := Portfolio{Base: base, Cost: zero(), Value: zero(), Unrealized: zero(), Realized: zero(), Dividends: zero(),
-		stocks: instruments}
+	pf := Portfolio{Base: base, Cost: zero(), Value: zero(), Unrealized: zero(), Realized: zero(), Dividends: zero()}
 	pf.positions = Ledger(trades, actions, rates, base, now)
 	byISIN := map[string]*Stock{}
 	stock := func(isin string) *Stock {
@@ -83,16 +82,28 @@ func BuildPortfolio(trades []Trade, actions []CorporateAction, rates *Rates, bas
 			s.Quantity.Add(s.Quantity, q)
 			s.Accounts = append(s.Accounts, AccountHolding{Account: p.Account, Quantity: q, AvgCost: div(p.Cost(), q), Currency: p.Currency})
 		}
-		s.Cost = add2(s.Cost, p.CostBase(), &missing, "rate for "+p.Currency)
+		// Why a figure in the base currency is missing: its own figure is,
+		// or else the rate.
+		why := func(own *big.Rat) string {
+			if own == nil {
+				return "price for a trade of " + p.ISIN + " in " + p.Account
+			}
+			return "rate for " + p.Currency
+		}
+		s.Cost = add2(s.Cost, p.CostBase(), &missing, why(p.Cost()))
 		for _, sale := range p.Sales {
-			s.Realized = add2(s.Realized, sale.GainBase, &missing, "rate for "+p.Currency)
+			s.Realized = add2(s.Realized, sale.GainBase, &missing, why(sale.Gain))
 		}
 		for _, in := range p.Income {
-			s.Dividends = add2(s.Dividends, in.AmountBase, &missing, "rate for "+p.Currency)
+			s.Dividends = add2(s.Dividends, in.AmountBase, &missing, why(in.Amount))
+		}
+		if p.Oversold != nil {
+			// A buy is missing: realized gains leave out these shares.
+			missing["buy for "+DecText(p.Oversold, 8)+" "+p.ISIN+" sold in "+p.Account] = true
 		}
 	}
 	for _, t := range trades {
-		if t.Side == SideDividend {
+		if t.Side == SideDividend || t.Date.After(now) {
 			continue
 		}
 		s := stock(t.ISIN)

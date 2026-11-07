@@ -26,7 +26,7 @@ type Position struct {
 type Lot struct {
 	Date     time.Time
 	Quantity *big.Rat
-	Cost     *big.Rat // price × quantity + fees
+	Cost     *big.Rat // price × quantity + fees; nil when its price is unknown
 	CostBase *big.Rat
 }
 
@@ -34,9 +34,9 @@ type Lot struct {
 type Sale struct {
 	Date     time.Time
 	Quantity *big.Rat
-	Proceeds *big.Rat // price × quantity − fees
-	Cost     *big.Rat
-	Gain     *big.Rat
+	Proceeds *big.Rat  // price × quantity − fees; nil when its price is unknown
+	Cost     *big.Rat  // nil when a lot's is
+	Gain     *big.Rat  // nil when either is
 	GainBase *big.Rat  // proceeds at the sale's rate, less cost at each lot's
 	Acquired time.Time // the oldest lot sold
 }
@@ -58,23 +58,21 @@ func (p *Position) Quantity() *big.Rat {
 	return q
 }
 
-// Cost is what the shares held cost, fees included.
+// Cost is what the shares held cost, fees included; nil when a lot's cost
+// is unknown.
 func (p *Position) Cost() *big.Rat {
 	c := zero()
 	for _, l := range p.Lots {
-		c.Add(c, l.Cost)
+		c = sum(c, l.Cost)
 	}
 	return c
 }
 
-// CostBase is Cost in the base currency, nil when a rate was missing.
+// CostBase is Cost in the base currency, nil when it or a rate is missing.
 func (p *Position) CostBase() *big.Rat {
 	c := zero()
 	for _, l := range p.Lots {
-		if l.CostBase == nil {
-			return nil
-		}
-		c.Add(c, l.CostBase)
+		c = sum(c, l.CostBase)
 	}
 	return c
 }
@@ -102,7 +100,7 @@ func Ledger(trades []Trade, actions []CorporateAction, rates *Rates, base string
 	}
 	splits := map[string][]CorporateAction{}
 	for _, a := range actions {
-		if (a.Kind == ActionSplit || a.Kind == ActionBonus) && dec(a.Factor) != nil && !a.Date.After(until) {
+		if f := dec(a.Factor); (a.Kind == ActionSplit || a.Kind == ActionBonus) && f != nil && f.Sign() > 0 && !a.Date.After(until) {
 			splits[a.ISIN] = append(splits[a.ISIN], a)
 		}
 	}
@@ -133,20 +131,13 @@ func Ledger(trades []Trade, actions []CorporateAction, rates *Rates, base string
 		}
 		for _, t := range ts {
 			applyUpTo(t.Date, true)
-			qty, amount, fees := dec(t.Quantity), gross(TradeEvent{Amount: t.Amount, Quantity: t.Quantity, Price: t.AvgPrice}), dec(t.Fees)
+			qty, amount, fees := dec(t.Quantity), t.amount(), orZero(dec(t.Fees))
 			switch {
 			case acquires(t.Side) && qty != nil && qty.Sign() > 0:
-				cost := add(amount, fees)
-				if cost == nil {
-					cost = zero()
-				}
+				cost := sum(amount, fees)
 				p.Lots = append(p.Lots, Lot{Date: t.Date, Quantity: qty, Cost: cost, CostBase: rates.Convert(cost, t.Currency, base, t.Date)})
 			case disposes(t.Side) && qty != nil && qty.Sign() > 0:
-				proceeds := sub(amount, fees)
-				if proceeds == nil {
-					proceeds = zero()
-				}
-				p.dispose(t, qty, proceeds, rates, base)
+				p.dispose(t, qty, diff(amount, fees), rates, base)
 			case t.Side == SideDividend:
 				p.Income = append(p.Income, Income{Date: t.Date, Amount: amount, AmountBase: rates.Convert(amount, t.Currency, base, t.Date),
 					TaxWithheld: dec(t.TaxWithheld)})
@@ -185,19 +176,11 @@ func (p *Position) dispose(t Trade, qty, proceeds *big.Rat, rates *Rates, base s
 		}
 		share := div(take, l.Quantity)
 		part, partBase := mul(l.Cost, share), mul(l.CostBase, share)
-		cost.Add(cost, part)
-		if partBase == nil || costBase == nil {
-			costBase = nil
-		} else {
-			costBase.Add(costBase, partBase)
-		}
+		cost, costBase = sum(cost, part), sum(costBase, partBase)
 		if take == l.Quantity {
 			p.Lots = p.Lots[1:]
 		} else {
-			l.Quantity, l.Cost, l.CostBase = sub(l.Quantity, take), sub(l.Cost, part), sub(l.CostBase, partBase)
-			if partBase == nil {
-				l.CostBase = nil
-			}
+			l.Quantity, l.Cost, l.CostBase = sub(l.Quantity, take), diff(l.Cost, part), diff(l.CostBase, partBase)
 		}
 		left = sub(left, take)
 	}
@@ -208,11 +191,14 @@ func (p *Position) dispose(t Trade, qty, proceeds *big.Rat, rates *Rates, base s
 		return
 	}
 	sold := sub(qty, left)
+	if sold.Sign() == 0 {
+		return
+	}
 	if left.Sign() > 0 {
 		// Only the shares the lots held count; the rest is oversold.
 		proceeds = mul(proceeds, div(sold, qty))
 	}
-	s := Sale{Date: t.Date, Quantity: sold, Proceeds: proceeds, Cost: cost, Gain: sub(proceeds, cost), Acquired: acquired}
+	s := Sale{Date: t.Date, Quantity: sold, Proceeds: proceeds, Cost: cost, Gain: diff(proceeds, cost), Acquired: acquired}
 	if pb := rates.Convert(proceeds, t.Currency, base, t.Date); pb != nil && costBase != nil {
 		s.GainBase = sub(pb, costBase)
 	}

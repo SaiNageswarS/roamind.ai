@@ -168,3 +168,42 @@ func TestTrimDecimal(t *testing.T) {
 		}
 	}
 }
+
+// TestOverScale checks a value with more decimals than its column holds is
+// rounded to the column's scale, which QuestDB would otherwise refuse.
+func TestOverScale(t *testing.T) {
+	d := db(t)
+	ctx := context.Background()
+	day := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+	e := TradeEvent{Date: day, Source: "upload:scale", Line: 1, Account: "a1", ISIN: "US0378331005", Side: SideBuy,
+		Quantity: "0.123456789", Price: "201.1234567", Amount: "24.83", Currency: "USD", Doc: DocStatement}
+	if err := d.AddTradeEvents(ctx, "scale-user", []TradeEvent{e}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.WaitApplied(ctx, "trade_events"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.TradeEvents(ctx, "scale-user", day, day.AddDate(0, 0, 1))
+	if err != nil || len(got) != 1 || got[0].Quantity != "0.12345679" || got[0].Price != "201.123457" {
+		t.Errorf("events = %+v %v", got, err)
+	}
+}
+
+func TestWaitAppliedUnknownTable(t *testing.T) {
+	if err := db(t).WaitApplied(context.Background(), "trade_events", "no_such_table"); err == nil {
+		t.Error("waited on a table QuestDB doesn't have")
+	}
+}
+
+func TestParseDec(t *testing.T) {
+	for _, s := range []string{"1512.35", "-3", "+2", ".5", "7.", " 10 "} {
+		if r, err := ParseDec(s); err != nil || r == nil {
+			t.Errorf("ParseDec(%q) = %v, %v", s, r, err)
+		}
+	}
+	for _, s := range []string{"1e3", "1/2", "0x10", "0b11", "1_000", "1,000", "--1", ".", "NaN", "Inf"} {
+		if _, err := ParseDec(s); err == nil {
+			t.Errorf("ParseDec(%q) accepted", s)
+		}
+	}
+}

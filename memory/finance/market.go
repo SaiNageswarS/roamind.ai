@@ -2,16 +2,11 @@ package finance
 
 import (
 	"context"
-	"math/big"
 	"strings"
 	"time"
 
 	qdb "github.com/questdb/go-questdb-client/v4"
 )
-
-// epoch is the fixed timestamp of reference rows (instruments, listings),
-// which makes their other keys their key.
-var epoch = time.Unix(0, 0).UTC()
 
 // Instrument is a stock, ETF or fund, by ISIN (01_market.sql).
 type Instrument struct {
@@ -153,25 +148,6 @@ func (d *DB) LatestCloses(ctx context.Context) (map[string]Price, error) {
 	return out, err
 }
 
-// PriceOn returns the close of isin on day, or its last close before it,
-// from any listing; ok is false when there is none within a week.
-func (d *DB) PriceOn(ctx context.Context, isin string, on time.Time) (Price, bool, error) {
-	var p Price
-	found := false
-	err := d.query(ctx, `SELECT ts, mic, close::STRING FROM prices WHERE isin = $1 AND ts <= $2 AND ts > $3 ORDER BY ts DESC LIMIT 1`,
-		func(b *qdb.QwpBinds) {
-			text(b, 0, isin)
-			timestamp(b, 1, day(on))
-			timestamp(b, 2, day(on).AddDate(0, 0, -7))
-		},
-		func(b *qdb.QwpColumnBatch, r int) error {
-			p = Price{Date: timeAt(b, 0, r), ISIN: isin, MIC: b.String(1, r), Close: trimDecimal(b.String(2, r))}
-			found = true
-			return nil
-		})
-	return p, found, err
-}
-
 // FX is a day's exchange rate: one unit of Pair's first currency in its
 // second, e.g. EURUSD 1.08.
 type FX struct {
@@ -208,75 +184,13 @@ func (d *DB) LastFXDay(ctx context.Context, source string) (time.Time, error) {
 
 // Rates returns the ECB's euro rates, for converting between currencies.
 func (d *DB) Rates(ctx context.Context) (*Rates, error) {
-	rs := &Rates{byCurrency: map[string][]dayRate{}}
-	err := d.query(ctx, `SELECT ts, pair, rate::STRING FROM fx WHERE source = 'ecb' ORDER BY ts`, nil,
+	var fx []FX
+	err := d.query(ctx, `SELECT ts, pair, rate::STRING FROM fx WHERE source = 'ecb'`, nil,
 		func(b *qdb.QwpColumnBatch, r int) error {
-			pair := b.String(1, r)
-			if !strings.HasPrefix(pair, "EUR") {
-				return nil
-			}
-			if v := dec(b.String(2, r)); v != nil {
-				rs.byCurrency[pair[3:]] = append(rs.byCurrency[pair[3:]], dayRate{timeAt(b, 0, r), v})
-			}
+			fx = append(fx, FX{Date: timeAt(b, 0, r), Pair: b.String(1, r), Source: SourceECB, Rate: b.String(2, r)})
 			return nil
 		})
-	return rs, err
-}
-
-// Rates converts between currencies through the euro, at a day's ECB rate.
-type Rates struct {
-	byCurrency map[string][]dayRate // by date
-}
-
-type dayRate struct {
-	day  time.Time
-	rate *big.Rat // one euro in the currency
-}
-
-// NewRates is rates from EURxxx pairs, for tests and callers with their
-// own rates.
-func NewRates(rates []FX) *Rates {
-	rs := &Rates{byCurrency: map[string][]dayRate{}}
-	for _, r := range rates {
-		if v := dec(r.Rate); v != nil && strings.HasPrefix(r.Pair, "EUR") {
-			rs.byCurrency[r.Pair[3:]] = append(rs.byCurrency[r.Pair[3:]], dayRate{day(r.Date), v})
-		}
-	}
-	return rs
-}
-
-// euro is one euro in currency on day: the rate of that day, or the last
-// one within ten days before it (weekends, holidays).
-func (rs *Rates) euro(currency string, on time.Time) *big.Rat {
-	if currency == "EUR" {
-		return big.NewRat(1, 1)
-	}
-	if rs == nil {
-		return nil
-	}
-	list := rs.byCurrency[currency]
-	on = day(on)
-	for i := len(list) - 1; i >= 0; i-- {
-		if !list[i].day.After(on) {
-			if on.Sub(list[i].day) > 10*24*time.Hour {
-				return nil
-			}
-			return list[i].rate
-		}
-	}
-	return nil
-}
-
-// Convert is amount in from as to, at day's rates; nil when a rate is
-// missing.
-func (rs *Rates) Convert(amount *big.Rat, from, to string, on time.Time) *big.Rat {
-	if amount == nil {
-		return nil
-	}
-	if from == to {
-		return new(big.Rat).Set(amount)
-	}
-	return mul(div(amount, rs.euro(from, on)), rs.euro(to, on))
+	return NewRates(fx), err
 }
 
 // CorporateAction is a split, bonus or dividend of an instrument.

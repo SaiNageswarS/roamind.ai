@@ -171,3 +171,46 @@ func TestProfit(t *testing.T) {
 	}
 
 }
+
+func TestLedgerUnknownCost(t *testing.T) {
+	ps := Ledger([]Trade{
+		{Date: d("2026-01-05"), Account: "a1", ISIN: "US0378331005", Side: SideBuy, Quantity: "10", Currency: "USD"},
+		tr("2026-01-06", "a1", SideBuy, "10", "100", "", "USD"),
+		tr("2026-06-10", "a1", SideSell, "5", "150", "", "USD"),
+	}, nil, rates, "EUR", d("2026-12-31"))
+	p := ps[0]
+	is(t, "held", p.Quantity(), "15")
+	if p.Cost() != nil || p.Sales[0].Cost != nil || p.Sales[0].Gain != nil {
+		t.Errorf("a buy without a price gave cost %v, sale %+v", p.Cost(), p.Sales[0])
+	}
+	is(t, "proceeds", p.Sales[0].Proceeds, "750")
+}
+
+func TestLedgerBadSplitFactor(t *testing.T) {
+	zero := CorporateAction{Date: d("2026-03-01"), ISIN: "US0378331005", Kind: ActionSplit, Factor: "0"}
+	ps := Ledger([]Trade{
+		tr("2026-01-05", "a1", SideBuy, "10", "100", "", "USD"),
+		tr("2026-06-10", "a1", SideSell, "5", "150", "", "USD"),
+	}, []CorporateAction{zero}, rates, "EUR", d("2026-12-31"))
+	is(t, "held", ps[0].Quantity(), "5")
+}
+
+func TestOversoldIsMissing(t *testing.T) {
+	trades := []Trade{tr("2026-06-10", "a1", SideSell, "5", "150", "", "USD")}
+	pf := BuildPortfolio(trades, nil, rates, "EUR", nil, nil, d("2026-12-31"))
+	if len(pf.positions[0].Sales) != 0 {
+		t.Errorf("a sale of nothing: %+v", pf.positions[0].Sales)
+	}
+	if len(pf.Missing) != 1 || pf.Missing[0] != "no buy for 5 US0378331005 sold in a1" {
+		t.Errorf("missing = %v", pf.Missing)
+	}
+}
+
+func TestNewRatesUnsorted(t *testing.T) {
+	rs := NewRates([]FX{{Date: d("2026-06-01"), Pair: "EURUSD", Rate: "1.10"}, {Date: d("2026-01-02"), Pair: "EURUSD", Rate: "1.25"}})
+	is(t, "June", rs.Convert(dec("110"), "USD", "EUR", d("2026-06-03")), "100")
+	is(t, "January", rs.Convert(dec("125"), "USD", "EUR", d("2026-01-02")), "100")
+	if rs.Convert(dec("1"), "USD", "EUR", d("2026-01-01")) != nil {
+		t.Error("a rate from after the day was used")
+	}
+}
