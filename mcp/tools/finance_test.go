@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -205,6 +206,29 @@ func TestFinance(t *testing.T) {
 	}
 	if msg, _ := call("list_mail_senders", nil); !strings.Contains(msg, `{"domain":"broker.example","trusted":true}`) {
 		t.Errorf("senders: %s", msg)
+	}
+
+	// A row without an ISIN gets it from the ledger's names; one it can't
+	// find is refused until the user says which it is (name_stock).
+	trade := func(by map[string]any) (string, bool) {
+		args := map[string]any{"account": "a1", "date": "2026-11-04", "side": "buy", "quantity": "1", "price": "10", "currency": "INR"}
+		maps.Copy(args, by)
+		return call("record_trade", args)
+	}
+	if msg, isErr := trade(map[string]any{"name": "INFOSYS LTD"}); isErr || !strings.Contains(msg, "recorded buy 1 INFOSYS LTD") {
+		t.Errorf("a trade by name: %s", msg)
+	}
+	if msg, isErr := trade(map[string]any{"symbol": "ZZTEST", "exchange": "NSE"}); !isErr || !strings.Contains(msg, `no instrument found for \"ZZTEST\"`) {
+		t.Errorf("an unknown symbol: %s", msg)
+	}
+	if msg, isErr := call("name_stock", map[string]any{"symbol": "ZZTEST", "isin": "INE009A01022"}); !isErr || !strings.Contains(msg, "not a valid ISIN") {
+		t.Errorf("naming a bad ISIN: %s", msg)
+	}
+	if msg, isErr := call("name_stock", map[string]any{"symbol": "zztest", "isin": "INE009A01021"}); isErr || !strings.Contains(msg, "is now Infosys") {
+		t.Errorf("name_stock: %s", msg)
+	}
+	if msg, isErr := trade(map[string]any{"symbol": "ZZTEST", "exchange": "NSE"}); isErr {
+		t.Errorf("a named symbol: %s", msg)
 	}
 
 	// Another user sees none of it.

@@ -151,10 +151,16 @@ holdings, profit and dividends, in one ledger across accounts and markets.
      pdftotext is there too. Print exactly the JSON import_report
      describes: every trade and dividend row, the amount before fees and
      the fees apart, and the report's own printed totals read from it.
+     Give each row's ISIN only when the report prints it; otherwise its
+     symbol and exchange, and its name in full, as printed: the ISIN is
+     looked up. Never write an ISIN from memory.
   3. Call import_report with the report, the parser and its JSON. If it's
      refused, the parser is wrong (often a changed format): fix the
      parser, run it again and retry. Never edit the JSON by hand or drop
-     rows to make it pass.
+     rows to make it pass. When it's refused because a stock or fund
+     fits more than one instrument, or none, show them the candidates,
+     ask which it is, call name_stock with their answer and retry; never
+     pick for them.
   A password-protected PDF needs its password from them: decrypt it once
   into $TMPDIR with qpdf, parse that copy, import the original, and never
   save the password.

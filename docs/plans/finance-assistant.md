@@ -210,7 +210,7 @@ This is how a contract-note mail and the tradebook row for the same order count 
 - **ECB** euro reference rates, and the SBI TT rate where Indian rules name it.
 - **AMFI** NAVs, for mutual funds.
 - **OpenFIGI**, to resolve a new ISIN to its listings.
-- Requests go through `connectors/safehttp`. Only tickers and ISINs are sent, nothing about a user.
+- Requests go through `connectors/safehttp`. Only tickers, ISINs and instrument names are sent, nothing about a user.
 
 ### 8. Alerts, summary, re-entry
 - **`finance-daily`:**
@@ -288,7 +288,7 @@ This is how a contract-note mail and the tradebook row for the same order count 
 - `README.md`: a feature line, and QuestDB on the dashboards list.
 - **Privacy:**
   - Holdings, trades and subscriptions stay in `data/questdb` and `data/roamind.db`.
-  - Market-data providers see only tickers and ISINs.
+  - Market-data providers see only tickers, ISINs and instrument names.
   - Uploaded reports stay in the user's workspace.
   - Figures in a post go to Claude in that turn.
   - The operator can read every user's finances in the console.
@@ -308,6 +308,7 @@ Each phase is one branch and one PR.
    - **Trusted senders:** mail goes to the ledger only from the domains each user trusts (`finance_senders`, set in chat), signed by that domain as Gmail's `Authentication-Results` says. No broker is named in the repo. Finance mail from other domains is listed for the user to decide.
    - **No `relate` for broker mail:** `check` routes trusted mail to `extract` and `save`. Rows that fail the checks are named in the finance channel, not sent to `relate`. Finance mail from untrusted domains isn't related either.
    - **ISINs:** a mail that gives a symbol and no ISIN gets one from the listings, else EODHD's search; the model never writes an ISIN the mail doesn't show.
+   - **ISIN lookup:** reports needn't print ISINs either: a parser gives the ticker and exchange or the name, and `finance.Resolver` looks the ISIN up (the user's names, the ledger, EODHD, AMFI). An ambiguous name is the user's to pick (`name_stock`), remembered per user.
    - **Backfill** is `backfill(search, after)` in the script: the user's own Gmail search for their broker's mail.
    - Everything below was built too.
    Before mail goes live, the de-dupe needs (found in review of phase 2):

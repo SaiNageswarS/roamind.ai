@@ -190,33 +190,48 @@ type Listing struct {
 
 // Search returns the listings of an ISIN.
 func (c *Client) Search(ctx context.Context, isin string) ([]Listing, error) {
-	if c.EODHDKey == "" {
-		return nil, ErrNoKey
-	}
-	body, err := c.get(ctx, c.EODHD+"/api/search/"+url.PathEscape(isin)+"?fmt=json&api_token="+url.QueryEscape(c.EODHDKey))
-	if err != nil {
-		return nil, err
-	}
-	var out []Listing
-	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, fmt.Errorf("market: EODHD search: %w", err)
-	}
+	out, err := c.search(ctx, isin)
 	var mine []Listing
 	for _, l := range out {
 		if l.ISIN == "" || strings.EqualFold(l.ISIN, isin) {
 			mine = append(mine, l)
 		}
 	}
-	return mine, nil
+	return mine, err
 }
 
 // SearchSymbol returns the listings with ticker symbol that name their
-// ISIN: what a broker's mail that gives a symbol and no ISIN is about.
+// ISIN: what a report or mail that gives a symbol and no ISIN is about.
 func (c *Client) SearchSymbol(ctx context.Context, symbol string) ([]Listing, error) {
+	out, err := c.search(ctx, symbol)
+	var mine []Listing
+	for _, l := range out {
+		if l.ISIN != "" && strings.EqualFold(l.Code, symbol) {
+			mine = append(mine, l)
+		}
+	}
+	return mine, err
+}
+
+// SearchName returns the listings EODHD finds for a company's or fund's
+// name that name their ISIN, best matches first.
+func (c *Client) SearchName(ctx context.Context, name string) ([]Listing, error) {
+	out, err := c.search(ctx, name)
+	var mine []Listing
+	for _, l := range out {
+		if l.ISIN != "" {
+			mine = append(mine, l)
+		}
+	}
+	return mine, err
+}
+
+// search is EODHD's search for q: a ticker, ISIN or name.
+func (c *Client) search(ctx context.Context, q string) ([]Listing, error) {
 	if c.EODHDKey == "" {
 		return nil, ErrNoKey
 	}
-	body, err := c.get(ctx, c.EODHD+"/api/search/"+url.PathEscape(symbol)+"?fmt=json&api_token="+url.QueryEscape(c.EODHDKey))
+	body, err := c.get(ctx, c.EODHD+"/api/search/"+url.PathEscape(q)+"?fmt=json&limit=50&api_token="+url.QueryEscape(c.EODHDKey))
 	if err != nil {
 		return nil, err
 	}
@@ -224,13 +239,7 @@ func (c *Client) SearchSymbol(ctx context.Context, symbol string) ([]Listing, er
 	if err := json.Unmarshal(body, &out); err != nil {
 		return nil, fmt.Errorf("market: EODHD search: %w", err)
 	}
-	var mine []Listing
-	for _, l := range out {
-		if l.ISIN != "" && strings.EqualFold(l.Code, symbol) {
-			mine = append(mine, l)
-		}
-	}
-	return mine, nil
+	return out, nil
 }
 
 // Bar is a day's prices, unadjusted.

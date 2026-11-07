@@ -1,6 +1,6 @@
 module roamind.ai/memory
 
-go 1.26.3
+go 1.26.7
 
 require (
 	github.com/questdb/go-questdb-client/v4 v4.3.1
@@ -24,4 +24,7 @@ require (
 	modernc.org/libc v1.77.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
+	roamind.ai/connectors v0.0.0
 )
+
+replace roamind.ai/connectors => ../connectors
