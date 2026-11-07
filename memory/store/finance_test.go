@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestFinAccounts(t *testing.T) {
@@ -96,5 +97,46 @@ func TestBaseCurrency(t *testing.T) {
 	}
 	if c, _ := s.BaseCurrency(ctx, "a"); c != "INR" {
 		t.Errorf("set = %s", c)
+	}
+}
+
+func TestFinanceSenders(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	jobsUsers(t, s, "a", "b")
+	if err := s.SeenFinanceSender(ctx, "a", "Notices.Broker.Example", "Trade confirmation", time.Unix(100, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := s.TrustedFinanceDomain(ctx, "a", "notices.broker.example"); d != "" {
+		t.Errorf("a sender only seen is trusted: %q", d)
+	}
+	if err := s.TrustFinanceSender(ctx, "a", "broker.example", true); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := s.TrustedFinanceDomain(ctx, "a", "notices.broker.example"); d != "broker.example" {
+		t.Errorf("a subdomain of a trusted domain: %q", d)
+	}
+	for _, other := range []string{"broker.example.evil", "evilbroker.example", "example"} {
+		if d, _ := s.TrustedFinanceDomain(ctx, "a", other); d != "" {
+			t.Errorf("%s is trusted as %q", other, d)
+		}
+	}
+	if d, _ := s.TrustedFinanceDomain(ctx, "b", "broker.example"); d != "" {
+		t.Error("b trusts a's sender")
+	}
+	// Seeing it again keeps it trusted.
+	if err := s.SeenFinanceSender(ctx, "a", "broker.example", "Dividend", time.Unix(200, 0)); err != nil {
+		t.Fatal(err)
+	}
+	fs, err := s.FinanceSenders(ctx, "a")
+	if err != nil || len(fs) != 2 || fs[0].Domain != "broker.example" || !fs[0].Trusted || fs[0].Subject != "Dividend" ||
+		fs[1].Domain != "notices.broker.example" || fs[1].Trusted {
+		t.Errorf("senders = %+v %v", fs, err)
+	}
+	if err := s.TrustFinanceSender(ctx, "a", "broker.example", false); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := s.TrustedFinanceDomain(ctx, "a", "broker.example"); d != "" {
+		t.Error("still trusted after untrusting")
 	}
 }

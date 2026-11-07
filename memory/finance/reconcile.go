@@ -80,41 +80,224 @@ func docOrder(doc string) int {
 	return 5
 }
 
-// fill is one execution, maybe reported by several sources.
+// fill is one execution, maybe reported by several sources; or, when
+// copies list it in parts, the parts one source listed.
 type fill struct {
 	TradeEvent
 	sources map[string]bool
+	refs    map[string]bool // every copy's order and trade numbers
 }
 
-// mergeFills turns the events of one day-group into its fills: a row that
-// is the same fill as one from another source is a copy of it, and the
-// copy from the better document is kept (docRank), with what it lacks
-// (fees, tax, the ref, the price or amount) taken from the other copies in
-// that order. Rows of one source are never copies of each other: a
-// report's two rows are two executions. Nor are two chat rows: each
-// record_trade is its own source, and two are two trades.
+func newFill(e TradeEvent) fill {
+	f := fill{TradeEvent: e, sources: map[string]bool{e.Source: true}, refs: map[string]bool{}}
+	for _, r := range refsOf(e) {
+		f.refs[r] = true
+	}
+	return f
+}
+
+// refsOf is a row's order and trade numbers.
+func refsOf(e TradeEvent) []string { return strings.Fields(e.Ref) }
+
+// mergeFills turns the events of one day-group into its fills, counting
+// each execution once however many sources report it. Sources are taken
+// from the most trusted (docRank), each one's rows matched against the
+// fills so far (matchSource), so the copy kept is the most trusted one,
+// with what it lacks (fees, tax, the ref, the price or amount) taken from
+// the other copies in that order. Rows of one source are never copies of
+// each other: a report's two rows are two executions. Nor are two chat
+// rows: each record_trade is its own source, and two are two trades.
 func mergeFills(events []TradeEvent) []fill {
-	events = slices.Clone(events)
-	slices.SortFunc(events, func(a, b TradeEvent) int {
-		return cmp.Or(cmp.Compare(docRank(a), docRank(b)), strings.Compare(a.Source, b.Source), cmp.Compare(a.Line, b.Line))
-	})
-	var fills []fill
+	bySource := map[string][]TradeEvent{}
+	rank := map[string]int{}
 	for _, e := range events {
-		copied := false
+		if r, ok := rank[e.Source]; !ok || docRank(e) < r {
+			rank[e.Source] = docRank(e)
+		}
+		bySource[e.Source] = append(bySource[e.Source], e)
+	}
+	sources := make([]string, 0, len(bySource))
+	for s := range bySource {
+		sources = append(sources, s)
+	}
+	slices.SortFunc(sources, func(a, b string) int { return cmp.Or(cmp.Compare(rank[a], rank[b]), strings.Compare(a, b)) })
+	var fills []fill
+	for _, src := range sources {
+		rows := bySource[src]
+		slices.SortStableFunc(rows, func(a, b TradeEvent) int { return cmp.Compare(a.Line, b.Line) })
+		fills = matchSource(fills, src, rows)
+	}
+	return fills
+}
+
+// matchSource adds one source's rows to fills, as copies where they are:
+//  1. rows and fills that share an order or trade number are copies of
+//     each other, one to one or as parts (an order filled in two
+//     executions, and its one confirmation);
+//  2. a row and a fill with the same quantity and a price within 0.1%
+//     are copies, the nearest prices paired first;
+//  3. what is left on both sides, when it adds up to the same quantity
+//     and amount, is one set of executions listed in parts;
+//
+// and the rest are new fills. Rows with order or trade numbers none of a
+// fill's are never copies of it.
+func matchSource(fills []fill, src string, rows []TradeEvent) []fill {
+	chat := family(src) == familyChat
+	open := make([]bool, len(fills)) // fills this source may still copy
+	for i := range fills {
+		open[i] = !fills[i].sources[src] && !(chat && fills[i].chatOnly())
+	}
+	left := make([]bool, len(rows))
+	for i := range rows {
+		left[i] = true
+	}
+
+	// 1. By order and trade numbers.
+	shared := make([][]int, len(rows)) // the fills each row shares one with
+	byFill := map[int][]TradeEvent{}   // the rows that share one with each fill
+	for r, e := range rows {
 		for i := range fills {
-			f := &fills[i]
-			if !f.sources[e.Source] && !(family(e.Source) == familyChat && f.chatOnly()) && sameFill(e, f.TradeEvent) {
-				f.sources[e.Source] = true
-				f.fillIn(e)
-				copied = true
-				break
+			if open[i] && sharesRef(fills[i], e) {
+				shared[r] = append(shared[r], i)
+				byFill[i] = append(byFill[i], e)
 			}
 		}
-		if !copied {
-			fills = append(fills, fill{e, map[string]bool{e.Source: true}})
+	}
+	for r, e := range rows {
+		for _, i := range shared[r] {
+			left[r] = false
+			fills[i].copyOf(e, len(shared[r]) == 1 && len(byFill[i]) == 1)
+		}
+	}
+	for i, rs := range byFill {
+		open[i] = false
+		if len(rs) > 1 {
+			addFees(fills, []int{i}, rs)
+		}
+	}
+
+	// 2. One to one, by quantity and the nearest price.
+	type pair struct {
+		r, i int
+		dist *big.Rat
+	}
+	var pairs []pair
+	for r, e := range rows {
+		if !left[r] {
+			continue
+		}
+		for i := range fills {
+			if open[i] && !refsDiffer(fills[i], e) && sameFill(e, fills[i].TradeEvent) {
+				pairs = append(pairs, pair{r, i, distance(e, fills[i].TradeEvent)})
+			}
+		}
+	}
+	slices.SortStableFunc(pairs, func(a, b pair) int { return cmp.Or(a.dist.Cmp(b.dist), cmp.Compare(a.i, b.i), cmp.Compare(a.r, b.r)) })
+	for _, p := range pairs {
+		if left[p.r] && open[p.i] {
+			left[p.r], open[p.i] = false, false
+			fills[p.i].copyOf(rows[p.r], true)
+		}
+	}
+
+	// 3. What's left, as one set listed in parts.
+	var restRows []TradeEvent
+	var restFills []int
+	for r, e := range rows {
+		if left[r] {
+			restRows = append(restRows, e)
+		}
+	}
+	for i := range fills {
+		if open[i] {
+			restFills = append(restFills, i)
+		}
+	}
+	if len(restRows) > 0 && len(restFills) > 0 && len(restRows)+len(restFills) > 2 && sameTotal(restRows, fills, restFills) {
+		for _, e := range restRows {
+			for _, i := range restFills {
+				fills[i].copyOf(e, false)
+			}
+		}
+		addFees(fills, restFills, restRows)
+		return fills
+	}
+	for r, e := range rows {
+		if left[r] {
+			fills = append(fills, newFill(e))
 		}
 	}
 	return fills
+}
+
+// copyOf records c as a copy of f; one is true when c is a copy of f
+// alone, not of it with others, so f can take what it lacks from it.
+func (f *fill) copyOf(c TradeEvent, one bool) {
+	f.sources[c.Source] = true
+	for _, r := range refsOf(c) {
+		f.refs[r] = true
+	}
+	if one {
+		f.fillIn(c)
+	}
+}
+
+// sharesRef reports whether e has an order or trade number of f's.
+func sharesRef(f fill, e TradeEvent) bool {
+	for _, r := range refsOf(e) {
+		if f.refs[r] {
+			return true
+		}
+	}
+	return false
+}
+
+// refsDiffer reports whether f and e both have order or trade numbers and
+// share none: two orders.
+func refsDiffer(f fill, e TradeEvent) bool {
+	return len(f.refs) > 0 && len(refsOf(e)) > 0 && !sharesRef(f, e)
+}
+
+// distance is how far apart two copies' prices (else amounts) are, as a
+// fraction.
+func distance(a, b TradeEvent) *big.Rat {
+	x, y := dec(a.Price), dec(b.Price)
+	if x == nil || y == nil {
+		x, y = gross(a), gross(b)
+	}
+	if d := div(new(big.Rat).Abs(orZero(diff(x, y))), y); d != nil {
+		return d
+	}
+	return zero()
+}
+
+// sameTotal reports whether rows and the fills at is add up to the same
+// quantity, and an amount within 0.1%.
+func sameTotal(rows []TradeEvent, fills []fill, is []int) bool {
+	var qr, qf, ar, af *big.Rat = zero(), zero(), zero(), zero()
+	for _, e := range rows {
+		qr, ar = sum(qr, dec(e.Quantity)), sum(ar, gross(e))
+	}
+	for _, i := range is {
+		qf, af = sum(qf, dec(fills[i].Quantity)), sum(af, gross(fills[i].TradeEvent))
+	}
+	return eq(qr, qf) && qr.Sign() > 0 && near(ar, af, copyTolerance)
+}
+
+// addFees gives the fills at is the rows' fees and tax when none of them
+// has any: a contract note's charges for executions a tradebook lists
+// without them. They go on the first fill, as one charge of the set.
+func addFees(fills []fill, is []int, rows []TradeEvent) {
+	var fees, tax *big.Rat
+	for _, e := range rows {
+		fees, tax = add(fees, dec(e.Fees)), add(tax, dec(e.TaxWithheld))
+	}
+	for _, i := range is {
+		if fills[i].Fees != "" || fills[i].TaxWithheld != "" {
+			return
+		}
+	}
+	fills[is[0]].Fees, fills[is[0]].TaxWithheld = DecText(fees, 8), DecText(tax, 8)
 }
 
 // chatOnly reports whether every copy of f came from chat.
@@ -133,7 +316,7 @@ func (f *fill) fillIn(c TradeEvent) {
 		to   *string
 		from string
 	}{
-		{&f.Fees, c.Fees}, {&f.TaxWithheld, c.TaxWithheld}, {&f.Ref, c.Ref}, {&f.FXRate, c.FXRate},
+		{&f.Fees, c.Fees}, {&f.TaxWithheld, c.TaxWithheld}, {&f.FXRate, c.FXRate},
 		{&f.Price, c.Price}, {&f.Amount, c.Amount},
 	} {
 		if *p.to == "" {
@@ -142,14 +325,11 @@ func (f *fill) fillIn(c TradeEvent) {
 	}
 }
 
-// sameFill reports whether two rows from different sources are one
-// execution: the same order or trade number when both have one; else the
-// same quantity and a price within 0.1%; for rows without a quantity
-// (dividends), an amount within 0.1%.
+// sameFill reports whether two rows from different sources, which share
+// no order or trade number, can be one execution: the same quantity and a
+// price within 0.1%; for rows without a quantity (dividends), an amount
+// within 0.1%.
 func sameFill(a, b TradeEvent) bool {
-	if a.Ref != "" && b.Ref != "" {
-		return a.Ref == b.Ref
-	}
 	qa, qb := dec(a.Quantity), dec(b.Quantity)
 	if qa != nil && qb != nil {
 		if !eq(qa, qb) {

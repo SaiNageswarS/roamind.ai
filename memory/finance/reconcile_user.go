@@ -21,7 +21,7 @@ func ReconcileUser(ctx context.Context, d *DB, st Dirty, userID string) (int, er
 	if err != nil {
 		return 0, err
 	}
-	if err := d.WaitApplied(ctx, "trade_events"); err != nil {
+	if err := d.WaitApplied(ctx, "trade_events", "trades"); err != nil {
 		return 0, err
 	}
 	events, err := d.TradeEvents(ctx, userID, epoch, forever)
@@ -29,7 +29,23 @@ func ReconcileUser(ctx context.Context, d *DB, st Dirty, userID string) (int, er
 		return 0, err
 	}
 	trades := Reconcile(events)
-	if err := d.PutTrades(ctx, userID, trades); err != nil {
+	previous, err := d.Trades(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	// A day-group with no events left, as when a source was written again
+	// without it, is blanked: its row stays, with no record or figures.
+	live := map[[4]string]bool{}
+	for _, t := range trades {
+		live[t.key()] = true
+	}
+	writes := trades
+	for _, p := range previous {
+		if !live[p.key()] {
+			writes = append(writes, Trade{Date: p.Date, Account: p.Account, ISIN: p.ISIN, Side: p.Side})
+		}
+	}
+	if err := d.PutTrades(ctx, userID, writes); err != nil {
 		return 0, err
 	}
 	if mark != 0 {

@@ -21,7 +21,11 @@ type Trade struct {
 	Fees        string
 	TaxWithheld string
 	Currency    string
-	Record      string // the source of the copy kept: the report, or the mail
+	Record      string // the source of the copy kept: the report, or the mail; "" for a day-group that is gone
+}
+
+func (t Trade) key() [4]string {
+	return [4]string{t.Date.Format(time.DateOnly), t.Account, t.ISIN, t.Side}
 }
 
 // amount is the trade's amount, else quantity × average price; nil when
@@ -51,12 +55,13 @@ func (d *DB) PutTrades(ctx context.Context, userID string, trades []Trade) error
 	return d.insert(ctx, "trades", tradeCols, rows)
 }
 
-// Trades returns the user's trades, by date, account, ISIN and side.
+// Trades returns the user's trades, by date, account, ISIN and side,
+// without the day-groups that are gone (no record).
 func (d *DB) Trades(ctx context.Context, userID string) ([]Trade, error) {
 	var out []Trade
 	err := d.query(ctx, `SELECT ts, account, isin, side, quantity::STRING, avg_price::STRING, amount::STRING,
 			fees::STRING, tax_withheld::STRING, currency, record
-		FROM trades WHERE user_id = $1 ORDER BY ts, account, isin, side`,
+		FROM trades WHERE user_id = $1 AND record IS NOT NULL ORDER BY ts, account, isin, side`,
 		func(b *qdb.QwpBinds) { text(b, 0, userID) },
 		func(b *qdb.QwpColumnBatch, r int) error {
 			s := func(col int) string { return b.String(col, r) }

@@ -144,6 +144,15 @@ func (d Deps) financeRef(ctx context.Context, userID string) (*protocol.FinanceR
 	for _, a := range as {
 		ref.Accounts = append(ref.Accounts, a.ID+" "+a.Label())
 	}
+	fs, err := d.Store.FinanceSenders(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range fs {
+		if !f.Trusted && f.SeenAt.After(d.now().AddDate(0, 0, -30)) {
+			ref.Untrusted = append(ref.Untrusted, f.Domain)
+		}
+	}
 	return ref, nil
 }
 

@@ -39,6 +39,9 @@ type TurnInput struct {
 	// OutputSchema, a JSON Schema, makes the turn return structured output
 	// (TurnOutput.Structured) instead of chat text.
 	OutputSchema string `json:"output_schema,omitempty"`
+	// Model, when set, is the claude model of this turn instead of the
+	// process's (agent.Config.Model): a small one for extracting data.
+	Model string `json:"model,omitempty"`
 }
 
 // ExerciseRef names an exercise note in the user's memory.
@@ -109,6 +112,9 @@ type FinanceRef struct {
 	// Accounts are the user's brokerage accounts, as list_accounts names
 	// them.
 	Accounts []string `json:"accounts,omitempty"`
+	// Untrusted are mail domains finance mail came from in the last 30
+	// days that the user doesn't trust, so it wasn't read.
+	Untrusted []string `json:"untrusted,omitempty"`
 }
 
 // GoalRef names a goal note in the user's memory.

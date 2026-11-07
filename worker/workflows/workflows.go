@@ -120,6 +120,10 @@ type Deps struct {
 	// sets it to give new goals their channels and to start drafting the
 	// job links the user asked for. Its errors are logged.
 	AfterTurn func(ctx context.Context, u *store.User, t FinishedTurn) error
+	// FinanceMailed, when set, runs after a broker's mail added trades to
+	// the user's ledger. Register sets it to reconcile them and open the
+	// finance channel.
+	FinanceMailed func(ctx context.Context, u *store.User) error
 }
 
 // FinishedTurn is a chat turn, for AfterTurn: the user's message and its
@@ -168,7 +172,9 @@ func Register(c *hatchet.Client, d Deps) (wfs []hatchet.WorkflowBase, listen fun
 	}
 	if d.Finance != nil {
 		reconcile, channel := FinanceReconcile(c, d), FinanceChannel(c, d)
-		hooks = append(hooks, financeTrigger(reconcile, channel, d))
+		trigger := financeTrigger(reconcile, channel, d)
+		hooks = append(hooks, trigger)
+		d.FinanceMailed = func(ctx context.Context, u *store.User) error { return trigger(ctx, u, FinishedTurn{}) }
 		wfs = append(wfs, reconcile, channel, FinanceMarket(c, d, reconcile))
 	}
 	d.AfterTurn = func(ctx context.Context, u *store.User, t FinishedTurn) error {

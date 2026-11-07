@@ -82,8 +82,8 @@ func TestFetchMarket(t *testing.T) {
 	const apple, fund = "US0378331005", "INF846K01WO1"
 	day := time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)
 	if err := db.PutTrades(ctx, "u", []finance.Trade{
-		{Date: day, Account: "a1", ISIN: apple, Side: finance.SideBuy, Quantity: "1", Currency: "USD"},
-		{Date: day, Account: "a1", ISIN: fund, Side: finance.SideBuy, Quantity: "10", Currency: "INR"},
+		{Date: day, Account: "a1", ISIN: apple, Side: finance.SideBuy, Quantity: "1", Currency: "USD", Record: "upload:x"},
+		{Date: day, Account: "a1", ISIN: fund, Side: finance.SideBuy, Quantity: "10", Currency: "INR", Record: "upload:x"},
 	}); err != nil {
 		t.Fatal(err)
 	}

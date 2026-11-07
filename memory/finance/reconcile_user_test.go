@@ -87,3 +87,34 @@ func TestReconcileUser(t *testing.T) {
 		t.Errorf("cost without an October rate = %v", pf.Stocks[0].Cost)
 	}
 }
+
+func TestReconcileUserGoneGroups(t *testing.T) {
+	db := db(t)
+	ctx := context.Background()
+	st := storetest.Open(t)
+	const user = "gone-user"
+	if err := st.UpsertSlackUser(ctx, store.User{ID: user, Email: "g@x.com", SlackTeamID: "T", SlackUserID: "UG"}); err != nil {
+		t.Fatal(err)
+	}
+	ev := func(on time.Time, line int) TradeEvent {
+		return TradeEvent{Date: on, Source: "mail:me@x/m9", Line: line, Account: "a1", ISIN: "INE009A01021", Side: SideBuy,
+			Quantity: "5", Price: "1500", Amount: "7500", Currency: "INR", Doc: DocContractNote}
+	}
+	// A mail read as two days' trades, then read again as one.
+	if err := db.AddTradeEvents(ctx, user, []TradeEvent{ev(d("2026-10-01"), 1), ev(d("2026-10-02"), 2)}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := ReconcileUser(ctx, db, st, user); err != nil || n != 2 {
+		t.Fatalf("first read: %d %v", n, err)
+	}
+	if err := db.AddTradeEvents(ctx, user, []TradeEvent{ev(d("2026-10-02"), 1)}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := ReconcileUser(ctx, db, st, user); err != nil || n != 1 {
+		t.Fatalf("second read: %d %v", n, err)
+	}
+	trades, err := db.Trades(ctx, user)
+	if err != nil || len(trades) != 1 || !trades[0].Date.Equal(d("2026-10-02")) {
+		t.Errorf("trades = %+v %v; want only 2 October's", trades, err)
+	}
+}

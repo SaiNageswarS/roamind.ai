@@ -197,8 +197,21 @@ func TestFinance(t *testing.T) {
 		t.Errorf("set_base_currency: %s", msg)
 	}
 
+	if msg, isErr := call("trust_mail_sender", map[string]any{"domain": "com", "trusted": true}); !isErr || !strings.Contains(msg, "not a mail domain") {
+		t.Errorf("trusting a top-level domain: %s", msg)
+	}
+	if msg, isErr := call("trust_mail_sender", map[string]any{"domain": "Broker.Example", "trusted": true}); isErr || !strings.Contains(msg, "broker.example") {
+		t.Errorf("trust: %s", msg)
+	}
+	if msg, _ := call("list_mail_senders", nil); !strings.Contains(msg, `{"domain":"broker.example","trusted":true}`) {
+		t.Errorf("senders: %s", msg)
+	}
+
 	// Another user sees none of it.
 	other := connect("f2")
+	if msg, _ := other("list_mail_senders", nil); msg != `{"senders":[]}` {
+		t.Errorf("f2 sees f1's senders: %s", msg)
+	}
 	if msg, _ := other("list_holdings", nil); !strings.Contains(msg, `"holdings":[]`) {
 		t.Errorf("f2 sees f1's holdings: %s", msg)
 	}

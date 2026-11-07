@@ -5,7 +5,9 @@
 -- 01_market.sql is.
 
 -- Every trade, dividend or charge as one source reported it, unchanged. A
--- source replayed writes the same rows, which dedup skips.
+-- source replayed writes the same rows, which dedup skips. Each write of a
+-- source is whole, with its own written_at: reads take a source's latest,
+-- so rows a source no longer has, or moved to another day, drop out.
 CREATE TABLE IF NOT EXISTS trade_events (
     ts           TIMESTAMP, -- the trade date
     user_id      SYMBOL,
@@ -21,11 +23,13 @@ CREATE TABLE IF NOT EXISTS trade_events (
     tax_withheld DECIMAL(24, 8),
     currency     SYMBOL,
     fx_rate      DECIMAL(20, 10), -- the broker's, when given
-    ref          VARCHAR,         -- order or trade number
+    ref          VARCHAR,         -- the order and trade numbers, space-separated
     doc          SYMBOL, -- contract_note, confirmation, tradebook, statement, chat
-    received_at  TIMESTAMP
+    received_at  TIMESTAMP,
+    written_at   TIMESTAMP -- the write's version
 ) TIMESTAMP(ts) PARTITION BY YEAR WAL
 DEDUP UPSERT KEYS(ts, user_id, source, line);
+ALTER TABLE trade_events ADD COLUMN IF NOT EXISTS written_at TIMESTAMP;
 ALTER TABLE trade_events DEDUP ENABLE UPSERT KEYS(ts, user_id, source, line);
 
 -- One row per day-group (user, account, isin, trade date, side), written by
@@ -44,7 +48,7 @@ CREATE TABLE IF NOT EXISTS trades (
     fees         DECIMAL(24, 8),
     tax_withheld DECIMAL(24, 8),
     currency     SYMBOL,
-    record       SYMBOL  -- the source of the copy kept
+    record       SYMBOL  -- the source of the copy kept; NULL for a day-group that is gone
 ) TIMESTAMP(ts) PARTITION BY YEAR WAL
 DEDUP UPSERT KEYS(ts, user_id, account, isin, side);
 ALTER TABLE trades DEDUP ENABLE UPSERT KEYS(ts, user_id, account, isin, side);

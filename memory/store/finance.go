@@ -235,3 +235,77 @@ func (s *Store) SetBaseCurrency(ctx context.Context, userID, currency string) er
 		ON CONFLICT (user_id) DO UPDATE SET base_currency = excluded.base_currency`, userID, strings.ToUpper(currency))
 	return err
 }
+
+// FinanceSender is a domain broker mail comes from (finance_senders).
+type FinanceSender struct {
+	Domain  string
+	Trusted bool
+	SeenAt  time.Time // zero before a finance mail from it
+	Subject string    // that mail's
+}
+
+// TrustFinanceSender sets whether the user trusts mail from domain and its
+// subdomains.
+func (s *Store) TrustFinanceSender(ctx context.Context, userID, domain string, trusted bool) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO finance_senders (user_id, domain, trusted, updated_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT (user_id, domain) DO UPDATE SET trusted = excluded.trusted, updated_at = excluded.updated_at`,
+		userID, strings.ToLower(domain), trusted, time.Now().Unix())
+	return err
+}
+
+// SeenFinanceSender records a finance mail from domain, keeping whether it
+// is trusted (untrusted when new).
+func (s *Store) SeenFinanceSender(ctx context.Context, userID, domain, subject string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO finance_senders (user_id, domain, seen_at, subject, updated_at) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (user_id, domain) DO UPDATE SET seen_at = excluded.seen_at, subject = excluded.subject`,
+		userID, strings.ToLower(domain), at.Unix(), subject, time.Now().Unix())
+	return err
+}
+
+// FinanceSenders returns the user's senders, trusted ones first, then the
+// most recently seen.
+func (s *Store) FinanceSenders(ctx context.Context, userID string) ([]FinanceSender, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT domain, trusted, seen_at, subject FROM finance_senders
+		WHERE user_id = ? ORDER BY trusted DESC, seen_at DESC, domain`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FinanceSender
+	for rows.Next() {
+		var f FinanceSender
+		var seen sql.NullInt64
+		if err := rows.Scan(&f.Domain, &f.Trusted, &seen, &f.Subject); err != nil {
+			return nil, err
+		}
+		if seen.Valid {
+			f.SeenAt = time.Unix(seen.Int64, 0)
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// TrustedFinanceDomain returns the trusted domain of the user's that
+// domain is, or is a subdomain of; "" when none is.
+func (s *Store) TrustedFinanceDomain(ctx context.Context, userID, domain string) (string, error) {
+	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
+	for d := domain; d != ""; {
+		var ok bool
+		err := s.db.QueryRowContext(ctx, `SELECT trusted FROM finance_senders WHERE user_id = ? AND domain = ?`, userID, d).Scan(&ok)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", err
+		}
+		if ok {
+			return d, nil
+		}
+		_, rest, found := strings.Cut(d, ".")
+		if !found || !strings.Contains(rest, ".") {
+			break // not a bare top-level domain
+		}
+		d = rest
+	}
+	return "", nil
+}

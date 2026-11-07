@@ -237,7 +237,7 @@ func (d *DB) Splits(ctx context.Context) ([]CorporateAction, error) {
 // their first trade: the instruments whose prices are fetched.
 func (d *DB) HeldISINs(ctx context.Context) (map[string]time.Time, error) {
 	out := map[string]time.Time{}
-	err := d.query(ctx, `SELECT isin, min(ts) FROM trades GROUP BY isin`, nil,
+	err := d.query(ctx, `SELECT isin, min(ts) FROM trades WHERE record IS NOT NULL GROUP BY isin`, nil,
 		func(b *qdb.QwpColumnBatch, r int) error {
 			out[b.String(0, r)] = timeAt(b, 1, r)
 			return nil
