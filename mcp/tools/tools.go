@@ -24,6 +24,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"roamind.ai/connectors/feeds"
+	"roamind.ai/connectors/market"
 	"roamind.ai/memory/finance"
 	"roamind.ai/memory/store"
 )
@@ -37,6 +38,9 @@ type Deps struct {
 	UserID string
 	// Finance is the finance ledger in QuestDB, for the finance tools.
 	Finance *finance.DB
+	// Market looks up the ISINs of the instruments reports name by ticker
+	// or name; without it, only the ledger's and the user's names are.
+	Market *market.Client
 	// DataDir is Roamind's data directory, which holds the users'
 	// workspaces, where their uploads are.
 	DataDir string

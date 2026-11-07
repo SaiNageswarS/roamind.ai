@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,8 +26,10 @@ import (
 // ReportRow is a trade or dividend as a report or the user gives it.
 type ReportRow struct {
 	Date        string `json:"date" jsonschema:"the trade date, ISO (YYYY-MM-DD)"`
-	ISIN        string `json:"isin" jsonschema:"the instrument's ISIN, 12 characters"`
-	Name        string `json:"name,omitempty" jsonschema:"the instrument's name as the report shows it"`
+	ISIN        string `json:"isin,omitempty" jsonschema:"the instrument's ISIN, 12 characters, only when the report prints it; else give symbol or name, and it is looked up"`
+	Name        string `json:"name,omitempty" jsonschema:"the instrument's name as the report shows it, in full"`
+	Symbol      string `json:"symbol,omitempty" jsonschema:"its ticker, when the report shows one, e.g. TSLA"`
+	Exchange    string `json:"exchange,omitempty" jsonschema:"the ticker's exchange, when shown: NASDAQ, NYSE, NSE, BSE, XETRA, …"`
 	Side        string `json:"side" jsonschema:"buy, sell, vest (an RSU vest), espp (an ESPP purchase), dividend, transfer_in or transfer_out"`
 	Quantity    string `json:"quantity,omitempty" jsonschema:"shares or units, a positive decimal; required but for dividends"`
 	Price       string `json:"price,omitempty" jsonschema:"price of one unit, a decimal; for a transfer in, its original cost per unit"`
@@ -195,10 +198,12 @@ func financeTools(s *mcp.Server, d Deps) {
 		Name: "import_report",
 		Description: "Import a broker report the user uploaded (a tradebook, statement or contract note), as parsed by a " +
 			"Python parser in parsers/ of the workspace. The parser takes the report's path and prints one JSON object: " +
-			parsedShape + ". Every row is checked (ISIN checksum, quantity × price against amount, dates in the period, " +
-			"the report's own totals against its rows) and the import is refused with the problems listed: fix the parser " +
-			"and run it again, never the JSON by hand. A trade mail already reported counts once. The same file is never " +
-			"imported twice.",
+			parsedShape + ". A row without an ISIN gets it looked up from its symbol and exchange, or its name; when that " +
+			"fits no instrument or more than one, the import is refused with the candidates: ask the user which it is, " +
+			"call name_stock, and retry. Every row is checked (ISIN checksum, quantity × price against amount, dates in " +
+			"the period, the report's own totals against its rows) and the import is refused with the problems listed: fix " +
+			"the parser and run it again, never the JSON by hand. A trade mail already reported counts once. The same file " +
+			"is never imported twice.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args ImportReportInput) (*mcp.CallToolResult, ImportReportOutput, error) {
 		var out ImportReportOutput
 		path, err := workspaceFile(d, args.File)
@@ -229,14 +234,22 @@ func financeTools(s *mcp.Server, d Deps) {
 		if err := oneOf("doc", in.Doc, finance.DocTradebook, finance.DocStatement, finance.DocContractNote); err != nil {
 			return nil, out, err
 		}
+		rs := rows(in.Rows)
+		if unknown, err := resolveRows(ctx, resolver(d), rs); err != nil || len(unknown) > 0 {
+			if err == nil {
+				err = fmt.Errorf("nothing was imported: these rows' instruments aren't known. Ask the user which each is, "+
+					"call name_stock with their answer, and retry:\n%s", strings.Join(unknown, "\n"))
+			}
+			return nil, out, err
+		}
 		from, to, problems := period(in.PeriodFrom, in.PeriodTo)
-		for i, r := range in.Rows {
-			for _, p := range finance.CheckRow(finance.Row(r), from, to) {
+		for i, r := range rs {
+			for _, p := range finance.CheckRow(r, from, to) {
 				problems = append(problems, fmt.Sprintf("row %d: %s", i+1, p))
 			}
 		}
-		problems = append(problems, finance.CheckTotal("total_buy_amount", in.TotalBuyAmount, rows(in.Rows), finance.SideBuy)...)
-		problems = append(problems, finance.CheckTotal("total_sell_amount", in.TotalSell, rows(in.Rows), finance.SideSell)...)
+		problems = append(problems, finance.CheckTotal("total_buy_amount", in.TotalBuyAmount, rs, finance.SideBuy)...)
+		problems = append(problems, finance.CheckTotal("total_sell_amount", in.TotalSell, rs, finance.SideSell)...)
 		if len(in.Rows) == 0 {
 			problems = append(problems, "the report has no rows")
 		}
@@ -253,11 +266,11 @@ func financeTools(s *mcp.Server, d Deps) {
 		}
 		source := "upload:" + sha
 		now := time.Now()
-		events := make([]finance.TradeEvent, len(in.Rows))
-		for i, r := range in.Rows {
-			events[i] = finance.Row(r).Event(acct.ID, source, i+1, in.Doc, now)
+		events := make([]finance.TradeEvent, len(rs))
+		for i, r := range rs {
+			events[i] = r.Event(acct.ID, source, i+1, in.Doc, now)
 		}
-		if err := db.SaveInstruments(ctx, rows(in.Rows)); err != nil {
+		if err := db.SaveInstruments(ctx, rs); err != nil {
 			return nil, out, err
 		}
 		if _, err := st.MarkFinanceDirty(ctx, userID); err != nil {
@@ -291,24 +304,32 @@ func financeTools(s *mcp.Server, d Deps) {
 		if acct == nil {
 			return nil, Done{}, fmt.Errorf("no account %q; list_accounts shows them, and a report import makes a new one", in.Account)
 		}
-		if ps := finance.CheckRow(finance.Row(in.ReportRow), time.Time{}, time.Time{}); len(ps) > 0 {
+		rs := []finance.Row{finance.Row(in.ReportRow)}
+		if unknown, err := resolveRows(ctx, resolver(d), rs); err != nil || len(unknown) > 0 {
+			if err == nil {
+				err = fmt.Errorf("%s: ask the user which it is, call name_stock, and retry", unknown[0])
+			}
+			return nil, Done{}, err
+		}
+		row := rs[0]
+		if ps := finance.CheckRow(row, time.Time{}, time.Time{}); len(ps) > 0 {
 			return nil, Done{}, errors.New(strings.Join(ps, "; "))
 		}
 		now := time.Now()
-		if err := db.SaveInstruments(ctx, []finance.Row{finance.Row(in.ReportRow)}); err != nil {
+		if err := db.SaveInstruments(ctx, []finance.Row{row}); err != nil {
 			return nil, Done{}, err
 		}
 		if _, err := st.MarkFinanceDirty(ctx, userID); err != nil {
 			return nil, Done{}, err
 		}
-		e := finance.Row(in.ReportRow).Event(acct.ID, fmt.Sprintf("chat:%d", now.UnixNano()), 1, finance.DocChat, now)
+		e := row.Event(acct.ID, fmt.Sprintf("chat:%d", now.UnixNano()), 1, finance.DocChat, now)
 		if err := db.AddTradeEvents(ctx, userID, []finance.TradeEvent{e}); err != nil {
 			return nil, Done{}, err
 		}
 		if _, err := reconcile(ctx); err != nil {
 			return nil, Done{}, err
 		}
-		return nil, Done{Message: fmt.Sprintf("recorded %s %s %s in %s", in.Side, in.Quantity, in.ISIN, acct.Label())}, nil
+		return nil, Done{Message: fmt.Sprintf("recorded %s %s %s in %s", in.Side, in.Quantity, cmp.Or(in.Name, in.Symbol, row.ISIN), acct.Label())}, nil
 	})
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_accounts",
@@ -468,6 +489,30 @@ func financeTools(s *mcp.Server, d Deps) {
 		return nil, out, err
 	})
 	mcp.AddTool(s, &mcp.Tool{
+		Name: "name_stock",
+		Description: "Remember which instrument a ticker or name in the user's reports and mails is, by its ISIN: when " +
+			"import_report or record_trade can't tell, and the user picked one of the candidates or told you the ISIN. " +
+			"Their later reports and broker mail resolve alike. Never pick for them, and never give an ISIN you didn't " +
+			"read from the candidates, the report or the user.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in NameStockInput) (*mcp.CallToolResult, Done, error) {
+		isin := strings.ToUpper(strings.TrimSpace(in.ISIN))
+		if !finance.ValidISIN(isin) {
+			return nil, Done{}, fmt.Errorf("%q is not a valid ISIN", in.ISIN)
+		}
+		r := resolver(d)
+		name, err := r.Known(ctx, isin)
+		if err != nil {
+			return nil, Done{}, err
+		}
+		if name == "" {
+			return nil, Done{}, fmt.Errorf("no instrument has the ISIN %s; check it with the user", isin)
+		}
+		if err := r.Remember(ctx, in.Symbol, in.Exchange, in.Name, isin); err != nil {
+			return nil, Done{}, err
+		}
+		return nil, Done{Message: fmt.Sprintf("%s is now %s (%s)", cmp.Or(in.Symbol, in.Name), name, isin)}, nil
+	})
+	mcp.AddTool(s, &mcp.Tool{
 		Name: "trust_mail_sender",
 		Description: "Trust, or stop trusting, a mail domain of one of the user's brokers (with its subdomains): mail from a " +
 			"trusted domain, signed by it, goes into the ledger. Only when the user asks you to, naming the domain; never " +
@@ -503,6 +548,14 @@ type SenderEntry struct {
 	LastSubject string `json:"last_subject,omitempty"`
 }
 
+// NameStockInput is name_stock's input.
+type NameStockInput struct {
+	Symbol   string `json:"symbol,omitempty" jsonschema:"the ticker as the report or mail gives it"`
+	Exchange string `json:"exchange,omitempty" jsonschema:"its exchange, when the report gives one"`
+	Name     string `json:"name,omitempty" jsonschema:"the name as the report or mail gives it"`
+	ISIN     string `json:"isin" jsonschema:"the ISIN it is"`
+}
+
 // SenderInput is trust_mail_sender's input.
 type SenderInput struct {
 	Domain  string `json:"domain" jsonschema:"the domain the broker's mail comes from, e.g. broker.example"`
@@ -511,7 +564,8 @@ type SenderInput struct {
 
 // parsedShape is ParsedReport, as import_report's description gives it.
 const parsedShape = `{"broker", "account_number" (as the report shows it, masked digits and all), "currency" (the account's), ` +
-	`"doc" (tradebook, statement or contract_note), "period_from", "period_to" (ISO dates), "rows": [{"date", "isin", "name", ` +
+	`"doc" (tradebook, statement or contract_note), "period_from", "period_to" (ISO dates), "rows": [{"date", "isin" (only ` +
+	`when printed), "name" (in full), "symbol" and "exchange" (when shown), ` +
 	`"side" (buy, sell, vest, espp, dividend, transfer_in, transfer_out), "quantity", "price", "amount" (quantity × price ` +
 	`before fees), "fees", "tax_withheld", "currency", "ref" (every order and trade number, space-separated)}], "total_buy_amount", "total_sell_amount" ` +
 	`(the report's own printed totals of buys and sells before fees, read from it, not summed from the rows; omit when it ` +
@@ -596,6 +650,44 @@ func period(fromS, toS string) (from, to time.Time, problems []string) {
 		return from, to, []string{"period_to is before period_from"}
 	}
 	return from, to, nil
+}
+
+// resolver looks up the ISINs of the user's rows, for one tool call.
+func resolver(d Deps) *finance.Resolver {
+	r := &finance.Resolver{DB: d.Finance, Names: d.Store, UserID: d.UserID}
+	if d.Market != nil {
+		r.Lookup = d.Market
+	}
+	return r
+}
+
+// resolveRows sets the ISINs of the rows that have none; unknown names the
+// instruments it couldn't find, with their rows and candidates.
+func resolveRows(ctx context.Context, r *finance.Resolver, rs []finance.Row) (unknown []string, err error) {
+	var order []string
+	lines := map[string][]string{}
+	why := map[string]string{}
+	for i := range rs {
+		var u *finance.Unresolved
+		switch err := r.Resolve(ctx, &rs[i]); {
+		case errors.As(err, &u):
+			if _, ok := why[u.What]; !ok {
+				order = append(order, u.What)
+				why[u.What] = u.Error()
+			}
+			lines[u.What] = append(lines[u.What], strconv.Itoa(i+1))
+		case err != nil:
+			return nil, err
+		}
+	}
+	for _, w := range order {
+		ls := lines[w]
+		if len(ls) > 8 {
+			ls = append(ls[:8], "…")
+		}
+		unknown = append(unknown, fmt.Sprintf("rows %s: %s", strings.Join(ls, ", "), why[w]))
+	}
+	return unknown, nil
 }
 
 // rows is a report's rows as the ledger checks them.

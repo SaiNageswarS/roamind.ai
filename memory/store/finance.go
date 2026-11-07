@@ -309,3 +309,23 @@ func (s *Store) TrustedFinanceDomain(ctx context.Context, userID, domain string)
 	}
 	return "", nil
 }
+
+// StockName is the ISIN the user's reports and mails mean by key (a
+// finance.Resolver key); "" when unknown.
+func (s *Store) StockName(ctx context.Context, userID, key string) (string, error) {
+	var isin string
+	err := s.db.QueryRowContext(ctx, `SELECT isin FROM finance_stock_names WHERE user_id = ? AND key = ?`, userID, key).Scan(&isin)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return isin, err
+}
+
+// SaveStockName records that key means isin, for the user.
+func (s *Store) SaveStockName(ctx context.Context, userID, key, isin string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO finance_stock_names (user_id, key, isin, updated_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT (user_id, key) DO UPDATE SET isin = excluded.isin, updated_at = excluded.updated_at`,
+		userID, key, isin, time.Now().Unix())
+	return err
+}

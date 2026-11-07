@@ -16,6 +16,8 @@ type Row struct {
 	Date        string
 	ISIN        string
 	Name        string
+	Symbol      string // the ticker, when the row gives one instead of the ISIN
+	Exchange    string // the symbol's exchange, when given
 	Side        string
 	Quantity    string
 	Price       string

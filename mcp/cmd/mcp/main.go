@@ -21,6 +21,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"roamind.ai/connectors/feeds"
+	"roamind.ai/connectors/market"
 	"roamind.ai/mcp/tools"
 	"roamind.ai/memory/finance"
 	"roamind.ai/memory/store"
@@ -58,6 +59,8 @@ func run(args []string) error {
 			return err
 		}
 		defer deps.Finance.Close()
+		// claude passes the worker's environment on.
+		deps.Market = market.New(30*time.Second, os.Getenv("EODHD_API_KEY"))
 	}
 	s := mcp.NewServer(&mcp.Implementation{Name: "roamind", Version: "v1"}, nil)
 	if err := tools.Register(s, deps, strings.FieldsFunc(*sets, func(r rune) bool { return r == ',' })); err != nil {

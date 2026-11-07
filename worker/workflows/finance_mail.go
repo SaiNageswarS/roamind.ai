@@ -15,7 +15,6 @@ import (
 
 	"roamind.ai/agent"
 	"roamind.ai/agent/protocol"
-	"roamind.ai/connectors/market"
 	"roamind.ai/memory/finance"
 	"roamind.ai/memory/store"
 )
@@ -175,19 +174,30 @@ func (d Deps) saveTrades(ctx context.Context, in MailInput, chk mailCheck, ext *
 		return out, err
 	}
 	source := "mail:" + in.Address + "/" + in.MessageID
+	res := &finance.Resolver{DB: d.Finance, Names: d.Store, UserID: u.ID}
+	if d.Market != nil {
+		res.Lookup = d.Market
+	}
 	var rows []finance.Row
 	var events []finance.TradeEvent
 	var problems []string
 	for i, x := range ext.Rows {
-		r := finance.Row{Date: x.Date, ISIN: strings.TrimSpace(x.ISIN), Name: x.Name, Side: x.Side, Quantity: x.Quantity,
-			Price: x.Price, Amount: x.Amount, Fees: x.Fees, TaxWithheld: x.TaxWithheld, Currency: x.Currency, Ref: x.Ref}
+		r := finance.Row{Date: x.Date, ISIN: strings.TrimSpace(x.ISIN), Name: x.Name, Symbol: x.Symbol, Exchange: x.Exchange,
+			Side: x.Side, Quantity: x.Quantity, Price: x.Price, Amount: x.Amount, Fees: x.Fees, TaxWithheld: x.TaxWithheld,
+			Currency: x.Currency, Ref: x.Ref}
 		if !finance.ValidISIN(r.ISIN) {
-			if r.ISIN, err = d.isinOf(ctx, x.Symbol, x.Exchange); err != nil {
-				return out, err
-			}
+			r.ISIN = "" // a model's guess is no ISIN: look it up
+		}
+		what := cmp.Or(x.Symbol, x.Name, x.ISIN)
+		var unknown *finance.Unresolved
+		switch err := res.Resolve(ctx, &r); {
+		case errors.As(err, &unknown):
+			problems = append(problems, fmt.Sprintf("%s %s %s: %s", x.Side, x.Quantity, what, unknown.Error()))
+			continue
+		case err != nil:
+			return out, err
 		}
 		if ps := finance.CheckRow(r, from, to); len(ps) > 0 {
-			what := cmp.Or(x.Symbol, x.Name, x.ISIN)
 			problems = append(problems, fmt.Sprintf("%s %s %s: %s", x.Side, x.Quantity, what, strings.Join(ps, "; ")))
 			continue
 		}
@@ -210,7 +220,7 @@ func (d Deps) saveTrades(ctx context.Context, in MailInput, chk mailCheck, ext *
 	if len(problems) > 0 {
 		slog.Warn("mail trades dropped", "user", u.ID, "message", in.MessageID, "problems", problems)
 		if err := d.tellFinance(ctx, u.ID, fmt.Sprintf("I couldn't read %d of the trades in <%s|%s>, so they aren't in your ledger:\n• %s\n"+
-			"Upload the contract note or statement, or tell me the trade.", len(problems), in.Link, in.Subject,
+			"Upload the contract note or statement, or tell me the trade or which stock it is.", len(problems), in.Link, in.Subject,
 			strings.Join(problems, "\n• "))); err != nil {
 			return out, err
 		}
@@ -246,60 +256,6 @@ func (d Deps) mailAccount(ctx context.Context, userID, trusted string, ext *agen
 	}
 	a, _, err := d.Store.EnsureFinAccount(ctx, userID, cmp.Or(strings.TrimSpace(ext.Broker), trusted), strings.TrimSpace(ext.AccountNumber), "")
 	return a, err
-}
-
-// isinOf is the ISIN of a ticker symbol, from the listings the ledger
-// knows, else EODHD's search; "" when neither has exactly one. exchange,
-// when given, narrows it down.
-func (d Deps) isinOf(ctx context.Context, symbol, exchange string) (string, error) {
-	symbol, exchange = strings.TrimSpace(symbol), strings.TrimSpace(exchange)
-	if symbol == "" {
-		return "", nil
-	}
-	pick := func(cands map[string]string) string { // ISIN → exchange
-		var any, on []string
-		for isin, mic := range cands {
-			any = append(any, isin)
-			if strings.EqualFold(mic, exchange) {
-				on = append(on, isin)
-			}
-		}
-		switch {
-		case len(on) == 1:
-			return on[0]
-		case len(any) == 1:
-			return any[0]
-		}
-		return ""
-	}
-	listings, err := d.Finance.Listings(ctx)
-	if err != nil {
-		return "", err
-	}
-	cands := map[string]string{}
-	for isin, ls := range listings {
-		for _, l := range ls {
-			if strings.EqualFold(l.Symbol, symbol) {
-				cands[isin] = l.MIC
-			}
-		}
-	}
-	if isin := pick(cands); isin != "" || d.Market == nil {
-		return isin, nil
-	}
-	found, err := d.Market.SearchSymbol(ctx, symbol)
-	if errors.Is(err, market.ErrNoKey) {
-		return "", nil
-	}
-	if err != nil {
-		slog.Warn("symbol search", "symbol", symbol, "err", err)
-		return "", nil
-	}
-	cands = map[string]string{}
-	for _, l := range found {
-		cands[l.ISIN] = l.Exchange
-	}
-	return pick(cands), nil
 }
 
 // tellFinance posts text in the user's finance channel; without one, it

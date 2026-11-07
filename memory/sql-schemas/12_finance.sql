@@ -56,3 +56,15 @@ CREATE TABLE IF NOT EXISTS finance_senders (
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (user_id, domain)
 );
+
+-- What instruments the user's reports and mails name by ticker or name, by
+-- their ISINs: found by a search, or told by the user when a name fits
+-- more than one (memory/finance Resolver). key is symbol:<TICKER>@<exchange>, symbol:<TICKER>$<currency>,
+-- symbol:<TICKER> or name:<the name's words, lowercase>.
+CREATE TABLE IF NOT EXISTS finance_stock_names (
+    user_id    TEXT NOT NULL REFERENCES users(id),
+    key        TEXT NOT NULL COLLATE NOCASE,
+    isin       TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, key)
+);
