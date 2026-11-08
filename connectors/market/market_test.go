@@ -69,7 +69,8 @@ func TestAMFINAVs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := navs["INF846K01WO1"]; n.NAV != "30.5281" || n.Scheme != "135762" || n.Day.Format(time.DateOnly) != "2026-11-05" {
+	if n := navs["INF846K01WO1"]; n.NAV != "30.5281" || n.Scheme != "135762" || n.Day.Format(time.DateOnly) != "2026-11-05" ||
+		n.Name != "Axis Children's Fund - Direct Plan - Growth Option" {
 		t.Errorf("growth = %+v", n)
 	}
 	if navs["INF846K01WQ6"].NAV != "28.1750" || len(navs) != 3 {

@@ -136,6 +136,18 @@ func (c *Client) ECBRates(ctx context.Context, from time.Time) ([]Rate, error) {
 	return out, nil
 }
 
+// schemeName is a scheme's name from its columns: the fund, then its plan
+// and option when the list gives them apart.
+func schemeName(cols []string) string {
+	var parts []string
+	for _, c := range cols {
+		if c = strings.TrimSpace(c); c != "" && c != "-" {
+			parts = append(parts, c)
+		}
+	}
+	return strings.Join(parts, " - ")
+}
+
 // NAV is an Indian mutual fund's net asset value on Day.
 type NAV struct {
 	Day    time.Time
@@ -157,7 +169,7 @@ func (c *Client) AMFINAVs(ctx context.Context) (map[string]NAV, error) {
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		f := strings.Split(strings.TrimSpace(sc.Text()), ";")
-		// Scheme Code;ISIN Growth;ISIN Reinvestment;Scheme Name;…;Net Asset Value;Date
+		// Scheme Code;ISIN Growth;ISIN Reinvestment;Scheme Name;[Plan;Option;]Net Asset Value;Date
 		if len(f) < 6 {
 			continue
 		}
@@ -171,7 +183,7 @@ func (c *Client) AMFINAVs(ctx context.Context) (map[string]NAV, error) {
 		}
 		for _, isin := range f[1:3] {
 			if isin = strings.TrimSpace(isin); len(isin) == 12 {
-				out[isin] = NAV{Day: d, Scheme: f[0], ISIN: isin, Name: f[3], NAV: nav}
+				out[isin] = NAV{Day: d, Scheme: f[0], ISIN: isin, Name: schemeName(f[3 : len(f)-2]), NAV: nav}
 			}
 		}
 	}
