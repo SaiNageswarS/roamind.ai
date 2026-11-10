@@ -106,6 +106,8 @@ type HoldingLine struct {
 	Unrealized string        `json:"unrealized_gain,omitempty"`
 	Realized   string        `json:"realized_gain,omitempty"`
 	Dividends  string        `json:"dividends,omitempty"`
+	Tax        string        `json:"tax_withheld,omitempty" jsonschema:"withheld on its sales and dividends"`
+	Net        string        `json:"net_profit,omitempty" jsonschema:"realized gain and dividends less tax: what the user kept"`
 	Close      string        `json:"close,omitempty" jsonschema:"latest close, in close_currency"`
 	CloseCcy   string        `json:"close_currency,omitempty"`
 	CloseDate  string        `json:"close_date,omitempty"`
@@ -140,6 +142,8 @@ type ListHoldingsOutput struct {
 	Unrealized   string        `json:"total_unrealized_gain,omitempty"`
 	Realized     string        `json:"total_realized_gain,omitempty"`
 	Dividends    string        `json:"total_dividends,omitempty"`
+	Tax          string        `json:"total_tax_withheld,omitempty"`
+	Net          string        `json:"total_net_profit,omitempty" jsonschema:"realized gains and dividends less tax"`
 	Missing      []string      `json:"missing,omitempty" jsonschema:"why figures are left out: say so rather than guess them"`
 }
 
@@ -156,7 +160,8 @@ type StockHistoryOutput struct {
 
 // ProfitInput is profit's input.
 type ProfitInput struct {
-	By string `json:"by,omitempty" jsonschema:"stock, market or year; stock by default"`
+	By      string `json:"by,omitempty" jsonschema:"stock, market, account, year or sale; stock by default"`
+	Account string `json:"account,omitempty" jsonschema:"only this account's trades: its id or name, from list_accounts"`
 }
 
 // ProfitEntry is a line of profit's result.
@@ -165,13 +170,23 @@ type ProfitEntry struct {
 	Name       string `json:"name,omitempty"`
 	Realized   string `json:"realized_gain"`
 	Dividends  string `json:"dividends"`
+	Tax        string `json:"tax_withheld"`
+	Net        string `json:"net_profit" jsonschema:"realized gain and dividends less tax: what the user kept"`
 	Unrealized string `json:"unrealized_gain,omitempty"`
+	// By sale.
+	ISIN     string `json:"isin,omitempty"`
+	Account  string `json:"account,omitempty"`
+	Quantity string `json:"quantity,omitempty"`
+	Proceeds string `json:"proceeds,omitempty" jsonschema:"after fees, in currency"`
+	Cost     string `json:"cost,omitempty" jsonschema:"of the shares sold, fees included, in currency"`
+	Currency string `json:"currency,omitempty"`
 }
 
 // ProfitOutput is profit's result.
 type ProfitOutput struct {
 	BaseCurrency string        `json:"base_currency"`
 	By           string        `json:"by"`
+	Account      string        `json:"account,omitempty"`
 	Lines        []ProfitEntry `json:"lines"`
 	Missing      []string      `json:"missing,omitempty"`
 }
@@ -380,15 +395,17 @@ func financeTools(s *mcp.Server, d Deps) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "list_holdings",
 		Description: "The user's holdings: one line per stock across all accounts, with the quantity in each, average cost, " +
-			"value, unrealized and realized gain, dividends and the latest entry and exit points, and totals, in their base " +
-			"currency. Quote its figures; never compute your own.",
+			"value, unrealized and realized gain (after fees), dividends, tax withheld, net profit (realized gain and " +
+			"dividends less tax), the latest entry and exit points, and totals, in their base currency. Quote its figures; " +
+			"never compute your own.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListHoldingsOutput, error) {
 		pf, labels, err := portfolio(ctx)
 		if err != nil {
 			return nil, ListHoldingsOutput{}, err
 		}
 		out := ListHoldingsOutput{BaseCurrency: pf.Base, Holdings: []HoldingLine{}, Cost: money(pf.Cost), Value: money(pf.Value),
-			Unrealized: money(pf.Unrealized), Realized: money(pf.Realized), Dividends: money(pf.Dividends), Missing: pf.Missing}
+			Unrealized: money(pf.Unrealized), Realized: money(pf.Realized), Dividends: money(pf.Dividends), Tax: money(pf.Tax),
+			Net: money(pf.Net), Missing: pf.Missing}
 		for _, s := range pf.Stocks {
 			line := holdingLine(s, labels)
 			if n := len(line.Points); n > 4 {
@@ -440,22 +457,43 @@ func financeTools(s *mcp.Server, d Deps) {
 	})
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "profit",
-		Description: "The user's profit in their base currency, by stock, market (US, EU, IN) or year: realized gains and " +
-			"dividends, and unrealized gains by stock and market.",
+		Description: "The user's profit in their base currency, by stock, market (US, EU, IN), account, year or sale (each " +
+			"sale, with its proceeds and cost), optionally of one account: realized gains after fees, dividends, the tax " +
+			"withheld on them, net profit (what the user kept), and unrealized gains by stock, market and account.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ProfitInput) (*mcp.CallToolResult, ProfitOutput, error) {
 		by := cmp.Or(in.By, "stock")
-		pf, _, err := portfolio(ctx)
+		pf, labels, err := portfolio(ctx)
 		if err != nil {
 			return nil, ProfitOutput{}, err
 		}
-		lines, err := pf.Profit(by)
+		var account string
+		if strings.TrimSpace(in.Account) != "" {
+			acct, err := st.FinAccountOf(ctx, userID, in.Account)
+			if err != nil || acct == nil {
+				return nil, ProfitOutput{}, cmp.Or(err, fmt.Errorf("no account %q; see list_accounts", in.Account))
+			}
+			account = acct.ID
+		}
+		lines, err := pf.Profit(by, account)
 		if err != nil {
 			return nil, ProfitOutput{}, err
 		}
+		label := func(id string) string { return cmp.Or(labels[id], id) }
 		out := ProfitOutput{BaseCurrency: pf.Base, By: by, Lines: []ProfitEntry{}, Missing: pf.Missing}
+		if account != "" {
+			out.Account = label(account)
+		}
 		for _, l := range lines {
-			out.Lines = append(out.Lines, ProfitEntry{Key: l.Key, Name: l.Name, Realized: money(l.Realized),
-				Dividends: money(l.Dividends), Unrealized: money(l.Unrealized)})
+			e := ProfitEntry{Key: l.Key, Name: l.Name, Realized: money(l.Realized), Dividends: money(l.Dividends),
+				Tax: money(l.Tax), Net: money(l.Net), Unrealized: money(l.Unrealized), ISIN: l.ISIN,
+				Quantity: finance.DecText(l.Quantity, 8), Proceeds: money(l.Proceeds), Cost: money(l.Cost), Currency: l.Currency}
+			if by == "account" {
+				e.Key = label(l.Key)
+			}
+			if l.Account != "" {
+				e.Account = label(l.Account)
+			}
+			out.Lines = append(out.Lines, e)
 		}
 		return nil, out, nil
 	})
@@ -702,7 +740,7 @@ func rows(rs []ReportRow) []finance.Row {
 func holdingLine(s finance.Stock, labels map[string]string) HoldingLine {
 	l := HoldingLine{Name: cmp.Or(s.Name, s.ISIN), ISIN: s.ISIN, Market: s.Market, Quantity: finance.DecText(s.Quantity, 8),
 		Cost: money(s.Cost), Value: money(s.Value), Unrealized: money(s.Unrealized), Realized: money(s.Realized),
-		Dividends: money(s.Dividends), Close: finance.DecText(s.Close, 6), CloseCcy: s.CloseCurrency}
+		Dividends: money(s.Dividends), Tax: money(s.Tax), Net: money(s.Net), Close: finance.DecText(s.Close, 6), CloseCcy: s.CloseCurrency}
 	if !s.CloseDate.IsZero() {
 		l.CloseDate = s.CloseDate.Format(time.DateOnly)
 	}

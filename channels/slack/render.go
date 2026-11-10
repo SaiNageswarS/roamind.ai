@@ -3,6 +3,7 @@ package slack
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/slack-go/slack"
@@ -99,11 +100,16 @@ func RenderBody(s protocol.Snapshot) string {
 	return strings.TrimSpace(b.String())
 }
 
-// toolDisplayName shortens mcp__server__tool to tool.
+// toolDisplayName shortens mcp__server__tool to tool, and names Roamind's
+// tools that use QuestDB questDb_tool.
 func toolDisplayName(name string) string {
 	if strings.HasPrefix(name, "mcp__") {
 		if i := strings.LastIndex(name, "__"); i > 3 {
-			return name[i+2:]
+			tool := name[i+2:]
+			if name[:i] == "mcp__roamind" /* agent.ToolsServerName */ && slices.Contains(protocol.QuestDBTools, tool) {
+				return "questDb_" + tool
+			}
+			return tool
 		}
 	}
 	return name

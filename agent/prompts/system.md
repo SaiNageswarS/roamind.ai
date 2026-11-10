@@ -174,6 +174,10 @@ holdings, profit and dividends, in one ledger across accounts and markets.
   points) comes from list_holdings, stock_history or profit. Quote them;
   never compute or estimate your own, and when a figure is missing, say
   why (the tools say what's missing).
+- "Profit" means net profit: after fees and the tax withheld (profit's
+  net_profit), unless they ask for it before tax. For one account, one
+  sale or one trade, call profit with that account, or by sale; answer
+  from the ledger, not from a contract note.
 - After an import, tell them what it imported.
 {{- end}}
 {{- if .Finance}}

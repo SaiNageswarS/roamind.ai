@@ -150,14 +150,14 @@ func TestProfit(t *testing.T) {
 		{Date: d("2026-06-19"), Pair: "EURINR", Rate: "90"},
 	})
 	pf := BuildPortfolio(trades, nil, rates, "EUR", nil, closes, d("2026-06-20"))
-	byYear, err := pf.Profit("year")
+	byYear, err := pf.Profit("year", "")
 	if err != nil || len(byYear) != 1 || byYear[0].Key != "2026" {
 		t.Fatalf("by year = %+v %v", byYear, err)
 	}
 	// 5 × 120 / 1.10 − 5 × 100 / 1.25 = 545.454545 − 400
 	is(t, "realized 2026", byYear[0].Realized, "145.454545")
 	is(t, "dividends 2026", byYear[0].Dividends, "10")
-	byMarket, _ := pf.Profit("market")
+	byMarket, _ := pf.Profit("market", "")
 	if len(byMarket) != 2 || byMarket[0].Key != "IN" || byMarket[1].Key != "US" {
 		t.Fatalf("by market = %+v", byMarket)
 	}
@@ -166,10 +166,65 @@ func TestProfit(t *testing.T) {
 	if byMarket[0].Unrealized != nil || len(pf.Missing) != 1 || pf.Missing[0] != "no price for INE009A01021" {
 		t.Errorf("IN = %+v, missing = %v", byMarket[0], pf.Missing)
 	}
-	if _, err := pf.Profit("week"); err == nil {
+	if _, err := pf.Profit("week", ""); err == nil {
 		t.Error("profit by week")
 	}
+}
 
+// Profit after all deductions: a sale's fee is in its gain, and the tax
+// withheld on it and on dividends comes off the net.
+func TestProfitNet(t *testing.T) {
+	sell := tr("2026-11-09", "a2", SideSell, "2", "60", "0.50", "EUR")
+	sell.TaxWithheld = "4.75"
+	trades := []Trade{
+		tr("2026-07-28", "a2", SideBuy, "2", "50", "", "EUR"),
+		sell,
+		tr("2026-01-05", "a1", SideBuy, "10", "100", "", "USD"),
+		tr("2026-06-10", "a1", SideSell, "5", "120", "", "USD"),
+		{Date: d("2026-06-15"), Account: "a1", ISIN: "US0378331005", Side: SideDividend, Amount: "11", TaxWithheld: "1.10", Currency: "USD"},
+	}
+	rates := NewRates([]FX{
+		{Date: d("2026-01-02"), Pair: "EURUSD", Rate: "1.25"},
+		{Date: d("2026-06-10"), Pair: "EURUSD", Rate: "1.10"},
+		{Date: d("2026-11-05"), Pair: "EURUSD", Rate: "1.10"},
+	})
+	closes := map[string]Price{"US0378331005": {Close: "125", Currency: "USD"}}
+	pf := BuildPortfolio(trades, nil, rates, "EUR", nil, closes, d("2026-11-10"))
+
+	sales, err := pf.Profit("sale", "a2")
+	if err != nil || len(sales) != 1 {
+		t.Fatalf("a2's sales = %+v %v", sales, err)
+	}
+	// 120 − 0.50 − 100 = 19.50, less 4.75 tax.
+	is(t, "the sale's gain", sales[0].Realized, "19.5")
+	is(t, "the sale's tax", sales[0].Tax, "4.75")
+	is(t, "the sale's net", sales[0].Net, "14.75")
+	is(t, "proceeds after the fee", sales[0].Proceeds, "119.5")
+	if sales[0].Key != "2026-11-09" || sales[0].Account != "a2" || sales[0].Currency != "EUR" {
+		t.Errorf("the sale = %+v", sales[0])
+	}
+	if all, _ := pf.Profit("sale", ""); len(all) != 2 || all[0].Account != "a1" {
+		t.Errorf("all sales, oldest first = %+v", all)
+	}
+
+	byAccount, _ := pf.Profit("account", "")
+	if len(byAccount) != 2 || byAccount[0].Key != "a1" || byAccount[1].Key != "a2" {
+		t.Fatalf("by account = %+v", byAccount)
+	}
+	// a1: 5 × 120 / 1.10 − 400 = 145.454545, dividends 10, tax 1; and the
+	// 5 shares still held, 5 × 125 / 1.10 − 400.
+	is(t, "a1 net", byAccount[0].Net, "154.454545")
+	is(t, "a1 unrealized", byAccount[0].Unrealized, "168.181818")
+	is(t, "a2 net", byAccount[1].Net, "14.75")
+	is(t, "a2 unrealized", byAccount[1].Unrealized, "0")
+
+	is(t, "total tax", pf.Tax, "5.75")
+	is(t, "total net", pf.Net, "169.204545")
+	only, _ := pf.Profit("stock", "a2")
+	if len(only) != 1 {
+		t.Fatalf("a2 by stock = %+v", only)
+	}
+	is(t, "a2's stock net", only[0].Net, "14.75")
 }
 
 func TestLedgerUnknownCost(t *testing.T) {

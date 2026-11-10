@@ -188,11 +188,24 @@ func TestFinance(t *testing.T) {
 	if err := json.Unmarshal([]byte(msg), &sh); err != nil || len(sh.Points) != 2 || sh.Points[0].Side != "buy" {
 		t.Errorf("stock_history = %s %v", msg, err)
 	}
-	if msg, isErr := call("profit", map[string]any{"by": "week"}); !isErr || !strings.Contains(msg, "stock, market or year") {
+	if msg, isErr := call("profit", map[string]any{"by": "week"}); !isErr || !strings.Contains(msg, "stock, market, account, year or sale") {
 		t.Errorf("profit by week: %s", msg)
 	}
 	if msg, isErr := call("profit", map[string]any{"by": "year"}); isErr || !strings.Contains(msg, `"by":"year"`) {
 		t.Errorf("profit by year: %s", msg)
+	}
+	// One account's sales, each with what it fetched and cost.
+	msg, isErr = call("profit", map[string]any{"by": "sale", "account": "kite"})
+	var pr ProfitOutput
+	if err := json.Unmarshal([]byte(msg), &pr); isErr || err != nil || pr.Account != "Kite" || len(pr.Lines) != 1 {
+		t.Fatalf("Kite's sales = %s %v", msg, err)
+	}
+	if l := pr.Lines[0]; l.Key != "2026-11-03" || l.Account != "Kite" || l.Quantity != "10" || l.Proceeds != "16000.00" ||
+		l.Cost != "15000.00" || l.Currency != "INR" {
+		t.Errorf("the sale = %+v", l)
+	}
+	if msg, isErr := call("profit", map[string]any{"account": "nope"}); !isErr || !strings.Contains(msg, "list_accounts") {
+		t.Errorf("profit of an unknown account: %s", msg)
 	}
 	if msg, _ := call("set_base_currency", map[string]any{"currency": "inr"}); !strings.Contains(msg, "INR") {
 		t.Errorf("set_base_currency: %s", msg)
