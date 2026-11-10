@@ -92,6 +92,10 @@ const (
 	ServerFinance = "finance"
 )
 
+// QuestDBTools are the finance tools that read or write the ledger in
+// QuestDB (mcp/tools/finance.go); chat shows them as questDb_<tool>.
+var QuestDBTools = []string{"import_report", "record_trade", "list_holdings", "stock_history", "profit", "name_stock"}
+
 // NewsRef is the context of a turn in the user's news-shorts channel.
 type NewsRef struct {
 	// Interests are the catalog interests the user follows.

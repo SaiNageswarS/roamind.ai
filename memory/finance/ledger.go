@@ -39,6 +39,8 @@ type Sale struct {
 	Cost     *big.Rat  // nil when a lot's is
 	Gain     *big.Rat  // nil when either is
 	GainBase *big.Rat  // proceeds at the sale's rate, less cost at each lot's
+	Tax      *big.Rat  // tax withheld on the sale, 0 for none
+	TaxBase  *big.Rat
 	Acquired time.Time // the oldest lot sold
 }
 
@@ -47,7 +49,8 @@ type Income struct {
 	Date        time.Time
 	Amount      *big.Rat // gross
 	AmountBase  *big.Rat
-	TaxWithheld *big.Rat
+	TaxWithheld *big.Rat // nil for none
+	TaxBase     *big.Rat // 0 for none
 }
 
 // Quantity is the shares held.
@@ -177,7 +180,7 @@ func ledgerOf(isin string, ts []Trade, pending []CorporateAction, rates *Rates, 
 			}
 		case t.Side == SideDividend:
 			p.Income = append(p.Income, Income{Date: t.Date, Amount: amount, AmountBase: rates.Convert(amount, t.Currency, base, t.Date),
-				TaxWithheld: dec(t.TaxWithheld)})
+				TaxWithheld: dec(t.TaxWithheld), TaxBase: rates.convertSome(orZero(dec(t.TaxWithheld)), t.Currency, base, t.Date)})
 		}
 	}
 	applyUpTo(until)
@@ -277,11 +280,13 @@ func (p *Position) dispose(t Trade, qty, proceeds *big.Rat, rates *Rates, base s
 	if sold.Sign() == 0 {
 		return moved
 	}
+	tax := orZero(dec(t.TaxWithheld))
 	if left.Sign() > 0 {
 		// Only the shares the lots held count; the rest is oversold.
-		proceeds = mul(proceeds, div(sold, qty))
+		proceeds, tax = mul(proceeds, div(sold, qty)), mul(tax, div(sold, qty))
 	}
-	s := Sale{Date: t.Date, Quantity: sold, Proceeds: proceeds, Cost: cost, Gain: diff(proceeds, cost), Acquired: acquired}
+	s := Sale{Date: t.Date, Quantity: sold, Proceeds: proceeds, Cost: cost, Gain: diff(proceeds, cost), Acquired: acquired,
+		Tax: tax, TaxBase: rates.convertSome(tax, t.Currency, base, t.Date)}
 	if pb := rates.Convert(proceeds, t.Currency, base, t.Date); pb != nil && costBase != nil {
 		s.GainBase = sub(pb, costBase)
 	}

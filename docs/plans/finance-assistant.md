@@ -193,7 +193,7 @@ This is how a contract-note mail and the tradebook row for the same order count 
 - **Tools** (`mcp/tools/finance.go`):
   - `list_holdings`: one line per stock across accounts, with quantity per account, average cost, value, unrealized and realized gain, dividends, total, and the last few entry and exit points;
   - `stock_history`: all of a stock's entry and exit points;
-  - `profit`: totals by stock, market and year;
+  - `profit`: totals by stock, market, account and year, or each sale, optionally of one account: realized gains after fees, dividends, tax withheld on sales and dividends, and net profit (what the user kept);
   - `tax_estimate`: by tax year and country, with "tax if sold now" and the days until an Indian holding becomes long-term;
   - `import_report`, `record_trade`;
   - `list_alerts`, `set_alert`, `mute_alert`;

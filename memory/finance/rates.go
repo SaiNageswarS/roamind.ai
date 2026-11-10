@@ -69,3 +69,12 @@ func (rs *Rates) Convert(amount *big.Rat, from, to string, on time.Time) *big.Ra
 	}
 	return mul(div(amount, rs.euro(from, on)), rs.euro(to, on))
 }
+
+// convertSome is Convert, but 0 is 0 without a rate: for figures that are
+// usually none, such as tax withheld.
+func (rs *Rates) convertSome(amount *big.Rat, from, to string, on time.Time) *big.Rat {
+	if amount != nil && amount.Sign() == 0 {
+		return zero()
+	}
+	return rs.Convert(amount, from, to, on)
+}

@@ -93,9 +93,11 @@ func TestRenderBodyTools(t *testing.T) {
 	s := protocol.Snapshot{Text: "done", Tools: []protocol.ToolLine{
 		{ID: "1", Name: "mcp__roamind__memory_search", Done: true},
 		{ID: "2", Name: "Read"},
+		{ID: "3", Name: "mcp__roamind__profit", Done: true},
+		{ID: "4", Name: "mcp__basic-memory__search_notes", Done: true},
 	}}
 	got := RenderBody(s)
-	want := "_✓ memory_search_\n_🔧 Read…_\n\ndone"
+	want := "_✓ memory_search_\n_🔧 Read…_\n_✓ questDb_profit_\n_✓ search_notes_\n\ndone"
 	if got != want {
 		t.Fatalf("got %q", got)
 	}
