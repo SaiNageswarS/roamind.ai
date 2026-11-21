@@ -3,7 +3,7 @@
 // to the turn's user and serving the tool sets the turn's task gets (see
 // agent.Config.ToolsServer):
 //
-//	mcp --data DIR --user ID --tools interests,jobs,items,finance [--questdb 127.0.0.1:9000]
+//	mcp --data DIR [--postgres URI] --user ID --tools interests,jobs,items,finance [--questdb 127.0.0.1:9000]
 package main
 
 import (
@@ -13,7 +13,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -36,7 +35,8 @@ func main() {
 
 func run(args []string) error {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
-	dataDir := fs.String("data", "./data", "data directory holding roamind.db")
+	dataDir := fs.String("data", "./data", "data directory holding the users' workspaces")
+	postgres := fs.String("postgres", "", "PostgreSQL URI of the store (default: POSTGRES_URI, else "+store.DefaultURI+")")
 	user := fs.String("user", "", "the user the tools serve")
 	sets := fs.String("tools", "", "the tool sets to serve, comma-separated: interests, jobs, items, finance")
 	questdb := fs.String("questdb", "", "QuestDB's HTTP address, for the finance tools")
@@ -46,13 +46,20 @@ func run(args []string) error {
 	if *user == "" {
 		return errors.New("--user is required")
 	}
-	st, err := store.Open(filepath.Join(*dataDir, "roamind.db"))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	uri := *postgres
+	if uri == "" {
+		uri = os.Getenv("POSTGRES_URI")
+	}
+	if uri == "" {
+		uri = store.DefaultURI
+	}
+	st, err := store.Open(ctx, uri)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	deps := tools.Deps{Store: st, Feeds: feeds.New(15 * time.Second), UserID: *user, DataDir: *dataDir}
 	if *questdb != "" {
 		if deps.Finance, err = finance.Open(ctx, *questdb); err != nil {

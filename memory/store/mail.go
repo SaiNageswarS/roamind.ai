@@ -42,7 +42,7 @@ const (
 
 // ConnectMail adds the user's Gmail account, or moves it to them, with a
 // new signing key, which it returns for the account's script; task
-// mail-connect does the same with the sqlite3 CLI.
+// mail-connect does the same with the psql CLI.
 func (s *Store) ConnectMail(ctx context.Context, address, userID string) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -50,7 +50,7 @@ func (s *Store) ConnectMail(ctx context.Context, address, userID string) (string
 	}
 	secret := hex.EncodeToString(b)
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO mail_accounts (address, user_id, secret, connected_at) VALUES (?, ?, ?, ?)
+		INSERT INTO mail_accounts (address, user_id, secret, connected_at) VALUES ($1, $2, $3, $4)
 		ON CONFLICT (address) DO UPDATE SET user_id = excluded.user_id, secret = excluded.secret,
 			connected_at = excluded.connected_at`,
 		strings.TrimSpace(address), userID, secret, time.Now().Unix())
@@ -76,7 +76,7 @@ func scanMailAccount(sc interface{ Scan(...any) error }) (MailAccount, error) {
 // MailAccountOf returns the account with address, in any case, or nil.
 func (s *Store) MailAccountOf(ctx context.Context, address string) (*MailAccount, error) {
 	a, err := scanMailAccount(s.db.QueryRowContext(ctx, `
-		SELECT `+mailAccountCols+` FROM mail_accounts WHERE address = ?`, strings.TrimSpace(address)))
+		SELECT `+mailAccountCols+` FROM mail_accounts WHERE address = $1`, strings.TrimSpace(address)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -88,7 +88,7 @@ func (s *Store) MailAccountOf(ctx context.Context, address string) (*MailAccount
 
 // SeenMail records a request from the account's script at at.
 func (s *Store) SeenMail(ctx context.Context, address string, at time.Time) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE mail_accounts SET seen_at = ? WHERE address = ?`,
+	_, err := s.db.ExecContext(ctx, `UPDATE mail_accounts SET seen_at = $1 WHERE address = $2`,
 		at.Unix(), strings.TrimSpace(address))
 	return err
 }
@@ -99,7 +99,7 @@ func (s *Store) SeenMail(ctx context.Context, address string, at time.Time) erro
 func (s *Store) StaleMailAccounts(ctx context.Context, userID string, before time.Time) ([]MailAccount, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+mailAccountCols+` FROM mail_accounts
-		WHERE user_id = ? AND COALESCE(seen_at, connected_at) < ? ORDER BY address`, userID, before.Unix())
+		WHERE user_id = $1 AND COALESCE(seen_at, connected_at) < $2 ORDER BY address`, userID, before.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -123,11 +123,11 @@ func (s *Store) StaleMailAccounts(ctx context.Context, userID string, before tim
 func (s *Store) PickMessage(ctx context.Context, m MailMessage, stuckBefore time.Time) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO mail_messages (address, message_id, user_id, category, subject, link, status, picked_at)
-		VALUES (?, ?, ?, ?, ?, ?, 'picked', ?)
+		VALUES ($1, $2, $3, $4, $5, $6, 'picked', $7)
 		ON CONFLICT (address, message_id) DO UPDATE SET
 			status = 'picked', category = excluded.category, subject = excluded.subject, link = excluded.link,
 			picked_at = excluded.picked_at, done_at = NULL
-		WHERE mail_messages.status = 'failed' OR (mail_messages.status = 'picked' AND mail_messages.picked_at < ?)
+		WHERE mail_messages.status = 'failed' OR (mail_messages.status = 'picked' AND mail_messages.picked_at < $8)
 			OR (excluded.category = 'finance' AND mail_messages.category != 'finance')`,
 		strings.TrimSpace(m.Address), m.MessageID, m.UserID, m.Category, m.Subject, m.Link, time.Now().Unix(),
 		stuckBefore.Unix())
@@ -143,8 +143,8 @@ func (s *Store) PickMessage(ctx context.Context, m MailMessage, stuckBefore time
 // relate or save task, which doesn't pick it again, can still finish it.
 func (s *Store) FinishMessage(ctx context.Context, address, messageID, status string) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE mail_messages SET status = ?, done_at = ?
-		WHERE address = ? AND message_id = ? AND status IN ('picked', 'failed')`,
+		UPDATE mail_messages SET status = $1, done_at = $2
+		WHERE address = $3 AND message_id = $4 AND status IN ('picked', 'failed')`,
 		status, time.Now().Unix(), strings.TrimSpace(address), messageID)
 	return err
 }
@@ -152,7 +152,7 @@ func (s *Store) FinishMessage(ctx context.Context, address, messageID, status st
 // MessageStatus returns the message's status, or "" when it was never sent.
 func (s *Store) MessageStatus(ctx context.Context, address, messageID string) (string, error) {
 	var status string
-	err := s.db.QueryRowContext(ctx, `SELECT status FROM mail_messages WHERE address = ? AND message_id = ?`,
+	err := s.db.QueryRowContext(ctx, `SELECT status FROM mail_messages WHERE address = $1 AND message_id = $2`,
 		strings.TrimSpace(address), messageID).Scan(&status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
@@ -166,7 +166,7 @@ func (s *Store) MessageStatus(ctx context.Context, address, messageID string) (s
 func (s *Store) UnsavedMail(ctx context.Context, userID string, since, stuckBefore time.Time) ([]MailMessage, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT address, message_id, user_id, category, subject, link, status, picked_at FROM mail_messages
-		WHERE user_id = ? AND picked_at >= ? AND (status = 'failed' OR (status = 'picked' AND picked_at < ?))
+		WHERE user_id = $1 AND picked_at >= $2 AND (status = 'failed' OR (status = 'picked' AND picked_at < $3))
 		ORDER BY picked_at, address, message_id`, userID, since.Unix(), stuckBefore.Unix())
 	if err != nil {
 		return nil, err

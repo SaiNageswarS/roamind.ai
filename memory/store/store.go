@@ -1,4 +1,4 @@
-// Package store reads and writes Roamind's SQLite database. Its tables are
+// Package store reads and writes Roamind's PostgreSQL database. Its tables are
 // defined in memory/sql-schemas and created by `task init`; each schema file
 // has a Go file here with the models and queries of its tables:
 //
@@ -23,36 +23,54 @@ import (
 	"database/sql"
 	"errors"
 
-	_ "modernc.org/sqlite"
+	"github.com/SaiNageswarS/go-api-boot/odm/postgres"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
-// Store wraps the SQLite database.
-type Store struct{ db *sql.DB }
+// DefaultURI is the database roamind over the local PostgreSQL socket,
+// for POSTGRES_URI when it is not set. The role is the OS user's (peer
+// authentication), so there is no password.
+const DefaultURI = "postgres:///roamind?host=/var/run/postgresql"
 
-// Open opens (creating if needed) the database at path. Its tables come
-// from memory/sql-schemas, applied by `task init`.
-func Open(path string) (*Store, error) {
-	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-	db, err := sql.Open("sqlite", dsn)
+// Store wraps the PostgreSQL database. Its queries run on db, a database/sql
+// handle over go-api-boot's connection pool; pg is the same pool for the
+// framework's ORM and raw pgx.
+type Store struct {
+	db *sql.DB
+	pg *postgres.DB
+}
+
+// Open connects to the database at uri, a PostgreSQL connection URI such as
+// postgres:///roamind?host=/var/run/postgresql (the local socket). Its
+// tables come from memory/sql-schemas, applied by `task init`.
+func Open(ctx context.Context, uri string) (*Store, error) {
+	pg, err := postgres.Open(ctx, uri)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	return &Store{db: stdlib.OpenDBFromPool(pg.Pool()), pg: pg}, nil
 }
+
+// DB is the go-api-boot database, for its ORM and raw pgx.
+func (s *Store) DB() *postgres.DB { return s.pg }
 
 // Ready returns an error when the tables have not been created yet.
 func (s *Store) Ready(ctx context.Context) error {
-	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'users'`).Scan(&n); err != nil {
+	var ok bool
+	if err := s.db.QueryRowContext(ctx, `SELECT to_regclass('users') IS NOT NULL`).Scan(&ok); err != nil {
 		return err
 	}
-	if n == 0 {
+	if !ok {
 		return errors.New("the store has no tables")
 	}
 	return nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	err := s.db.Close()
+	s.pg.Close()
+	return err
+}
 
 // execer is a database or a transaction.
 type execer interface {

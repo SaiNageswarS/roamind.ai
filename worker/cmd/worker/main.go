@@ -41,11 +41,17 @@ func main() {
 
 func run() error {
 	questdbInit := flag.Bool("questdb-init", false, "create QuestDB's tables from <ROAMIND_MEMORY_DIR>/questdb-schemas, then exit")
+	seed := flag.Bool("seed", false, "load the curated interests from <ROAMIND_MEMORY_DIR>/seed/interests.yaml, then exit")
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if *questdbInit {
 		return initQuestDB(ctx)
+	}
+
+	postgresURI := envOr("POSTGRES_URI", store.DefaultURI)
+	if *seed {
+		return seedInterests(ctx, postgresURI)
 	}
 
 	dataDir, err := filepath.Abs(envOr("ROAMIND_DATA_DIR", "./data"))
@@ -55,7 +61,7 @@ func run() error {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return err
 	}
-	st, err := store.Open(filepath.Join(dataDir, "roamind.db"))
+	st, err := store.Open(ctx, postgresURI)
 	if err != nil {
 		return err
 	}
@@ -103,7 +109,7 @@ func run() error {
 	var toolsServer []string
 	if mcpBin != "" {
 		// claude runs it in the user's workspace, so the paths are absolute.
-		toolsServer = []string{mcpBin, "--data", dataDir}
+		toolsServer = []string{mcpBin, "--data", dataDir, "--postgres", postgresURI}
 		if fin != nil {
 			toolsServer = append(toolsServer, "--questdb", questdbAddr)
 		}
@@ -272,4 +278,17 @@ func chromeBin() string {
 		}
 	}
 	return ""
+}
+
+// seedInterests loads the curated interests, for `task init`.
+func seedInterests(ctx context.Context, postgresURI string) error {
+	st, err := store.Open(ctx, postgresURI)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	if err := st.Ready(ctx); err != nil {
+		return fmt.Errorf("%w: apply memory/sql-schemas first", err)
+	}
+	return st.SeedInterests(ctx, envOr("ROAMIND_MEMORY_DIR", "./memory"))
 }

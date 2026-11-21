@@ -1,6 +1,6 @@
 module roamind.ai/agent
 
-go 1.26.3
+go 1.26.7
 
 require roamind.ai/memory v0.0.0
 

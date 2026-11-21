@@ -1,5 +1,8 @@
 -- People known to the agent, keyed by email hash, with the channel they came
 -- from, their Slack identity and Basic Memory project.
+-- Case-insensitive text, for the columns SQLite compared with COLLATE NOCASE.
+CREATE EXTENSION IF NOT EXISTS citext;
+
 CREATE TABLE IF NOT EXISTS users (
     id               TEXT PRIMARY KEY, -- sha256(lowercase(trim(email)))
     email            TEXT NOT NULL UNIQUE,
@@ -8,7 +11,7 @@ CREATE TABLE IF NOT EXISTS users (
     slack_team_id    TEXT,
     slack_user_id    TEXT,
     memory_project   TEXT UNIQUE, -- Basic Memory project, bm-u-<name>-<idx>
-    created_at       INTEGER NOT NULL,
-    updated_at       INTEGER NOT NULL,
+    created_at       BIGINT NOT NULL,
+    updated_at       BIGINT NOT NULL,
     UNIQUE (slack_team_id, slack_user_id)
 );

@@ -3,33 +3,20 @@ package store
 import (
 	"context"
 	"net/url"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// The seed runs as `task init` runs it: the sqlite3 CLI, from the repo root.
+// The seed is loaded as `task init` loads it, from the repo's memory folder.
 func TestSeedInterests(t *testing.T) {
-	if _, err := exec.LookPath("sqlite3"); err != nil {
-		t.Skip("sqlite3 CLI not installed")
-	}
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "t.db")
+	s := open(t)
 	seed := func() {
 		t.Helper()
-		cmd := exec.Command("sqlite3", "-bail", path, ".read memory/seed/interests.sql")
-		cmd.Dir = "../.."
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("seed: %v: %s", err, out)
+		if err := s.SeedInterests(ctx, "../"); err != nil {
+			t.Fatalf("seed: %v", err)
 		}
 	}
-	s, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	applySchema(t, s)
 	if err := s.UpsertSlackUser(ctx, User{ID: "h1", Email: "a@x.com", SlackTeamID: "T1", SlackUserID: "U1"}); err != nil {
 		t.Fatal(err)
 	}

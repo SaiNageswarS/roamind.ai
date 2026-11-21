@@ -36,7 +36,7 @@ type Channel struct {
 func (s *Store) Channel(ctx context.Context, userID, kind, ref string) (string, error) {
 	var ch string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT channel_id FROM channels WHERE user_id = ? AND kind = ? AND ref = ?`,
+		`SELECT channel_id FROM channels WHERE user_id = $1 AND kind = $2 AND ref = $3`,
 		userID, kind, ref).Scan(&ch)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
@@ -51,7 +51,7 @@ func (s *Store) ChannelOf(ctx context.Context, channelID, slackUserID string) (*
 	err := s.db.QueryRowContext(ctx, `
 		SELECT c.user_id, c.kind, c.ref, c.title
 		FROM channels c JOIN users u ON u.id = c.user_id
-		WHERE c.channel_id = ? AND u.slack_user_id = ?`, channelID, slackUserID).
+		WHERE c.channel_id = $1 AND u.slack_user_id = $2`, channelID, slackUserID).
 		Scan(&c.UserID, &c.Kind, &c.Ref, &c.Title)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -64,8 +64,8 @@ func (s *Store) Channels(ctx context.Context, kind string) ([]Channel, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.user_id, c.kind, c.ref, c.title, c.channel_id, COALESCE(u.slack_user_id, '')
 		FROM channels c JOIN users u ON u.id = c.user_id
-		WHERE c.kind = ?
-		ORDER BY c.created_at, c.rowid`, kind)
+		WHERE c.kind = $1
+		ORDER BY c.created_at, c.seq`, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +85,7 @@ func (s *Store) Channels(ctx context.Context, kind string) ([]Channel, error) {
 func (s *Store) SaveChannel(ctx context.Context, c Channel) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO channels (user_id, kind, ref, title, channel_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
+		VALUES ($1, $2, $3, $4, $5, $6)`,
 		c.UserID, c.Kind, c.Ref, c.Title, c.ChannelID, time.Now().Unix())
 	return err
 }

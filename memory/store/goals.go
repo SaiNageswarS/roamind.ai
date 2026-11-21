@@ -21,7 +21,7 @@ type Exercise struct {
 func (s *Store) SaveExercise(ctx context.Context, e Exercise) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO exercises (user_id, goal_permalink, channel_id, thread_ts, note_permalink, posted_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
+		VALUES ($1, $2, $3, $4, $5, $6)`,
 		e.UserID, e.GoalPermalink, e.ChannelID, e.ThreadTS, e.NotePermalink, e.PostedAt.Unix())
 	return err
 }
@@ -30,7 +30,7 @@ func (s *Store) SaveExercise(ctx context.Context, e Exercise) error {
 func (s *Store) LastExercise(ctx context.Context, userID, goalPermalink string) (*Exercise, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT channel_id, thread_ts, note_permalink, posted_at, answered_at FROM exercises
-		WHERE user_id = ? AND goal_permalink = ? ORDER BY posted_at DESC LIMIT 1`, userID, goalPermalink)
+		WHERE user_id = $1 AND goal_permalink = $2 ORDER BY posted_at DESC LIMIT 1`, userID, goalPermalink)
 	e := Exercise{UserID: userID, GoalPermalink: goalPermalink}
 	var posted int64
 	var answered sql.NullInt64
@@ -50,8 +50,8 @@ func (s *Store) LastExercise(ctx context.Context, userID, goalPermalink string) 
 func (s *Store) MarkExerciseAnswered(ctx context.Context, channelID, threadTS string) (string, error) {
 	var note string
 	err := s.db.QueryRowContext(ctx, `
-		UPDATE exercises SET answered_at = COALESCE(answered_at, ?)
-		WHERE channel_id = ? AND thread_ts = ?
+		UPDATE exercises SET answered_at = COALESCE(answered_at, $1)
+		WHERE channel_id = $2 AND thread_ts = $3
 		RETURNING note_permalink`,
 		time.Now().Unix(), channelID, threadTS).Scan(&note)
 	if errors.Is(err, sql.ErrNoRows) {

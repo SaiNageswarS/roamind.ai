@@ -18,7 +18,7 @@ type Thread struct {
 func (s *Store) GetThread(ctx context.Context, channelID, threadTS string) (*Thread, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT user_id, claude_session_id FROM threads
-		 WHERE channel_id = ? AND thread_ts = ?`, channelID, threadTS)
+		 WHERE channel_id = $1 AND thread_ts = $2`, channelID, threadTS)
 	t := Thread{ChannelID: channelID, ThreadTS: threadTS}
 	err := row.Scan(&t.UserID, &t.ClaudeSessionID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -32,7 +32,7 @@ func (s *Store) SaveThread(ctx context.Context, t Thread) error {
 	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO threads (channel_id, thread_ts, user_id, claude_session_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (channel_id, thread_ts) DO UPDATE SET
 			claude_session_id = excluded.claude_session_id,
 			updated_at = excluded.updated_at`,

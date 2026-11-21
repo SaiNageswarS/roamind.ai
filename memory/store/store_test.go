@@ -2,55 +2,41 @@ package store
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
+
+	"roamind.ai/memory/store/pgtest"
 )
 
 // open returns a store with the repo's tables (memory/sql-schemas), as
-// `task init` creates them. (storetest does this for other packages.)
+// `task init` creates them, in a schema of its own. (storetest does this
+// for other packages.)
 func open(t *testing.T) *Store {
 	t.Helper()
-	s, err := Open(filepath.Join(t.TempDir(), "t.db"))
+	uri := pgtest.Schema(t)
+	pgtest.Apply(t, uri)
+	s, err := Open(context.Background(), uri)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
-	applySchema(t, s)
 	return s
 }
 
-func applySchema(t *testing.T, s *Store) {
-	t.Helper()
-	names, _ := filepath.Glob("../sql-schemas/*.sql")
-	if len(names) == 0 {
-		t.Fatal("no schema files")
-	}
-	for _, name := range names {
-		b, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := s.db.Exec(string(b)); err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-	}
-}
-
-// The schema files apply in order, and again on an existing database.
+// The schema files apply in order, and again on a database that has them.
 func TestSchema(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "t.db")
+	uri := pgtest.Schema(t)
+	ctx := context.Background()
 	for i := 0; i < 2; i++ {
-		s, err := Open(path)
+		s, err := Open(ctx, uri)
 		if err != nil {
 			t.Fatalf("open %d: %v", i, err)
 		}
-		if err := s.Ready(context.Background()); (err == nil) != (i == 1) {
+		if err := s.Ready(ctx); (err == nil) != (i == 1) {
 			t.Fatalf("ready %d: %v", i, err)
 		}
-		applySchema(t, s)
+		pgtest.Apply(t, uri)
 		var n int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'`).Scan(&n); err != nil || n != 24 {
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema()`).Scan(&n); err != nil || n != 24 {
 			t.Fatalf("open %d: %d tables, %v", i, n, err)
 		}
 		s.Close()

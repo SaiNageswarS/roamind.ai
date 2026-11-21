@@ -6,8 +6,8 @@ CREATE TABLE IF NOT EXISTS exercises (
     channel_id     TEXT NOT NULL,
     thread_ts      TEXT NOT NULL, -- the exercise message
     note_permalink TEXT NOT NULL, -- the exercise note in the user's memory
-    posted_at      INTEGER NOT NULL,
-    answered_at    INTEGER, -- first reply in the thread; NULL until then
+    posted_at      BIGINT NOT NULL,
+    answered_at    BIGINT, -- first reply in the thread; NULL until then
     PRIMARY KEY (channel_id, thread_ts)
 );
 CREATE INDEX IF NOT EXISTS exercises_goal ON exercises (user_id, goal_permalink, posted_at);

@@ -110,7 +110,7 @@ func FinanceChannelSlackName(userName string) string {
 
 // financeTrigger returns a hook for chat-turn: after a turn it reconciles
 // a user left dirty, and opens the finance channel of a user who has an
-// account but no channel. The checks read only SQLite.
+// account but no channel. The checks read only Postgres.
 func financeTrigger(reconcile, channel *hatchet.StandaloneTask, d Deps) func(ctx context.Context, u *store.User, _ FinishedTurn) error {
 	return func(ctx context.Context, u *store.User, _ FinishedTurn) error {
 		mark, err := d.Store.FinanceDirty(ctx, u.ID)
