@@ -100,14 +100,6 @@ tasks:
           done
         done
 
-  # One-off: copies the old SQLite database into PostgreSQL (empty tables, so
-  # after `task init`), in one transaction, and checks the row counts. Stop
-  # the worker first; SQLite is only read.
-  migrate-sqlite:
-    desc: Copy data/roamind.db (SQLite) into PostgreSQL, once, after task init
-    cmds:
-      - go run ./memory/cmd/sqlite2pg -sqlite "${ROAMIND_DATA_DIR:-./data}/roamind.db"
-
   hatchet-env:
     desc: Start the Hatchet server, register the webhooks, open the Funnel
     cmds:

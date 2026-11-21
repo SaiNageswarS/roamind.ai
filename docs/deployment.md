@@ -87,7 +87,3 @@ Development commands:
 - `task init` prepares the environment from `memory/` without starting the worker.
 - `task bm -- [project] <args>` runs Basic Memory's CLI against a user's project (`task bm -- project info`, `task bm -- tool search-notes …`). It sets `BASIC_MEMORY_CONFIG_DIR` for that one command only, so your own `bm` and MCP setups keep using `~/.basic-memory`.
 - `task turn -- "hello"` runs one real `claude -p` turn from the terminal.
-
-## Moving from SQLite
-
-Older installs kept the store in `data/roamind.db` (SQLite). To move it: stop the service (`systemctl --user stop roamind`), make the databases as in the Build step, apply the tables (`cat memory/sql-schemas/*.sql | psql roamind -f -`, or `task init` with QuestDB up), then `task migrate-sqlite`. It copies every table in one transaction into the empty Postgres tables, keeps ids and order, and refuses to run into tables that have rows or to finish unless every table's row count matches. SQLite is only read; keep `data/roamind.db` until you're sure. To move Hatchet's data from the Docker Postgres that `hatchet server start` made: `docker exec hatchet-cli-postgres-1 pg_dump -U hatchet --no-owner --no-privileges -Fc hatchet | pg_restore -d hatchet --no-owner --no-privileges` (drop its `COMMENT ON EXTENSION` entry, which only a superuser may restore), and copy the config volume's `*.yaml` to `data/hatchet/config`.
