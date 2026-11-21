@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS items (
     until      TEXT, -- ISO date it last shows; NULL until it is closed
     state      TEXT NOT NULL, -- open, done, cancelled
     source     TEXT NOT NULL, -- 'chat', or 'mail:<address>/<message id>'
-    updated_at BIGINT NOT NULL,
+    updated_on BIGINT NOT NULL,
     closed_at  BIGINT,
     PRIMARY KEY (user_id, key)
 );

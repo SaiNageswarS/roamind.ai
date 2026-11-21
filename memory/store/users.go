@@ -67,14 +67,14 @@ func (s *Store) UserByID(ctx context.Context, id string) (*User, error) {
 func (s *Store) UpsertSlackUser(ctx context.Context, u User) error {
 	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO users (id, email, display_name, slack_team_id, slack_user_id, created_at, updated_at)
+		INSERT INTO users (id, email, display_name, slack_team_id, slack_user_id, created_on, updated_on)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (id) DO UPDATE SET
 			display_name = excluded.display_name,
 			channel = 'slack',
 			slack_team_id = excluded.slack_team_id,
 			slack_user_id = excluded.slack_user_id,
-			updated_at = excluded.updated_at`,
+			updated_on = excluded.updated_on`,
 		u.ID, u.Email, u.DisplayName, u.SlackTeamID, u.SlackUserID, now, now)
 	return err
 }
@@ -85,7 +85,7 @@ func (s *Store) UpsertSlackUser(ctx context.Context, u User) error {
 func (s *Store) UpsertWebUser(ctx context.Context, u User) error {
 	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO users (id, email, display_name, channel, created_at, updated_at)
+		INSERT INTO users (id, email, display_name, channel, created_on, updated_on)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (id) DO NOTHING`,
 		u.ID, u.Email, u.DisplayName, ChannelWeb, now, now)
@@ -122,7 +122,7 @@ func (s *Store) AssignMemoryProject(ctx context.Context, userID, base string) (s
 func (s *Store) Users(ctx context.Context) ([]User, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, email, display_name, channel, slack_team_id, slack_user_id, COALESCE(memory_project, '') FROM users
-		WHERE channel = 'slack' AND slack_user_id IS NOT NULL AND slack_user_id != '' ORDER BY created_at`)
+		WHERE channel = 'slack' AND slack_user_id IS NOT NULL AND slack_user_id != '' ORDER BY created_on`)
 	if err != nil {
 		return nil, err
 	}

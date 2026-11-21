@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+
+	"github.com/SaiNageswarS/go-api-boot/odm"
+	"github.com/SaiNageswarS/go-collection-boot/async"
 )
 
 // Exercise is one exercise posted for a learning goal.
@@ -19,30 +22,31 @@ type Exercise struct {
 
 // SaveExercise records a posted exercise.
 func (s *Store) SaveExercise(ctx context.Context, e Exercise) error {
+	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO exercises (user_id, goal_permalink, channel_id, thread_ts, note_permalink, posted_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		e.UserID, e.GoalPermalink, e.ChannelID, e.ThreadTS, e.NotePermalink, e.PostedAt.Unix())
+		INSERT INTO exercises (id, user_id, goal_permalink, channel_id, thread_ts, note_permalink, posted_at, created_on, updated_on)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
+		rowID(e.ChannelID, e.ThreadTS), e.UserID, e.GoalPermalink, e.ChannelID, e.ThreadTS, e.NotePermalink, e.PostedAt.Unix(), now)
 	return err
 }
 
 // LastExercise returns the goal's most recent exercise, or nil.
 func (s *Store) LastExercise(ctx context.Context, userID, goalPermalink string) (*Exercise, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT channel_id, thread_ts, note_permalink, posted_at, answered_at FROM exercises
-		WHERE user_id = $1 AND goal_permalink = $2 ORDER BY posted_at DESC LIMIT 1`, userID, goalPermalink)
-	e := Exercise{UserID: userID, GoalPermalink: goalPermalink}
-	var posted int64
-	var answered sql.NullInt64
-	err := row.Scan(&e.ChannelID, &e.ThreadTS, &e.NotePermalink, &posted, &answered)
-	if errors.Is(err, sql.ErrNoRows) {
+	r, err := async.Await(table[exerciseRow](s).
+		Where("user_id = ? AND goal_permalink = ?", userID, goalPermalink).
+		OrderBy("posted_at DESC").First(ctx))
+	if errors.Is(err, odm.ErrNotFound) {
 		return nil, nil
 	}
-	e.PostedAt = time.Unix(posted, 0)
-	if answered.Valid {
-		e.AnsweredAt = time.Unix(answered.Int64, 0)
+	if err != nil {
+		return nil, err
 	}
-	return &e, err
+	e := &Exercise{UserID: userID, GoalPermalink: goalPermalink, ChannelID: r.ChannelID, ThreadTS: r.ThreadTS,
+		NotePermalink: r.NotePermalink, PostedAt: time.Unix(r.PostedAt, 0)}
+	if r.AnsweredAt != nil {
+		e.AnsweredAt = time.Unix(*r.AnsweredAt, 0)
+	}
+	return e, nil
 }
 
 // MarkExerciseAnswered records a reply in a thread. When the thread is an

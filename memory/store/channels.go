@@ -34,14 +34,11 @@ type Channel struct {
 
 // Channel returns the user's channel for kind and ref, or "".
 func (s *Store) Channel(ctx context.Context, userID, kind, ref string) (string, error) {
-	var ch string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT channel_id FROM channels WHERE user_id = $1 AND kind = $2 AND ref = $3`,
-		userID, kind, ref).Scan(&ch)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+	r, err := find[channelRow](ctx, s, rowID(userID, kind, ref))
+	if r == nil {
+		return "", err
 	}
-	return ch, err
+	return r.ChannelID, nil
 }
 
 // ChannelOf returns what channelID is for, to the Slack user slackUserID,
@@ -65,7 +62,7 @@ func (s *Store) Channels(ctx context.Context, kind string) ([]Channel, error) {
 		SELECT c.user_id, c.kind, c.ref, c.title, c.channel_id, COALESCE(u.slack_user_id, '')
 		FROM channels c JOIN users u ON u.id = c.user_id
 		WHERE c.kind = $1
-		ORDER BY c.created_at, c.seq`, kind)
+		ORDER BY c.created_on, c.seq`, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -83,9 +80,11 @@ func (s *Store) Channels(ctx context.Context, kind string) ([]Channel, error) {
 
 // SaveChannel records a channel made for a user.
 func (s *Store) SaveChannel(ctx context.Context, c Channel) error {
+	// An insert, not the ORM's Save: a channel saved twice is a bug to see.
+	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO channels (user_id, kind, ref, title, channel_id, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		c.UserID, c.Kind, c.Ref, c.Title, c.ChannelID, time.Now().Unix())
+		INSERT INTO channels (id, user_id, kind, ref, title, channel_id, created_on, updated_on)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
+		rowID(c.UserID, c.Kind, c.Ref), c.UserID, c.Kind, c.Ref, c.Title, c.ChannelID, now)
 	return err
 }

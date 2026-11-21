@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/SaiNageswarS/go-collection-boot/async"
 )
 
 // FinAccount is one of a user's brokerage accounts.
@@ -63,7 +65,7 @@ func (s *Store) EnsureFinAccount(ctx context.Context, userID, broker, number, cu
 		return a, false, err
 	}
 	a = FinAccount{UserID: userID, ID: fmt.Sprintf("a%d", n+1), Broker: broker, Number: number, Currency: strings.ToUpper(strings.TrimSpace(currency))}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO fin_accounts (`+finAccountCols+`, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+	if _, err := tx.ExecContext(ctx, `INSERT INTO fin_accounts (`+finAccountCols+`, created_on) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		a.UserID, a.ID, a.Broker, a.Number, a.Currency, a.Name, time.Now().Unix()); err != nil {
 		return a, false, err
 	}
@@ -72,7 +74,7 @@ func (s *Store) EnsureFinAccount(ctx context.Context, userID, broker, number, cu
 
 // FinAccounts returns the user's accounts, oldest first.
 func (s *Store) FinAccounts(ctx context.Context, userID string) ([]FinAccount, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+finAccountCols+` FROM fin_accounts WHERE user_id = $1 ORDER BY created_at, seq`, userID)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+finAccountCols+` FROM fin_accounts WHERE user_id = $1 ORDER BY created_on, seq`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -125,94 +127,77 @@ type FinanceUpload struct {
 	ImportedAt time.Time
 }
 
-const financeUploadCols = `user_id, sha256, file, account, doc, period_from, period_to, rows, imported_at`
-
-func scanFinanceUpload(sc interface{ Scan(...any) error }) (FinanceUpload, error) {
-	var u FinanceUpload
-	var at int64
-	err := sc.Scan(&u.UserID, &u.SHA256, &u.File, &u.Account, &u.Doc, &u.PeriodFrom, &u.PeriodTo, &u.Rows, &at)
-	u.ImportedAt = time.Unix(at, 0)
-	return u, err
+func (r financeUploadRow) upload() FinanceUpload {
+	return FinanceUpload{UserID: r.UserID, SHA256: r.SHA256, File: r.File, Account: r.Account, Doc: r.Doc,
+		PeriodFrom: r.PeriodFrom, PeriodTo: r.PeriodTo, Rows: int(r.Rows), ImportedAt: time.Unix(r.ImportedAt, 0)}
 }
 
 // FinanceUploadOf returns the user's import of the file with this hash, or
 // nil.
 func (s *Store) FinanceUploadOf(ctx context.Context, userID, sha string) (*FinanceUpload, error) {
-	u, err := scanFinanceUpload(s.db.QueryRowContext(ctx, `SELECT `+financeUploadCols+` FROM finance_uploads
-		WHERE user_id = $1 AND sha256 = $2`, userID, sha))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+	r, err := find[financeUploadRow](ctx, s, rowID(userID, sha))
+	if r == nil {
+		return nil, err
 	}
-	return &u, err
+	u := r.upload()
+	return &u, nil
 }
 
 // SaveFinanceUpload records an imported report.
 func (s *Store) SaveFinanceUpload(ctx context.Context, u FinanceUpload) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO finance_uploads (`+financeUploadCols+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		u.UserID, u.SHA256, u.File, u.Account, u.Doc, u.PeriodFrom, u.PeriodTo, u.Rows, time.Now().Unix())
+	// An insert, not the ORM's Save: a file imported twice is refused.
+	now := time.Now().Unix()
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO finance_uploads (id, user_id, sha256, file, account, doc, period_from, period_to, rows, imported_at, created_on, updated_on)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $10)`,
+		rowID(u.UserID, u.SHA256), u.UserID, u.SHA256, u.File, u.Account, u.Doc, u.PeriodFrom, u.PeriodTo, u.Rows, now)
 	return err
 }
 
 // FinanceUploads returns the user's imported reports, oldest first.
 func (s *Store) FinanceUploads(ctx context.Context, userID string) ([]FinanceUpload, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+financeUploadCols+` FROM finance_uploads WHERE user_id = $1 ORDER BY imported_at, seq`, userID)
+	rows, err := async.Await(table[financeUploadRow](s).Where("user_id = ?", userID).OrderBy("imported_at", "seq").Find(ctx))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var us []FinanceUpload
-	for rows.Next() {
-		u, err := scanFinanceUpload(rows)
-		if err != nil {
-			return nil, err
-		}
-		us = append(us, u)
+	for _, r := range rows {
+		us = append(us, r.upload())
 	}
-	return us, rows.Err()
+	return us, nil
 }
 
 // MarkFinanceDirty records that the user's trade events changed; it
 // returns the mark, for ClearFinanceDirty.
 func (s *Store) MarkFinanceDirty(ctx context.Context, userID string) (int64, error) {
 	since := time.Now().UnixNano()
-	_, err := s.db.ExecContext(ctx, `INSERT INTO finance_dirty (user_id, since) VALUES ($1, $2)
-		ON CONFLICT (user_id) DO UPDATE SET since = excluded.since`, userID, since)
-	return since, err
+	return since, save(ctx, s, financeDirtyRow{UserID: userID, Since: since})
 }
 
 // FinanceDirty returns the user's mark, or 0 when their trades are up to
 // date.
 func (s *Store) FinanceDirty(ctx context.Context, userID string) (int64, error) {
-	var since int64
-	err := s.db.QueryRowContext(ctx, `SELECT since FROM finance_dirty WHERE user_id = $1`, userID).Scan(&since)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, nil
+	r, err := find[financeDirtyRow](ctx, s, userID)
+	if r == nil {
+		return 0, err
 	}
-	return since, err
+	return r.Since, nil
 }
 
 // DirtyFinanceUsers returns the users whose trades are not up to date.
 func (s *Store) DirtyFinanceUsers(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT user_id FROM finance_dirty ORDER BY since`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+	rows, err := async.Await(table[financeDirtyRow](s).OrderBy("since").Find(ctx))
 	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
+	for _, r := range rows {
+		ids = append(ids, r.UserID)
 	}
-	return ids, rows.Err()
+	return ids, err
 }
 
 // ClearFinanceDirty clears the user's mark if it is still since: a change
 // made during the reconcile keeps them dirty.
 func (s *Store) ClearFinanceDirty(ctx context.Context, userID string, since int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM finance_dirty WHERE user_id = $1 AND since = $2`, userID, since)
+	_, err := async.Await(table[financeDirtyRow](s).Where("user_id = ? AND since = ?", userID, since).Delete(ctx))
 	return err
 }
 
@@ -221,19 +206,16 @@ const DefaultBaseCurrency = "EUR"
 
 // BaseCurrency returns the currency the user's totals are in.
 func (s *Store) BaseCurrency(ctx context.Context, userID string) (string, error) {
-	var c string
-	err := s.db.QueryRowContext(ctx, `SELECT base_currency FROM finance_settings WHERE user_id = $1`, userID).Scan(&c)
-	if errors.Is(err, sql.ErrNoRows) {
-		return DefaultBaseCurrency, nil
+	r, err := find[financeSettingsRow](ctx, s, userID)
+	if r == nil {
+		return DefaultBaseCurrency, err
 	}
-	return c, err
+	return r.BaseCurrency, nil
 }
 
 // SetBaseCurrency sets the currency the user's totals are in.
 func (s *Store) SetBaseCurrency(ctx context.Context, userID, currency string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO finance_settings (user_id, base_currency) VALUES ($1, $2)
-		ON CONFLICT (user_id) DO UPDATE SET base_currency = excluded.base_currency`, userID, strings.ToUpper(currency))
-	return err
+	return save(ctx, s, financeSettingsRow{UserID: userID, BaseCurrency: strings.ToUpper(currency)})
 }
 
 // FinanceSender is a domain broker mail comes from (finance_senders).
@@ -248,8 +230,8 @@ type FinanceSender struct {
 // subdomains.
 func (s *Store) TrustFinanceSender(ctx context.Context, userID, domain string, trusted bool) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO finance_senders (user_id, domain, trusted, updated_at) VALUES ($1, $2, $3, $4)
-		ON CONFLICT (user_id, domain) DO UPDATE SET trusted = excluded.trusted, updated_at = excluded.updated_at`,
+		INSERT INTO finance_senders (user_id, domain, trusted, updated_on) VALUES ($1, $2, $3, $4)
+		ON CONFLICT (user_id, domain) DO UPDATE SET trusted = excluded.trusted, updated_on = excluded.updated_on`,
 		userID, strings.ToLower(domain), trusted, time.Now().Unix())
 	return err
 }
@@ -258,7 +240,7 @@ func (s *Store) TrustFinanceSender(ctx context.Context, userID, domain string, t
 // is trusted (untrusted when new).
 func (s *Store) SeenFinanceSender(ctx context.Context, userID, domain, subject string, at time.Time) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO finance_senders (user_id, domain, seen_at, subject, updated_at) VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO finance_senders (user_id, domain, seen_at, subject, updated_on) VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (user_id, domain) DO UPDATE SET seen_at = excluded.seen_at, subject = excluded.subject`,
 		userID, strings.ToLower(domain), at.Unix(), subject, time.Now().Unix())
 	return err
@@ -313,19 +295,14 @@ func (s *Store) TrustedFinanceDomain(ctx context.Context, userID, domain string)
 // StockName is the ISIN the user's reports and mails mean by key (a
 // finance.Resolver key); "" when unknown.
 func (s *Store) StockName(ctx context.Context, userID, key string) (string, error) {
-	var isin string
-	err := s.db.QueryRowContext(ctx, `SELECT isin FROM finance_stock_names WHERE user_id = $1 AND key = $2`, userID, key).Scan(&isin)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+	r, err := find[stockNameRow](ctx, s, rowID(userID, strings.ToLower(key)))
+	if r == nil {
+		return "", err
 	}
-	return isin, err
+	return r.ISIN, nil
 }
 
 // SaveStockName records that key means isin, for the user.
 func (s *Store) SaveStockName(ctx context.Context, userID, key, isin string) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO finance_stock_names (user_id, key, isin, updated_at) VALUES ($1, $2, $3, $4)
-		ON CONFLICT (user_id, key) DO UPDATE SET isin = excluded.isin, updated_at = excluded.updated_at`,
-		userID, key, isin, time.Now().Unix())
-	return err
+	return save(ctx, s, stockNameRow{UserID: userID, Key: key, ISIN: isin})
 }

@@ -1,14 +1,17 @@
 -- Gmail accounts whose Apps Script sends their mail to the gmail webhook,
 -- each belonging to one user (task mail-connect). A user may have many.
 CREATE TABLE IF NOT EXISTS mail_accounts (
-    address      CITEXT PRIMARY KEY,
+    id           TEXT PRIMARY KEY, -- lowercase address
+    address      CITEXT NOT NULL UNIQUE,
     user_id      TEXT NOT NULL REFERENCES users(id),
     -- The account's own key, hex: its script signs each request with it,
     -- so one account's script can't send mail as another's. The webhook's
     -- secret, which every script has, only keeps others out.
     secret       TEXT NOT NULL,
     connected_at BIGINT NOT NULL,
-    seen_at      BIGINT -- the script's last request, heartbeats included; NULL before its first
+    seen_at      BIGINT, -- the script's last request, heartbeats included; NULL before its first
+    created_on   BIGINT NOT NULL DEFAULT 0, -- unix seconds, set by go-api-boot's Save
+    updated_on   BIGINT NOT NULL DEFAULT 0
 );
 -- Messages the scripts sent. A message's row is made before its turn and
 -- stays, so a message sent again is not related twice.

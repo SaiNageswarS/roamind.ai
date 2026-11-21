@@ -55,7 +55,7 @@ func Curate(t testing.TB, st *store.Store, ins ...store.Interest) {
 			t.Fatal(err)
 		}
 		exec(t, st, `
-			INSERT INTO interests (interest, owner, sources, rubric, is_default, created_at, updated_at)
+			INSERT INTO interests (interest, owner, sources, rubric, is_default, created_on, updated_on)
 			VALUES ($1, '', $2, $3, $4, extract(epoch FROM now())::bigint, extract(epoch FROM now())::bigint)`,
 			in.Name, string(sources), in.Rubric, in.Default)
 	}

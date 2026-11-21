@@ -48,11 +48,11 @@ func (s *Store) SeedInterests(ctx context.Context, dir string) error {
 		}
 		names = append(names, in.Interest)
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO interests (interest, owner, sources, rubric, is_default, created_at, updated_at)
+			INSERT INTO interests (interest, owner, sources, rubric, is_default, created_on, updated_on)
 			VALUES ($1, '', $2, $3, $4, $5, $5)
 			ON CONFLICT (owner, interest) DO UPDATE SET
 				interest = excluded.interest, sources = excluded.sources, rubric = excluded.rubric,
-				is_default = excluded.is_default, updated_at = excluded.updated_at`,
+				is_default = excluded.is_default, updated_on = excluded.updated_on`,
 			in.Interest, string(sources), string(rubric), in.Default, now); err != nil {
 			return err
 		}

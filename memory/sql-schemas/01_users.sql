@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS users (
     slack_team_id    TEXT,
     slack_user_id    TEXT,
     memory_project   TEXT UNIQUE, -- Basic Memory project, bm-u-<name>-<idx>
-    created_at       BIGINT NOT NULL,
-    updated_at       BIGINT NOT NULL,
+    created_on       BIGINT NOT NULL,
+    updated_on       BIGINT NOT NULL,
     UNIQUE (slack_team_id, slack_user_id)
 );

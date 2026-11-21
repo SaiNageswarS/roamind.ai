@@ -64,7 +64,7 @@ func (s *Store) AddInterest(ctx context.Context, userID string, in Interest) err
 	}
 	now := time.Now().Unix()
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO interests (interest, owner, sources, rubric, created_at, updated_at)
+		INSERT INTO interests (interest, owner, sources, rubric, created_on, updated_on)
 		VALUES ($1, $2, $3, $4, $5, $6)`, in.Name, userID, string(sources), in.Rubric, now, now)
 	return err
 }
@@ -103,7 +103,7 @@ func (s *Store) ActiveInterests(ctx context.Context, userID string) ([]Interest,
 	return s.queryInterests(ctx, `
 		SELECT `+interestColumns+`
 		FROM user_interests u JOIN interests i ON i.id = u.interest_id
-		WHERE u.user_id = $1 AND u.status = 'active' ORDER BY u.created_at, u.seq`, userID)
+		WHERE u.user_id = $1 AND u.status = 'active' ORDER BY u.created_on, u.seq`, userID)
 }
 
 func (s *Store) queryInterests(ctx context.Context, query string, args ...any) ([]Interest, error) {
@@ -132,7 +132,7 @@ func (s *Store) queryInterests(ctx context.Context, query string, args ...any) (
 func (s *Store) UserInterests(ctx context.Context, userID string) ([]UserInterest, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT i.interest, u.status FROM user_interests u JOIN interests i ON i.id = u.interest_id
-		WHERE u.user_id = $1 ORDER BY u.created_at, u.seq`, userID)
+		WHERE u.user_id = $1 ORDER BY u.created_on, u.seq`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -161,9 +161,9 @@ func (s *Store) FollowInterest(ctx context.Context, userID, name string) error {
 	}
 	now := time.Now().Unix()
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO user_interests (user_id, interest_id, status, created_at, updated_at)
+		INSERT INTO user_interests (user_id, interest_id, status, created_on, updated_on)
 		VALUES ($1, $2, 'active', $3, $4)
-		ON CONFLICT (user_id, interest_id) DO UPDATE SET status = 'active', updated_at = excluded.updated_at`,
+		ON CONFLICT (user_id, interest_id) DO UPDATE SET status = 'active', updated_on = excluded.updated_on`,
 		userID, in.ID, now, now)
 	return err
 }
@@ -179,7 +179,7 @@ func (s *Store) FollowDefaults(ctx context.Context, userID string) ([]string, er
 	for _, in := range defaults {
 		now := time.Now().Unix()
 		res, err := s.db.ExecContext(ctx, `
-			INSERT INTO user_interests (user_id, interest_id, status, created_at, updated_at)
+			INSERT INTO user_interests (user_id, interest_id, status, created_on, updated_on)
 			VALUES ($1, $2, 'active', $3, $4) ON CONFLICT DO NOTHING`, userID, in.ID, now, now)
 		if err != nil {
 			return added, err
@@ -195,7 +195,7 @@ func (s *Store) FollowDefaults(ctx context.Context, userID string) ([]string, er
 // reports whether they follow it.
 func (s *Store) SetInterestStatus(ctx context.Context, userID, name, status string) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE user_interests SET status = $1, updated_at = $2
+		UPDATE user_interests SET status = $1, updated_on = $2
 		WHERE user_id = $3 AND interest_id IN (SELECT id FROM interests WHERE interest = $4 AND owner IN ('', $5))`,
 		status, time.Now().Unix(), userID, name, userID)
 	if err != nil {

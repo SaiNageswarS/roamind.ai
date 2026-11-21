@@ -32,12 +32,13 @@ import (
 // authentication), so there is no password.
 const DefaultURI = "postgres:///roamind?host=/var/run/postgresql"
 
-// Store wraps the PostgreSQL database. Its queries run on db, a database/sql
-// handle over go-api-boot's connection pool; pg is the same pool for the
-// framework's ORM and raw pgx.
+// Store wraps the PostgreSQL database. Simple tables are read and written
+// with go-api-boot's ORM (rows.go) on pg; the rest with SQL, on db, a
+// database/sql handle over the same connection pool.
 type Store struct {
-	db *sql.DB
-	pg *postgres.DB
+	db     *sql.DB
+	pg     *postgres.DB
+	schema string // the schema of the tables: the tenant of the ORM
 }
 
 // Open connects to the database at uri, a PostgreSQL connection URI such as
@@ -48,7 +49,12 @@ func Open(ctx context.Context, uri string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{db: stdlib.OpenDBFromPool(pg.Pool()), pg: pg}, nil
+	s := &Store{db: stdlib.OpenDBFromPool(pg.Pool()), pg: pg}
+	if err := s.db.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&s.schema); err != nil {
+		s.Close()
+		return nil, err
+	}
+	return s, nil
 }
 
 // DB is the go-api-boot database, for its ORM and raw pgx.

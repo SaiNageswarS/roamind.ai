@@ -117,14 +117,14 @@ func (s *Store) PutItem(ctx context.Context, it Item) error {
 	// $1 user, $2 key, $3 kind, $4 event kind, $5 note, $6 title, $7 date,
 	// $8 show from, $9 until, $10 state, $11 source, $12 now.
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO items (user_id, key, kind, event_kind, note, title, date, show_from, until, state, source, updated_at, closed_at)
+		INSERT INTO items (user_id, key, kind, event_kind, note, title, date, show_from, until, state, source, updated_on, closed_at)
 		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7::text, ''), NULLIF($8::text, ''), NULLIF($9::text, ''),
 			COALESCE(NULLIF($10::text, ''), 'open'), $11, $12::bigint,
 			CASE WHEN $10::text IN ('', 'open') THEN NULL ELSE $12::bigint END)
 		ON CONFLICT (user_id, key) DO UPDATE SET
 			kind = excluded.kind, event_kind = excluded.event_kind, note = excluded.note, title = excluded.title,
 			date = excluded.date, show_from = excluded.show_from, until = excluded.until,
-			source = excluded.source, updated_at = excluded.updated_at,
+			source = excluded.source, updated_on = excluded.updated_on,
 			state = COALESCE(NULLIF($10::text, ''), items.state),
 			closed_at = CASE
 				WHEN $10::text IN ('', items.state) THEN items.closed_at
@@ -142,7 +142,7 @@ func (s *Store) CloseItem(ctx context.Context, userID, key, state string) (bool,
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE items SET
 			state = $1::text,
-			updated_at = $2::bigint,
+			updated_on = $2::bigint,
 			closed_at = CASE
 				WHEN $1::text = 'open' THEN NULL
 				WHEN $1::text = state THEN closed_at
@@ -159,7 +159,7 @@ func (s *Store) CloseItem(ctx context.Context, userID, key, state string) (bool,
 
 // itemColumns are the columns scanItems reads, in its order.
 const itemColumns = `user_id, key, kind, event_kind, note, title, COALESCE(date, ''), COALESCE(show_from, ''),
-	COALESCE(until, ''), state, source, updated_at, closed_at`
+	COALESCE(until, ''), state, source, updated_on, closed_at`
 
 // DueItems returns the user's open items that show on day, by date.
 func (s *Store) DueItems(ctx context.Context, userID string, day time.Time) ([]Item, error) {

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/SaiNageswarS/go-collection-boot/async"
 )
 
 // MailAccount is a Gmail account whose Apps Script sends its mail to
@@ -49,47 +51,32 @@ func (s *Store) ConnectMail(ctx context.Context, address, userID string) (string
 		return "", err
 	}
 	secret := hex.EncodeToString(b)
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO mail_accounts (address, user_id, secret, connected_at) VALUES ($1, $2, $3, $4)
-		ON CONFLICT (address) DO UPDATE SET user_id = excluded.user_id, secret = excluded.secret,
-			connected_at = excluded.connected_at`,
-		strings.TrimSpace(address), userID, secret, time.Now().Unix())
+	err := save(ctx, s, mailAccountRow{Address: strings.TrimSpace(address), UserID: userID, Secret: secret, ConnectedAt: time.Now().Unix()})
 	return secret, err
 }
 
-const mailAccountCols = `address, user_id, secret, connected_at, seen_at`
-
-func scanMailAccount(sc interface{ Scan(...any) error }) (MailAccount, error) {
-	var a MailAccount
-	var connected int64
-	var seen sql.NullInt64
-	if err := sc.Scan(&a.Address, &a.UserID, &a.Secret, &connected, &seen); err != nil {
-		return a, err
+func (r mailAccountRow) account() MailAccount {
+	a := MailAccount{Address: r.Address, UserID: r.UserID, Secret: r.Secret, ConnectedAt: time.Unix(r.ConnectedAt, 0)}
+	if r.SeenAt != nil {
+		a.SeenAt = time.Unix(*r.SeenAt, 0)
 	}
-	a.ConnectedAt = time.Unix(connected, 0)
-	if seen.Valid {
-		a.SeenAt = time.Unix(seen.Int64, 0)
-	}
-	return a, nil
+	return a
 }
 
 // MailAccountOf returns the account with address, in any case, or nil.
 func (s *Store) MailAccountOf(ctx context.Context, address string) (*MailAccount, error) {
-	a, err := scanMailAccount(s.db.QueryRowContext(ctx, `
-		SELECT `+mailAccountCols+` FROM mail_accounts WHERE address = $1`, strings.TrimSpace(address)))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
+	r, err := find[mailAccountRow](ctx, s, strings.ToLower(strings.TrimSpace(address)))
+	if r == nil {
 		return nil, err
 	}
+	a := r.account()
 	return &a, nil
 }
 
 // SeenMail records a request from the account's script at at.
 func (s *Store) SeenMail(ctx context.Context, address string, at time.Time) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE mail_accounts SET seen_at = $1 WHERE address = $2`,
-		at.Unix(), strings.TrimSpace(address))
+	_, err := s.db.ExecContext(ctx, `UPDATE mail_accounts SET seen_at = $1, updated_on = $2 WHERE address = $3`,
+		at.Unix(), time.Now().Unix(), strings.TrimSpace(address))
 	return err
 }
 
@@ -97,22 +84,17 @@ func (s *Store) SeenMail(ctx context.Context, address string, at time.Time) erro
 // request since before, by address; an account never heard from counts
 // from when it was connected.
 func (s *Store) StaleMailAccounts(ctx context.Context, userID string, before time.Time) ([]MailAccount, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT `+mailAccountCols+` FROM mail_accounts
-		WHERE user_id = $1 AND COALESCE(seen_at, connected_at) < $2 ORDER BY address`, userID, before.Unix())
+	rows, err := async.Await(table[mailAccountRow](s).
+		Where("user_id = ? AND COALESCE(seen_at, connected_at) < ?", userID, before.Unix()).
+		OrderBy("address").Find(ctx))
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []MailAccount
-	for rows.Next() {
-		a, err := scanMailAccount(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, a)
+	for _, r := range rows {
+		out = append(out, r.account())
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // PickMessage records m as picked, before its turn; ok is false when the

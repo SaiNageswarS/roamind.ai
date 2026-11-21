@@ -21,7 +21,7 @@ func TestSeedInterests(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A curated interest dropped from the file, followed by h1, and h1's own.
-	if _, err := s.db.Exec(`INSERT INTO interests (interest, sources, rubric, created_at, updated_at) VALUES ('Knitting', '[]', 'x', 0, 0)`); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO interests (interest, sources, rubric, created_on, updated_on) VALUES ('Knitting', '[]', 'x', 0, 0)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.FollowInterest(ctx, "h1", "Knitting"); err != nil {
