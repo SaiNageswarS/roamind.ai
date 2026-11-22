@@ -59,3 +59,13 @@
 	import tailnet_owner_only
 	reverse_proxy 127.0.0.1:9000
 }
+
+# pgAdmin 4, a web client for the Postgres store → https://postgres.<tailnet>.ts.net
+# pgAdmin asks for no login; this block is its only gate. It connects as your
+# database role, so a session sees and can change every user's data. See
+# deploy/bin/run-pgadmin.sh.
+:443 {
+	bind tailscale/postgres
+	import tailnet_owner_only
+	reverse_proxy 127.0.0.1:5050
+}

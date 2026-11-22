@@ -6,4 +6,5 @@
 *.db-shm
 /.task/
 /notebook/.venv/
+/deploy/pgadmin/.venv/
 /deploy/apps-script/.clasp.json
