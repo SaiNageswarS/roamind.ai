@@ -33,12 +33,39 @@ import (
 const DefaultURI = "postgres:///roamind?host=/var/run/postgresql"
 
 // Store wraps the PostgreSQL database. Simple tables are read and written
-// with go-api-boot's ORM (rows.go) on pg; the rest with SQL, on db, a
+// with go-api-boot's ORM (rows.go) on tables; the rest with SQL, on db, a
 // database/sql handle over the same connection pool.
 type Store struct {
-	db     *sql.DB
-	pg     *postgres.DB
-	schema string // the schema of the tables: the tenant of the ORM
+	db *sql.DB
+	pg *postgres.DB
+
+	threads         postgres.Table[threadRow]
+	channels        postgres.Table[channelRow]
+	exercises       postgres.Table[exerciseRow]
+	mailAccounts    postgres.Table[mailAccountRow]
+	financeUploads  postgres.Table[financeUploadRow]
+	financeDirty    postgres.Table[financeDirtyRow]
+	financeSettings postgres.Table[financeSettingsRow]
+	stockNames      postgres.Table[stockNameRow]
+}
+
+// NewStore is the constructor go-api-boot's container resolves from a
+// *postgres.DB. The tables are those of the connection's current schema.
+func NewStore(pg *postgres.DB) *Store {
+	schema := "public"
+	_ = pg.Pool().QueryRow(context.Background(), `SELECT current_schema()`).Scan(&schema)
+	return &Store{
+		db:              stdlib.OpenDBFromPool(pg.Pool()),
+		pg:              pg,
+		threads:         postgres.TableOf[threadRow](pg, schema),
+		channels:        postgres.TableOf[channelRow](pg, schema),
+		exercises:       postgres.TableOf[exerciseRow](pg, schema),
+		mailAccounts:    postgres.TableOf[mailAccountRow](pg, schema),
+		financeUploads:  postgres.TableOf[financeUploadRow](pg, schema),
+		financeDirty:    postgres.TableOf[financeDirtyRow](pg, schema),
+		financeSettings: postgres.TableOf[financeSettingsRow](pg, schema),
+		stockNames:      postgres.TableOf[stockNameRow](pg, schema),
+	}
 }
 
 // Open connects to the database at uri, a PostgreSQL connection URI such as
@@ -49,12 +76,7 @@ func Open(ctx context.Context, uri string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{db: stdlib.OpenDBFromPool(pg.Pool()), pg: pg}
-	if err := s.db.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&s.schema); err != nil {
-		s.Close()
-		return nil, err
-	}
-	return s, nil
+	return NewStore(pg), nil
 }
 
 // DB is the go-api-boot database, for its ORM and raw pgx.

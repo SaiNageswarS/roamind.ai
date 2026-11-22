@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/SaiNageswarS/go-api-boot/odm"
@@ -22,13 +23,20 @@ type Exercise struct {
 
 // SaveExercise records a posted exercise.
 func (s *Store) SaveExercise(ctx context.Context, e Exercise) error {
-	return insert(ctx, s, exerciseRow{UserID: e.UserID, GoalPermalink: e.GoalPermalink, ChannelID: e.ChannelID,
-		ThreadTS: e.ThreadTS, NotePermalink: e.NotePermalink, PostedAt: e.PostedAt.Unix()})
+	id := rowID(e.ChannelID, e.ThreadTS)
+	if _, err := async.Await(s.exercises.FindByID(ctx, id)); err == nil {
+		return fmt.Errorf("exercise %q already exists", id)
+	} else if !errors.Is(err, odm.ErrNotFound) {
+		return err
+	}
+	_, err := async.Await(s.exercises.Save(ctx, exerciseRow{UserID: e.UserID, GoalPermalink: e.GoalPermalink, ChannelID: e.ChannelID,
+		ThreadTS: e.ThreadTS, NotePermalink: e.NotePermalink, PostedAt: e.PostedAt.Unix()}))
+	return err
 }
 
 // LastExercise returns the goal's most recent exercise, or nil.
 func (s *Store) LastExercise(ctx context.Context, userID, goalPermalink string) (*Exercise, error) {
-	r, err := async.Await(table[exerciseRow](s).
+	r, err := async.Await(s.exercises.
 		Where("user_id = ? AND goal_permalink = ?", userID, goalPermalink).
 		OrderBy("posted_at DESC").First(ctx))
 	if errors.Is(err, odm.ErrNotFound) {

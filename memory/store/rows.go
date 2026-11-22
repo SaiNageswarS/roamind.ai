@@ -1,16 +1,13 @@
 package store
 
 import (
-	"context"
-	"errors"
 	"strings"
 
 	"github.com/SaiNageswarS/go-api-boot/odm"
-	"github.com/SaiNageswarS/go-api-boot/odm/postgres"
-	"github.com/SaiNageswarS/go-collection-boot/async"
 )
 
-// The tables below are read and written with go-api-boot's ORM (TableOf). The
+// The tables below are read and written with go-api-boot's ORM: the Store
+// holds a postgres.Table of each (see NewStore). The
 // ORM keys a row by one id, so each table has an id column made from its
 // natural key, here joined with "|" (the key's own columns stay, unique), and
 // created_on and updated_on, which Save sets. Tables with conditional
@@ -20,39 +17,6 @@ import (
 // rowID joins the parts of a natural key into a row's id; no part but the
 // last may contain "|".
 func rowID(parts ...string) string { return strings.Join(parts, "|") }
-
-// table is the ORM table of T in the store's schema.
-func table[T odm.Model](s *Store) postgres.Table[T] { return postgres.TableOf[T](s.pg, s.schema) }
-
-// find returns the row of T with id, or nil.
-func find[T odm.Model](ctx context.Context, s *Store, id string) (*T, error) {
-	row, err := async.Await(table[T](s).FindByID(ctx, id))
-	if errors.Is(err, odm.ErrNotFound) {
-		return nil, nil
-	}
-	return row, err
-}
-
-// save inserts or replaces the row, by id.
-func save[T odm.Model](ctx context.Context, s *Store, row T) error {
-	_, err := async.Await(table[T](s).Save(ctx, row))
-	return err
-}
-
-// ErrExists means a row with the same key is already stored.
-var ErrExists = errors.New("store: row already exists")
-
-// insert saves the row only when its id is free: Save would replace it.
-func insert[T odm.Model](ctx context.Context, s *Store, row T) error {
-	have, err := find[T](ctx, s, row.Id())
-	if err != nil {
-		return err
-	}
-	if have != nil {
-		return ErrExists
-	}
-	return save(ctx, s, row)
-}
 
 type threadRow struct {
 	ID              string `db:"id"`

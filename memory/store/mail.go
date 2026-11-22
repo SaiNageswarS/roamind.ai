@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SaiNageswarS/go-api-boot/odm"
+
 	"github.com/SaiNageswarS/go-collection-boot/async"
 )
 
@@ -51,7 +53,7 @@ func (s *Store) ConnectMail(ctx context.Context, address, userID string) (string
 		return "", err
 	}
 	secret := hex.EncodeToString(b)
-	err := save(ctx, s, mailAccountRow{Address: strings.TrimSpace(address), UserID: userID, Secret: secret, ConnectedAt: time.Now().Unix()})
+	_, err := async.Await(s.mailAccounts.Save(ctx, mailAccountRow{Address: strings.TrimSpace(address), UserID: userID, Secret: secret, ConnectedAt: time.Now().Unix()}))
 	return secret, err
 }
 
@@ -65,8 +67,11 @@ func (r mailAccountRow) account() MailAccount {
 
 // MailAccountOf returns the account with address, in any case, or nil.
 func (s *Store) MailAccountOf(ctx context.Context, address string) (*MailAccount, error) {
-	r, err := find[mailAccountRow](ctx, s, strings.ToLower(strings.TrimSpace(address)))
-	if r == nil {
+	r, err := async.Await(s.mailAccounts.FindByID(ctx, strings.ToLower(strings.TrimSpace(address))))
+	if errors.Is(err, odm.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
 		return nil, err
 	}
 	a := r.account()
@@ -84,7 +89,7 @@ func (s *Store) SeenMail(ctx context.Context, address string, at time.Time) erro
 // request since before, by address; an account never heard from counts
 // from when it was connected.
 func (s *Store) StaleMailAccounts(ctx context.Context, userID string, before time.Time) ([]MailAccount, error) {
-	rows, err := async.Await(table[mailAccountRow](s).
+	rows, err := async.Await(s.mailAccounts.
 		Where("user_id = ? AND COALESCE(seen_at, connected_at) < ?", userID, before.Unix()).
 		OrderBy("address").Find(ctx))
 	if err != nil {

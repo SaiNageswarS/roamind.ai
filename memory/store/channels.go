@@ -4,6 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+
+	"github.com/SaiNageswarS/go-api-boot/odm"
+	"github.com/SaiNageswarS/go-collection-boot/async"
 )
 
 // Kinds of channel: what a channel is for.
@@ -33,8 +37,11 @@ type Channel struct {
 
 // Channel returns the user's channel for kind and ref, or "".
 func (s *Store) Channel(ctx context.Context, userID, kind, ref string) (string, error) {
-	r, err := find[channelRow](ctx, s, rowID(userID, kind, ref))
-	if r == nil {
+	r, err := async.Await(s.channels.FindByID(ctx, rowID(userID, kind, ref)))
+	if errors.Is(err, odm.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
 		return "", err
 	}
 	return r.ChannelID, nil
@@ -79,6 +86,14 @@ func (s *Store) Channels(ctx context.Context, kind string) ([]Channel, error) {
 
 // SaveChannel records a channel made for a user.
 func (s *Store) SaveChannel(ctx context.Context, c Channel) error {
-	// insert, not save: a channel saved twice is a bug to see.
-	return insert(ctx, s, channelRow{UserID: c.UserID, Kind: c.Kind, Ref: c.Ref, Title: c.Title, ChannelID: c.ChannelID})
+	// A channel saved twice is a bug to see, so Save, which replaces, runs
+	// only when the id is free.
+	id := rowID(c.UserID, c.Kind, c.Ref)
+	if _, err := async.Await(s.channels.FindByID(ctx, id)); err == nil {
+		return fmt.Errorf("channel %q already exists", id)
+	} else if !errors.Is(err, odm.ErrNotFound) {
+		return err
+	}
+	_, err := async.Await(s.channels.Save(ctx, channelRow{UserID: c.UserID, Kind: c.Kind, Ref: c.Ref, Title: c.Title, ChannelID: c.ChannelID}))
+	return err
 }

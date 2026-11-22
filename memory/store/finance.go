@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SaiNageswarS/go-api-boot/odm"
+
 	"github.com/SaiNageswarS/go-collection-boot/async"
 )
 
@@ -135,8 +137,11 @@ func (r financeUploadRow) upload() FinanceUpload {
 // FinanceUploadOf returns the user's import of the file with this hash, or
 // nil.
 func (s *Store) FinanceUploadOf(ctx context.Context, userID, sha string) (*FinanceUpload, error) {
-	r, err := find[financeUploadRow](ctx, s, rowID(userID, sha))
-	if r == nil {
+	r, err := async.Await(s.financeUploads.FindByID(ctx, rowID(userID, sha)))
+	if errors.Is(err, odm.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
 		return nil, err
 	}
 	u := r.upload()
@@ -145,14 +150,22 @@ func (s *Store) FinanceUploadOf(ctx context.Context, userID, sha string) (*Finan
 
 // SaveFinanceUpload records an imported report.
 func (s *Store) SaveFinanceUpload(ctx context.Context, u FinanceUpload) error {
-	// insert, not save: a file imported twice is refused.
-	return insert(ctx, s, financeUploadRow{UserID: u.UserID, SHA256: u.SHA256, File: u.File, Account: u.Account,
-		Doc: u.Doc, PeriodFrom: u.PeriodFrom, PeriodTo: u.PeriodTo, Rows: int64(u.Rows), ImportedAt: time.Now().Unix()})
+	// A file imported twice is refused: Save, which replaces, runs only
+	// when the id is free.
+	id := rowID(u.UserID, u.SHA256)
+	if _, err := async.Await(s.financeUploads.FindByID(ctx, id)); err == nil {
+		return fmt.Errorf("%s is already imported", u.File)
+	} else if !errors.Is(err, odm.ErrNotFound) {
+		return err
+	}
+	_, err := async.Await(s.financeUploads.Save(ctx, financeUploadRow{UserID: u.UserID, SHA256: u.SHA256, File: u.File, Account: u.Account,
+		Doc: u.Doc, PeriodFrom: u.PeriodFrom, PeriodTo: u.PeriodTo, Rows: int64(u.Rows), ImportedAt: time.Now().Unix()}))
+	return err
 }
 
 // FinanceUploads returns the user's imported reports, oldest first.
 func (s *Store) FinanceUploads(ctx context.Context, userID string) ([]FinanceUpload, error) {
-	rows, err := async.Await(table[financeUploadRow](s).Where("user_id = ?", userID).OrderBy("imported_at", "seq").Find(ctx))
+	rows, err := async.Await(s.financeUploads.Where("user_id = ?", userID).OrderBy("imported_at", "seq").Find(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -167,14 +180,18 @@ func (s *Store) FinanceUploads(ctx context.Context, userID string) ([]FinanceUpl
 // returns the mark, for ClearFinanceDirty.
 func (s *Store) MarkFinanceDirty(ctx context.Context, userID string) (int64, error) {
 	since := time.Now().UnixNano()
-	return since, save(ctx, s, financeDirtyRow{UserID: userID, Since: since})
+	_, err := async.Await(s.financeDirty.Save(ctx, financeDirtyRow{UserID: userID, Since: since}))
+	return since, err
 }
 
 // FinanceDirty returns the user's mark, or 0 when their trades are up to
 // date.
 func (s *Store) FinanceDirty(ctx context.Context, userID string) (int64, error) {
-	r, err := find[financeDirtyRow](ctx, s, userID)
-	if r == nil {
+	r, err := async.Await(s.financeDirty.FindByID(ctx, userID))
+	if errors.Is(err, odm.ErrNotFound) {
+		return 0, nil
+	}
+	if err != nil {
 		return 0, err
 	}
 	return r.Since, nil
@@ -182,7 +199,7 @@ func (s *Store) FinanceDirty(ctx context.Context, userID string) (int64, error) 
 
 // DirtyFinanceUsers returns the users whose trades are not up to date.
 func (s *Store) DirtyFinanceUsers(ctx context.Context) ([]string, error) {
-	rows, err := async.Await(table[financeDirtyRow](s).OrderBy("since").Find(ctx))
+	rows, err := async.Await(s.financeDirty.OrderBy("since").Find(ctx))
 	var ids []string
 	for _, r := range rows {
 		ids = append(ids, r.UserID)
@@ -193,7 +210,7 @@ func (s *Store) DirtyFinanceUsers(ctx context.Context) ([]string, error) {
 // ClearFinanceDirty clears the user's mark if it is still since: a change
 // made during the reconcile keeps them dirty.
 func (s *Store) ClearFinanceDirty(ctx context.Context, userID string, since int64) error {
-	_, err := async.Await(table[financeDirtyRow](s).Where("user_id = ? AND since = ?", userID, since).Delete(ctx))
+	_, err := async.Await(s.financeDirty.Where("user_id = ? AND since = ?", userID, since).Delete(ctx))
 	return err
 }
 
@@ -202,8 +219,11 @@ const DefaultBaseCurrency = "EUR"
 
 // BaseCurrency returns the currency the user's totals are in.
 func (s *Store) BaseCurrency(ctx context.Context, userID string) (string, error) {
-	r, err := find[financeSettingsRow](ctx, s, userID)
-	if r == nil {
+	r, err := async.Await(s.financeSettings.FindByID(ctx, userID))
+	if errors.Is(err, odm.ErrNotFound) {
+		return DefaultBaseCurrency, nil
+	}
+	if err != nil {
 		return DefaultBaseCurrency, err
 	}
 	return r.BaseCurrency, nil
@@ -211,7 +231,8 @@ func (s *Store) BaseCurrency(ctx context.Context, userID string) (string, error)
 
 // SetBaseCurrency sets the currency the user's totals are in.
 func (s *Store) SetBaseCurrency(ctx context.Context, userID, currency string) error {
-	return save(ctx, s, financeSettingsRow{UserID: userID, BaseCurrency: strings.ToUpper(currency)})
+	_, err := async.Await(s.financeSettings.Save(ctx, financeSettingsRow{UserID: userID, BaseCurrency: strings.ToUpper(currency)}))
+	return err
 }
 
 // FinanceSender is a domain broker mail comes from (finance_senders).
@@ -291,8 +312,11 @@ func (s *Store) TrustedFinanceDomain(ctx context.Context, userID, domain string)
 // StockName is the ISIN the user's reports and mails mean by key (a
 // finance.Resolver key); "" when unknown.
 func (s *Store) StockName(ctx context.Context, userID, key string) (string, error) {
-	r, err := find[stockNameRow](ctx, s, rowID(userID, strings.ToLower(key)))
-	if r == nil {
+	r, err := async.Await(s.stockNames.FindByID(ctx, rowID(userID, strings.ToLower(key))))
+	if errors.Is(err, odm.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
 		return "", err
 	}
 	return r.ISIN, nil
@@ -300,5 +324,6 @@ func (s *Store) StockName(ctx context.Context, userID, key string) (string, erro
 
 // SaveStockName records that key means isin, for the user.
 func (s *Store) SaveStockName(ctx context.Context, userID, key, isin string) error {
-	return save(ctx, s, stockNameRow{UserID: userID, Key: key, ISIN: isin})
+	_, err := async.Await(s.stockNames.Save(ctx, stockNameRow{UserID: userID, Key: key, ISIN: isin}))
+	return err
 }
