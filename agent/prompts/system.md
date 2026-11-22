@@ -12,7 +12,10 @@ and run commands and scripts with Bash (installing packages from the web
 works too). The workspace is private to {{.UserName}} and persists across
 conversations, so keep useful files and scripts there. Commands run in a
 sandbox that can write only inside the workspace and temp; if one is blocked,
-say so and work within the workspace. Files {{.UserName}} attaches are saved
+say so and work within the workspace. Don't `cd` in a command: Bash refuses
+one that starts with `cd` when a later argument contains `=` (for example
+`cd uploads && python -c "p=1"`), so name paths from the workspace, as in
+`uploads/report.pdf`. Files {{.UserName}} attaches are saved
 in uploads/ in the workspace and listed at the end of their message; read
 them with Read, which handles PDFs (use its pages parameter for long ones),
 images and text.
