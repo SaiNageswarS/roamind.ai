@@ -19,13 +19,18 @@ venv="$ROOT/deploy/pgadmin/.venv"
 mkdir -p "$data"
 data="$(cd "$data" && pwd)"
 
-# The server it opens with: the local socket, as the OS user.
+# The server it opens with: the local socket, as the OS user. pgAdmin asks
+# for a password before connecting unless the server has a passfile, so it
+# gets an empty one; peer authentication then needs none.
+: >"$data/pgpass"
+chmod 600 "$data/pgpass"
 sock="${PGHOST:-/var/run/postgresql}"
 cat >"$data/servers.json" <<JSON
 {"Servers": {"1": {
   "Name": "roamind (local socket)", "Group": "Servers",
   "Host": "$sock", "Port": 5432, "MaintenanceDB": "roamind",
-  "Username": "$(id -un)", "SSLMode": "prefer"
+  "Username": "$(id -un)", "SSLMode": "prefer",
+  "PassFile": "$data/pgpass"
 }}}
 JSON
 
@@ -36,13 +41,13 @@ export PGADMIN_INT_PORT=5050
 export HOME="$data"
 
 # The first start creates the configuration database, so the server is
-# imported once pgAdmin answers; importing it again is harmless.
+# imported once pgAdmin answers, replacing the last one so a restart adds no copy.
 (
   for _ in $(seq 60); do
     curl -fs "http://127.0.0.1:$PGADMIN_INT_PORT/misc/ping" >/dev/null 2>&1 && break
     sleep 1
   done
-  "$venv/bin/pgadmin4-cli" load-servers "$data/servers.json" >/dev/null 2>&1 || true
+  "$venv/bin/pgadmin4-cli" load-servers --replace "$data/servers.json" >/dev/null 2>&1 || true
 ) &
 
 exec "$venv/bin/pgadmin4"
