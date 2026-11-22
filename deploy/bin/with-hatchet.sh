@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs a command with the Hatchet client environment of a Hatchet CLI profile
-# (created by `hatchet server start`), so no token lives in .env.
+# (for the Hatchet server (see run-hatchet.sh)), so no token lives in .env.
 #
 #   deploy/bin/with-hatchet.sh ./bin/worker
 #

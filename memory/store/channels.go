@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
+	"fmt"
+
+	"github.com/SaiNageswarS/go-api-boot/odm"
+	"github.com/SaiNageswarS/go-collection-boot/async"
 )
 
 // Kinds of channel: what a channel is for.
@@ -34,14 +37,14 @@ type Channel struct {
 
 // Channel returns the user's channel for kind and ref, or "".
 func (s *Store) Channel(ctx context.Context, userID, kind, ref string) (string, error) {
-	var ch string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT channel_id FROM channels WHERE user_id = ? AND kind = ? AND ref = ?`,
-		userID, kind, ref).Scan(&ch)
-	if errors.Is(err, sql.ErrNoRows) {
+	r, err := async.Await(s.channels.FindByID(ctx, rowID(userID, kind, ref)))
+	if errors.Is(err, odm.ErrNotFound) {
 		return "", nil
 	}
-	return ch, err
+	if err != nil {
+		return "", err
+	}
+	return r.ChannelID, nil
 }
 
 // ChannelOf returns what channelID is for, to the Slack user slackUserID,
@@ -51,7 +54,7 @@ func (s *Store) ChannelOf(ctx context.Context, channelID, slackUserID string) (*
 	err := s.db.QueryRowContext(ctx, `
 		SELECT c.user_id, c.kind, c.ref, c.title
 		FROM channels c JOIN users u ON u.id = c.user_id
-		WHERE c.channel_id = ? AND u.slack_user_id = ?`, channelID, slackUserID).
+		WHERE c.channel_id = $1 AND u.slack_user_id = $2`, channelID, slackUserID).
 		Scan(&c.UserID, &c.Kind, &c.Ref, &c.Title)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -64,8 +67,8 @@ func (s *Store) Channels(ctx context.Context, kind string) ([]Channel, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.user_id, c.kind, c.ref, c.title, c.channel_id, COALESCE(u.slack_user_id, '')
 		FROM channels c JOIN users u ON u.id = c.user_id
-		WHERE c.kind = ?
-		ORDER BY c.created_at, c.rowid`, kind)
+		WHERE c.kind = $1
+		ORDER BY c.created_on, c.seq`, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -83,9 +86,14 @@ func (s *Store) Channels(ctx context.Context, kind string) ([]Channel, error) {
 
 // SaveChannel records a channel made for a user.
 func (s *Store) SaveChannel(ctx context.Context, c Channel) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO channels (user_id, kind, ref, title, channel_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		c.UserID, c.Kind, c.Ref, c.Title, c.ChannelID, time.Now().Unix())
+	// A channel saved twice is a bug to see, so Save, which replaces, runs
+	// only when the id is free.
+	id := rowID(c.UserID, c.Kind, c.Ref)
+	if _, err := async.Await(s.channels.FindByID(ctx, id)); err == nil {
+		return fmt.Errorf("channel %q already exists", id)
+	} else if !errors.Is(err, odm.ErrNotFound) {
+		return err
+	}
+	_, err := async.Await(s.channels.Save(ctx, channelRow{UserID: c.UserID, Kind: c.Kind, Ref: c.Ref, Title: c.Title, ChannelID: c.ChannelID}))
 	return err
 }

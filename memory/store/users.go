@@ -7,8 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"modernc.org/sqlite"
-	sqlite3 "modernc.org/sqlite/lib"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // User is a person known to the agent, keyed by email hash.
@@ -40,7 +39,7 @@ const (
 func (s *Store) UserBySlack(ctx context.Context, teamID, slackUserID string) (*User, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, email, display_name, channel, slack_team_id, slack_user_id, COALESCE(memory_project, '') FROM users
-		 WHERE slack_team_id = ? AND slack_user_id = ?`, teamID, slackUserID)
+		 WHERE slack_team_id = $1 AND slack_user_id = $2`, teamID, slackUserID)
 	var u User
 	err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.Channel, &u.SlackTeamID, &u.SlackUserID, &u.MemoryProject)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -53,7 +52,7 @@ func (s *Store) UserBySlack(ctx context.Context, teamID, slackUserID string) (*U
 func (s *Store) UserByID(ctx context.Context, id string) (*User, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, email, display_name, channel, COALESCE(slack_team_id, ''), COALESCE(slack_user_id, ''), COALESCE(memory_project, '') FROM users
-		 WHERE id = ?`, id)
+		 WHERE id = $1`, id)
 	var u User
 	err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.Channel, &u.SlackTeamID, &u.SlackUserID, &u.MemoryProject)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -68,14 +67,14 @@ func (s *Store) UserByID(ctx context.Context, id string) (*User, error) {
 func (s *Store) UpsertSlackUser(ctx context.Context, u User) error {
 	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO users (id, email, display_name, slack_team_id, slack_user_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO users (id, email, display_name, slack_team_id, slack_user_id, created_on, updated_on)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (id) DO UPDATE SET
 			display_name = excluded.display_name,
 			channel = 'slack',
 			slack_team_id = excluded.slack_team_id,
 			slack_user_id = excluded.slack_user_id,
-			updated_at = excluded.updated_at`,
+			updated_on = excluded.updated_on`,
 		u.ID, u.Email, u.DisplayName, u.SlackTeamID, u.SlackUserID, now, now)
 	return err
 }
@@ -86,8 +85,8 @@ func (s *Store) UpsertSlackUser(ctx context.Context, u User) error {
 func (s *Store) UpsertWebUser(ctx context.Context, u User) error {
 	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO users (id, email, display_name, channel, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO users (id, email, display_name, channel, created_on, updated_on)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (id) DO NOTHING`,
 		u.ID, u.Email, u.DisplayName, ChannelWeb, now, now)
 	return err
@@ -101,16 +100,16 @@ func (s *Store) AssignMemoryProject(ctx context.Context, userID, base string) (s
 	for n := 1; n < 1000; n++ {
 		// Assigned already, by this call's last pass or a concurrent one.
 		var cur sql.NullString
-		if err := s.db.QueryRowContext(ctx, `SELECT memory_project FROM users WHERE id = ?`, userID).Scan(&cur); err != nil {
+		if err := s.db.QueryRowContext(ctx, `SELECT memory_project FROM users WHERE id = $1`, userID).Scan(&cur); err != nil {
 			return "", err
 		}
 		if cur.String != "" {
 			return cur.String, nil
 		}
 		_, err := s.db.ExecContext(ctx,
-			`UPDATE users SET memory_project = ? WHERE id = ? AND memory_project IS NULL`, fmt.Sprintf("%s-%d", base, n), userID)
-		var se *sqlite.Error
-		if err != nil && !(errors.As(err, &se) && se.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE) {
+			`UPDATE users SET memory_project = $1 WHERE id = $2 AND memory_project IS NULL`, fmt.Sprintf("%s-%d", base, n), userID)
+		var pe *pgconn.PgError
+		if err != nil && !(errors.As(err, &pe) && pe.Code == "23505") {
 			return "", err
 		}
 		// On a unique error the name is another user's; try the next.
@@ -123,7 +122,7 @@ func (s *Store) AssignMemoryProject(ctx context.Context, userID, base string) (s
 func (s *Store) Users(ctx context.Context) ([]User, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, email, display_name, channel, slack_team_id, slack_user_id, COALESCE(memory_project, '') FROM users
-		WHERE channel = 'slack' AND slack_user_id IS NOT NULL AND slack_user_id != '' ORDER BY created_at`)
+		WHERE channel = 'slack' AND slack_user_id IS NOT NULL AND slack_user_id != '' ORDER BY created_on`)
 	if err != nil {
 		return nil, err
 	}

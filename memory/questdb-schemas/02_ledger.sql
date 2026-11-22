@@ -1,4 +1,4 @@
--- Each user's ledger. Every table has user_id (users.id in SQLite) as the
+-- Each user's ledger. Every table has user_id (users.id in Postgres) as the
 -- first upsert key after the timestamp, and only memory/finance reads or
 -- writes them, binding the user as a parameter. Money and quantities are
 -- DECIMAL(24, 8), prices of a unit DECIMAL(20, 6). Applied as

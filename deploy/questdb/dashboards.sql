@@ -1,6 +1,6 @@
 -- Saved queries for the QuestDB web console (https://questdb.<tailnet>.ts.net),
 -- to paste in and chart. The console sees every user's rows: set the user's
--- id (users.id in data/roamind.db) in each query. Tables are in
+-- id (users.id in the roamind Postgres database) in each query. Tables are in
 -- memory/questdb-schemas.
 
 -- Portfolio value over time, in the base currency.

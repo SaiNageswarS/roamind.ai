@@ -2,9 +2,10 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"time"
+
+	"github.com/SaiNageswarS/go-api-boot/odm"
+	"github.com/SaiNageswarS/go-collection-boot/async"
 )
 
 // Thread maps a Slack thread to a claude session.
@@ -16,26 +17,18 @@ type Thread struct {
 
 // GetThread returns the thread or nil if it has never been seen.
 func (s *Store) GetThread(ctx context.Context, channelID, threadTS string) (*Thread, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT user_id, claude_session_id FROM threads
-		 WHERE channel_id = ? AND thread_ts = ?`, channelID, threadTS)
-	t := Thread{ChannelID: channelID, ThreadTS: threadTS}
-	err := row.Scan(&t.UserID, &t.ClaudeSessionID)
-	if errors.Is(err, sql.ErrNoRows) {
+	r, err := async.Await(s.threads.FindByID(ctx, rowID(channelID, threadTS)))
+	if errors.Is(err, odm.ErrNotFound) {
 		return nil, nil
 	}
-	return &t, err
+	if err != nil {
+		return nil, err
+	}
+	return &Thread{ChannelID: r.ChannelID, ThreadTS: r.ThreadTS, UserID: r.UserID, ClaudeSessionID: r.ClaudeSessionID}, nil
 }
 
 // SaveThread records the claude session for a thread.
 func (s *Store) SaveThread(ctx context.Context, t Thread) error {
-	now := time.Now().Unix()
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO threads (channel_id, thread_ts, user_id, claude_session_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT (channel_id, thread_ts) DO UPDATE SET
-			claude_session_id = excluded.claude_session_id,
-			updated_at = excluded.updated_at`,
-		t.ChannelID, t.ThreadTS, t.UserID, t.ClaudeSessionID, now, now)
+	_, err := async.Await(s.threads.Save(ctx, threadRow{ChannelID: t.ChannelID, ThreadTS: t.ThreadTS, UserID: t.UserID, ClaudeSessionID: t.ClaudeSessionID}))
 	return err
 }

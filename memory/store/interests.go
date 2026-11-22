@@ -64,8 +64,8 @@ func (s *Store) AddInterest(ctx context.Context, userID string, in Interest) err
 	}
 	now := time.Now().Unix()
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO interests (interest, owner, sources, rubric, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)`, in.Name, userID, string(sources), in.Rubric, now, now)
+		INSERT INTO interests (interest, owner, sources, rubric, created_on, updated_on)
+		VALUES ($1, $2, $3, $4, $5, $6)`, in.Name, userID, string(sources), in.Rubric, now, now)
 	return err
 }
 
@@ -75,14 +75,14 @@ const interestColumns = `i.id, i.interest, i.owner, i.sources, i.rubric, i.is_de
 // their own, by name.
 func (s *Store) Catalog(ctx context.Context, userID string) ([]Interest, error) {
 	return s.queryInterests(ctx, `
-		SELECT `+interestColumns+` FROM interests i WHERE i.owner IN ('', ?) ORDER BY i.interest, i.owner`, userID)
+		SELECT `+interestColumns+` FROM interests i WHERE i.owner IN ('', $1) ORDER BY i.interest, i.owner`, userID)
 }
 
 // CatalogInterest returns the interest named name, ignoring case, in the
 // user's catalog, their own first; nil when there is none.
 func (s *Store) CatalogInterest(ctx context.Context, userID, name string) (*Interest, error) {
 	ins, err := s.queryInterests(ctx, `
-		SELECT `+interestColumns+` FROM interests i WHERE i.interest = ? AND i.owner IN ('', ?)
+		SELECT `+interestColumns+` FROM interests i WHERE i.interest = $1 AND i.owner IN ('', $2)
 		ORDER BY i.owner DESC LIMIT 1`, name, userID)
 	if err != nil || len(ins) == 0 {
 		return nil, err
@@ -94,7 +94,7 @@ func (s *Store) CatalogInterest(ctx context.Context, userID, name string) (*Inte
 // name.
 func (s *Store) DefaultInterests(ctx context.Context) ([]Interest, error) {
 	return s.queryInterests(ctx, `
-		SELECT `+interestColumns+` FROM interests i WHERE i.owner = '' AND i.is_default = 1 ORDER BY i.id`)
+		SELECT `+interestColumns+` FROM interests i WHERE i.owner = '' AND i.is_default ORDER BY i.id`)
 }
 
 // ActiveInterests returns the interests the user follows and has not muted,
@@ -103,7 +103,7 @@ func (s *Store) ActiveInterests(ctx context.Context, userID string) ([]Interest,
 	return s.queryInterests(ctx, `
 		SELECT `+interestColumns+`
 		FROM user_interests u JOIN interests i ON i.id = u.interest_id
-		WHERE u.user_id = ? AND u.status = 'active' ORDER BY u.created_at, u.rowid`, userID)
+		WHERE u.user_id = $1 AND u.status = 'active' ORDER BY u.created_on, u.seq`, userID)
 }
 
 func (s *Store) queryInterests(ctx context.Context, query string, args ...any) ([]Interest, error) {
@@ -132,7 +132,7 @@ func (s *Store) queryInterests(ctx context.Context, query string, args ...any) (
 func (s *Store) UserInterests(ctx context.Context, userID string) ([]UserInterest, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT i.interest, u.status FROM user_interests u JOIN interests i ON i.id = u.interest_id
-		WHERE u.user_id = ? ORDER BY u.created_at, u.rowid`, userID)
+		WHERE u.user_id = $1 ORDER BY u.created_on, u.seq`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -161,9 +161,9 @@ func (s *Store) FollowInterest(ctx context.Context, userID, name string) error {
 	}
 	now := time.Now().Unix()
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO user_interests (user_id, interest_id, status, created_at, updated_at)
-		VALUES (?, ?, 'active', ?, ?)
-		ON CONFLICT (user_id, interest_id) DO UPDATE SET status = 'active', updated_at = excluded.updated_at`,
+		INSERT INTO user_interests (user_id, interest_id, status, created_on, updated_on)
+		VALUES ($1, $2, 'active', $3, $4)
+		ON CONFLICT (user_id, interest_id) DO UPDATE SET status = 'active', updated_on = excluded.updated_on`,
 		userID, in.ID, now, now)
 	return err
 }
@@ -179,8 +179,8 @@ func (s *Store) FollowDefaults(ctx context.Context, userID string) ([]string, er
 	for _, in := range defaults {
 		now := time.Now().Unix()
 		res, err := s.db.ExecContext(ctx, `
-			INSERT INTO user_interests (user_id, interest_id, status, created_at, updated_at)
-			VALUES (?, ?, 'active', ?, ?) ON CONFLICT DO NOTHING`, userID, in.ID, now, now)
+			INSERT INTO user_interests (user_id, interest_id, status, created_on, updated_on)
+			VALUES ($1, $2, 'active', $3, $4) ON CONFLICT DO NOTHING`, userID, in.ID, now, now)
 		if err != nil {
 			return added, err
 		}
@@ -195,8 +195,8 @@ func (s *Store) FollowDefaults(ctx context.Context, userID string) ([]string, er
 // reports whether they follow it.
 func (s *Store) SetInterestStatus(ctx context.Context, userID, name, status string) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE user_interests SET status = ?, updated_at = ?
-		WHERE user_id = ? AND interest_id IN (SELECT id FROM interests WHERE interest = ? AND owner IN ('', ?))`,
+		UPDATE user_interests SET status = $1, updated_on = $2
+		WHERE user_id = $3 AND interest_id IN (SELECT id FROM interests WHERE interest = $4 AND owner IN ('', $5))`,
 		status, time.Now().Unix(), userID, name, userID)
 	if err != nil {
 		return false, err
@@ -232,7 +232,7 @@ func (s *Store) Unsent(ctx context.Context, userID string, urls []string) ([]str
 	for _, u := range urls {
 		var one int
 		err := s.db.QueryRowContext(ctx,
-			`SELECT 1 FROM sent_urls WHERE user_id = ? AND url_hash = ?`, userID, URLHash(u)).Scan(&one)
+			`SELECT 1 FROM sent_urls WHERE user_id = $1 AND url_hash = $2`, userID, URLHash(u)).Scan(&one)
 		if errors.Is(err, sql.ErrNoRows) {
 			out = append(out, u)
 			continue
@@ -254,7 +254,7 @@ type SentStory struct {
 // first.
 func (s *Store) SentStoriesSince(ctx context.Context, userID string, t time.Time) ([]SentStory, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT story, title FROM sent_stories WHERE user_id = ? AND sent_at >= ? ORDER BY sent_at DESC, rowid DESC`, userID, t.Unix())
+		`SELECT story, title FROM sent_stories WHERE user_id = $1 AND sent_at >= $2 ORDER BY sent_at DESC, seq DESC`, userID, t.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -277,7 +277,7 @@ func markStoriesSent(ctx context.Context, db execer, userID string, stories []Se
 			continue
 		}
 		if _, err := db.ExecContext(ctx, `
-			INSERT INTO sent_stories (user_id, story, title, sent_at) VALUES (?, ?, ?, ?)
+			INSERT INTO sent_stories (user_id, story, title, sent_at) VALUES ($1, $2, $3, $4)
 			ON CONFLICT (user_id, story) DO UPDATE SET title = excluded.title, sent_at = excluded.sent_at`,
 			userID, st.Story, st.Title, now); err != nil {
 			return err
@@ -290,7 +290,7 @@ func markSent(ctx context.Context, db execer, userID string, urls []string) erro
 	now := time.Now().Unix()
 	for _, u := range urls {
 		if _, err := db.ExecContext(ctx, `
-			INSERT INTO sent_urls (user_id, url_hash, sent_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`,
+			INSERT INTO sent_urls (user_id, url_hash, sent_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
 			userID, URLHash(u), now); err != nil {
 			return err
 		}

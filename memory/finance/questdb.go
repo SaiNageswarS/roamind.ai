@@ -2,7 +2,7 @@
 // shared by every user, and each user's trade events, trades and
 // valuations. Its tables are defined in memory/questdb-schemas and created by
 // `task init` (bin/worker -questdb-init); its state (accounts, uploads,
-// alerts) is in the SQLite store.
+// alerts) is in the Postgres store.
 //
 // It talks to QuestDB with the official client over QWP, QuestDB's
 // WebSocket protocol on its HTTP port. Writes are INSERTs run with Exec,

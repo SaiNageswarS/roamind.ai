@@ -37,7 +37,7 @@ func (s *Store) JobPostingOf(ctx context.Context, userID, h string) (*JobPosting
 	var found int64
 	err := s.db.QueryRowContext(ctx, `
 		SELECT user_id, url_hash, url, title, company, source, status, found_at FROM job_postings
-		WHERE user_id = ? AND url_hash = ?`, userID, h).
+		WHERE user_id = $1 AND url_hash = $2`, userID, h).
 		Scan(&p.UserID, &p.URLHash, &p.URL, &p.Title, &p.Company, &p.Source, &p.Status, &found)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -51,7 +51,7 @@ func (s *Store) JobPostingOf(ctx context.Context, userID, h string) (*JobPosting
 func (s *Store) OpenPostings(ctx context.Context, userID string) ([]JobPosting, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT user_id, url_hash, url, title, company, source, status, found_at FROM job_postings
-		WHERE user_id = ? AND status IN ('picked', 'published') ORDER BY found_at, url_hash`, userID)
+		WHERE user_id = $1 AND status IN ('picked', 'published') ORDER BY found_at, url_hash`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func (s *Store) UnseenPostings(ctx context.Context, userID string, urls []string
 	for _, u := range urls {
 		var one int
 		err := s.db.QueryRowContext(ctx,
-			`SELECT 1 FROM job_postings WHERE user_id = ? AND url_hash = ?`, userID, URLHash(u)).Scan(&one)
+			`SELECT 1 FROM job_postings WHERE user_id = $1 AND url_hash = $2`, userID, URLHash(u)).Scan(&one)
 		if errors.Is(err, sql.ErrNoRows) {
 			out = append(out, u)
 			continue
@@ -94,7 +94,7 @@ func (s *Store) PickPosting(ctx context.Context, p JobPosting) (JobPosting, bool
 	p.URLHash, p.Status, p.FoundAt = URLHash(p.URL), PostingPicked, time.Unix(time.Now().Unix(), 0)
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO job_postings (user_id, url_hash, url, title, company, source, status, found_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (user_id, url_hash) DO NOTHING`,
 		p.UserID, p.URLHash, p.URL, p.Title, p.Company, p.Source, p.Status, p.FoundAt.Unix())
 	if err != nil {
@@ -110,8 +110,8 @@ func (s *Store) PickPosting(ctx context.Context, p JobPosting) (JobPosting, bool
 func (s *Store) RepickPosting(ctx context.Context, p JobPosting) (JobPosting, bool, error) {
 	p.URLHash, p.Status, p.FoundAt = URLHash(p.URL), PostingPicked, time.Unix(time.Now().Unix(), 0)
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE job_postings SET status = 'picked', found_at = ?, title = ?, company = ?, source = ?
-		WHERE user_id = ? AND url_hash = ? AND status IN ('passed', 'failed')`,
+		UPDATE job_postings SET status = 'picked', found_at = $1, title = $2, company = $3, source = $4
+		WHERE user_id = $5 AND url_hash = $6 AND status IN ('passed', 'failed')`,
 		p.FoundAt.Unix(), p.Title, p.Company, p.Source, p.UserID, p.URLHash)
 	if err != nil {
 		return p, false, err
@@ -125,7 +125,7 @@ func (s *Store) RepickPosting(ctx context.Context, p JobPosting) (JobPosting, bo
 func (s *Store) PassPosting(ctx context.Context, p JobPosting) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO job_postings (user_id, url_hash, url, title, company, source, status, found_at)
-		VALUES (?, ?, ?, ?, ?, ?, 'passed', ?)
+		VALUES ($1, $2, $3, $4, $5, $6, 'passed', $7)
 		ON CONFLICT (user_id, url_hash) DO NOTHING`,
 		p.UserID, URLHash(p.URL), p.URL, p.Title, p.Company, p.Source, time.Now().Unix())
 	return err
@@ -134,15 +134,15 @@ func (s *Store) PassPosting(ctx context.Context, p JobPosting) error {
 // MarkPublished records that the posting's application is in the web app.
 func (s *Store) MarkPublished(ctx context.Context, userID, h string) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE job_postings SET status = 'published', published_at = ?
-		WHERE user_id = ? AND url_hash = ? AND status = 'picked'`, time.Now().Unix(), userID, h)
+		UPDATE job_postings SET status = 'published', published_at = $1
+		WHERE user_id = $2 AND url_hash = $3 AND status = 'picked'`, time.Now().Unix(), userID, h)
 	return err
 }
 
 // MarkFailed records that the posting's application could not be written.
 func (s *Store) MarkFailed(ctx context.Context, userID, h string) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE job_postings SET status = 'failed' WHERE user_id = ? AND url_hash = ? AND status = 'picked'`, userID, h)
+		UPDATE job_postings SET status = 'failed' WHERE user_id = $1 AND url_hash = $2 AND status = 'picked'`, userID, h)
 	return err
 }
 
@@ -157,8 +157,8 @@ func (s *Store) ClosePostings(ctx context.Context, userID string, hashes []strin
 	now := time.Now().Unix()
 	for _, h := range hashes {
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE job_postings SET status = 'closed', closed_at = ?
-			WHERE user_id = ? AND url_hash = ? AND status != 'closed'`, now, userID, h); err != nil {
+			UPDATE job_postings SET status = 'closed', closed_at = $1
+			WHERE user_id = $2 AND url_hash = $3 AND status != 'closed'`, now, userID, h); err != nil {
 			return err
 		}
 	}
@@ -176,7 +176,7 @@ func (s *Store) AddLinkRequests(ctx context.Context, userID string, urls []strin
 	now := time.Now().Unix()
 	for _, u := range urls {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO job_link_requests (user_id, url, requested_at) VALUES (?, ?, ?)
+			INSERT INTO job_link_requests (user_id, url, requested_at) VALUES ($1, $2, $3)
 			ON CONFLICT (user_id, url) DO NOTHING`, userID, u, now); err != nil {
 			return err
 		}
@@ -188,7 +188,7 @@ func (s *Store) AddLinkRequests(ctx context.Context, userID string, urls []strin
 // first.
 func (s *Store) TakeLinkRequests(ctx context.Context, userID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		DELETE FROM job_link_requests WHERE user_id = ? RETURNING url, requested_at`, userID)
+		DELETE FROM job_link_requests WHERE user_id = $1 RETURNING url, requested_at`, userID)
 	if err != nil {
 		return nil, err
 	}

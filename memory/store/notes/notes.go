@@ -1,5 +1,5 @@
 // Package notes reads and writes users' Basic Memory notes, the part of
-// their data kept as markdown rather than in SQLite. Each user has a
+// their data kept as markdown rather than in Postgres. Each user has a
 // project, laid out under Dir:
 //
 //	Dir/fastembed_cache/           embedding model, downloaded once

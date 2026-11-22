@@ -1,6 +1,6 @@
 module roamind.ai/channels
 
-go 1.26.3
+go 1.26.7
 
 require (
 	cloud.google.com/go/firestore v1.26.0

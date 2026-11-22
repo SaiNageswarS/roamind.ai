@@ -73,7 +73,7 @@ Details: [docs/architecture.md](docs/architecture.md); the web app's data contra
 
 ## Design principles of the code
 
-1. **Used the task runner [go-task](https://taskfile.dev) to separate application logic from environment setup.** `task init` creates the tables, loads the seed data and refreshes every user's Basic Memory config in plain shell (`sqlite3`, `jq`, `cp`), safe to repeat. The application code never initializes its environment.
+1. **Used the task runner [go-task](https://taskfile.dev) to separate application logic from environment setup.** `task init` creates the tables, loads the seed data and refreshes every user's Basic Memory config in plain shell (`psql`, `jq`, `cp`), safe to repeat. The application code never initializes its environment.
 2. **Separated long-running services from one-shot tasks.** process-compose runs only the services (Caddy, the two model servers, the worker), after a one-shot `init`. Every build and setup command is a Taskfile task, and a systemd unit starts the stack at boot.
 3. **Used a layered design with one-way dependencies.** The layers are:
    - `memory` is the data layer;
@@ -87,7 +87,7 @@ Details: [docs/architecture.md](docs/architecture.md); the web app's data contra
 5. **Kept data as data.**
    - Table definitions, seed data (plain `INSERT` statements), note schemas and Basic Memory's settings are files in `memory/`.
    - They are read from disk rather than embedded in binaries or hard-coded as Go structs.
-   - The rubrics stay Markdown files, read by the seed through `sqlite3`'s `readfile`.
+   - The rubrics stay Markdown files, read by the seed (`worker -seed`).
 6. **Modelled per-user setup as an independent Hatchet workflow with explicit task dependencies.**
    - `user-setup` runs `memory-project → bm-setup → news-channel`.
    - It runs as a top-level run, so every setup can be monitored on its own.
@@ -105,20 +105,20 @@ Details: [docs/architecture.md](docs/architecture.md); the web app's data contra
    - A turn gets only the tools its input warrants.
    - Text from third-party feeds and job postings is judged with no tools at all; mail is related to memory with read-only tools.
    - Each user has their own sandboxed workspace, memory database and config.
-10. **Stored little, and stored derived values once.** Conversations live only in Claude's session files, and SQLite just maps threads to sessions. A user's memory project name is assigned once and stored, not computed per turn.
+10. **Stored little, and stored derived values once.** Conversations live only in Claude's session files, and Postgres just maps threads to sessions. A user's memory project name is assigned once and stored, not computed per turn.
 11. **Wrote prompts that give data and say what to do.** When the model got something wrong, the fix was the right data or a positive instruction rather than a prohibition. Note schemas, not the system prompt, own the rules for each note type.
 12. **Tested against the real artifacts.**
-    - Tests create tables from the real schema files and run the real seed SQL through `sqlite3`.
+    - Tests create tables from the real schema files in a Postgres schema of their own (`roamind_test`), and load the real seed.
     - A drift test runs the Taskfile's `jq` filter and Go's project setup on the same config and requires identical output.
     - The database is never mocked.
-13. **Handled errors by their codes.** A unique-constraint conflict is detected by SQLite's error code, not by matching error text, and retries loop rather than recurse.
+13. **Handled errors by their codes.** A unique-constraint conflict is detected by Postgres's error code (23505), not by matching error text, and retries loop rather than recurse.
 14. **Kept the code small and deletable.**
     - Package names are short and say what they hold (`store`, `notes`), and every declaration has a doc comment.
     - Unused code and one-time setup code are deleted rather than kept.
 
 ## Setup
 
-Needs an NVIDIA GPU, Tailscale, the [Hatchet CLI](https://docs.hatchet.run/reference/cli.md), [Task](https://taskfile.dev), `sqlite3`, `jq`, `bwrap`, `socat` and Basic Memory (`uv tool install basic-memory`).
+Needs an NVIDIA GPU, Tailscale, the [Hatchet CLI](https://docs.hatchet.run/reference/cli.md), [Task](https://taskfile.dev), PostgreSQL 18 (`psql`), Docker (for Hatchet), `jq`, `bwrap`, `socat` and Basic Memory (`uv tool install basic-memory`).
 
 ```sh
 cp .env.example .env          # add TS_AUTHKEY, ROAMIND_DASHBOARD_USERS

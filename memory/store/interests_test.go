@@ -24,8 +24,8 @@ func TestInterests(t *testing.T) {
 	}
 	for _, in := range catalog {
 		sources, _ := json.Marshal(in.Sources)
-		if _, err := s.db.Exec(`INSERT INTO interests (interest, sources, rubric, is_default, created_at, updated_at)
-			VALUES (?, ?, ?, ?, 0, 0)`, in.Name, string(sources), in.Rubric, in.Default); err != nil {
+		if _, err := s.db.Exec(`INSERT INTO interests (interest, sources, rubric, is_default, created_on, updated_on)
+			VALUES ($1, $2, $3, $4, 0, 0)`, in.Name, string(sources), in.Rubric, in.Default); err != nil {
 			t.Fatal(err)
 		}
 	}

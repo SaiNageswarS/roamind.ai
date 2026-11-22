@@ -30,7 +30,7 @@ type DigestItem struct {
 func (s *Store) DigestPosted(ctx context.Context, userID, slot string) (bool, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM digests WHERE user_id = ? AND slot = ?`, userID, slot).Scan(&n)
+		`SELECT COUNT(*) FROM digests WHERE user_id = $1 AND slot = $2`, userID, slot).Scan(&n)
 	return n > 0, err
 }
 
@@ -39,22 +39,19 @@ func (s *Store) DigestPosted(ctx context.Context, userID, slot string) (bool, er
 // reserved or posted. Reserving first means a run that dies after posting
 // can't be replayed into a second post.
 func (s *Store) ReserveDigest(ctx context.Context, userID, channelID, slot string) (id int64, ok bool, err error) {
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO digests (user_id, channel_id, slot, posted_at) VALUES (?, ?, ?, ?)
-		ON CONFLICT (user_id, slot) DO NOTHING`, userID, channelID, slot, time.Now().Unix())
-	if err != nil {
-		return 0, false, err
+	err = s.db.QueryRowContext(ctx, `
+		INSERT INTO digests (user_id, channel_id, slot, posted_at) VALUES ($1, $2, $3, $4)
+		ON CONFLICT (user_id, slot) DO NOTHING
+		RETURNING id`, userID, channelID, slot, time.Now().Unix()).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
 	}
-	if n, err := res.RowsAffected(); err != nil || n == 0 {
-		return 0, false, err
-	}
-	id, err = res.LastInsertId()
 	return id, err == nil, err
 }
 
 // ReleaseDigest gives back a reserved slot whose digest was not posted.
 func (s *Store) ReleaseDigest(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM digests WHERE id = ? AND ts IS NULL`, id)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM digests WHERE id = $1 AND ts IS NULL`, id)
 	return err
 }
 
@@ -67,7 +64,7 @@ func (s *Store) CompleteDigest(ctx context.Context, d Digest, items []DigestItem
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `UPDATE digests SET ts = ?, text = ?, posted_at = ? WHERE id = ?`,
+	if _, err := tx.ExecContext(ctx, `UPDATE digests SET ts = $1, text = $2, posted_at = $3 WHERE id = $4`,
 		d.TS, d.Text, d.PostedAt.Unix(), d.ID); err != nil {
 		return err
 	}
@@ -76,7 +73,7 @@ func (s *Store) CompleteDigest(ctx context.Context, d Digest, items []DigestItem
 	for i, it := range items {
 		urls[i], stories[i] = it.URL, SentStory{Story: it.Story, Title: it.Title}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO digest_items (digest_id, interest, title, url) VALUES (?, ?, ?, ?)`,
+			`INSERT INTO digest_items (digest_id, interest, title, url) VALUES ($1, $2, $3, $4)`,
 			d.ID, it.Interest, it.Title, it.URL); err != nil {
 			return err
 		}
@@ -94,7 +91,7 @@ func (s *Store) CompleteDigest(ctx context.Context, d Digest, items []DigestItem
 func (s *Store) DigestByTS(ctx context.Context, channelID, ts string) (*Digest, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, user_id, slot, text, posted_at FROM digests
-		WHERE channel_id = ? AND ts = ?`, channelID, ts)
+		WHERE channel_id = $1 AND ts = $2`, channelID, ts)
 	d := Digest{ChannelID: channelID, TS: ts}
 	var posted int64
 	err := row.Scan(&d.ID, &d.UserID, &d.Slot, &d.Text, &posted)
@@ -111,7 +108,7 @@ func (s *Store) RecentDigestItems(ctx context.Context, userID string, since time
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT i.id, i.digest_id, i.interest, i.title, i.url
 		FROM digest_items i JOIN digests d ON d.id = i.digest_id
-		WHERE d.user_id = ? AND d.posted_at >= ? ORDER BY d.posted_at DESC, i.id`, userID, since.Unix())
+		WHERE d.user_id = $1 AND d.posted_at >= $2 ORDER BY d.posted_at DESC, i.id`, userID, since.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +135,7 @@ type Signal struct {
 // SaveSignal records feedback.
 func (s *Store) SaveSignal(ctx context.Context, sg Signal) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO digest_signals (user_id, digest_id, kind, value, at) VALUES (?, ?, ?, ?, ?)`,
+		INSERT INTO digest_signals (user_id, digest_id, kind, value, at) VALUES ($1, $2, $3, $4, $5)`,
 		sg.UserID, sg.DigestID, sg.Kind, sg.Value, time.Now().Unix())
 	return err
 }
@@ -163,7 +160,7 @@ func (s *Store) InterestSignals(ctx context.Context, userID string, since time.T
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT digest_id, value FROM digest_signals WHERE user_id = ? AND at >= ?`, userID, since.Unix())
+		SELECT digest_id, value FROM digest_signals WHERE user_id = $1 AND at >= $2`, userID, since.Unix())
 	if err != nil {
 		return nil, err
 	}

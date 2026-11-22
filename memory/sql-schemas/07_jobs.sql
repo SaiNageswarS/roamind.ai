@@ -11,9 +11,9 @@ CREATE TABLE IF NOT EXISTS job_postings (
     company      TEXT NOT NULL DEFAULT '',
     source       TEXT NOT NULL, -- jobs.Ref.Source: greenhouse, lever, …, other
     status       TEXT NOT NULL, -- picked, published, failed, closed, passed (not a fit)
-    found_at     INTEGER NOT NULL,
-    published_at INTEGER,
-    closed_at    INTEGER,
+    found_at     BIGINT NOT NULL,
+    published_at BIGINT,
+    closed_at    BIGINT,
     PRIMARY KEY (user_id, url_hash)
 );
 -- Posting links a user asked for in Slack (the submit_job_links tool),
@@ -21,6 +21,6 @@ CREATE TABLE IF NOT EXISTS job_postings (
 CREATE TABLE IF NOT EXISTS job_link_requests (
     user_id      TEXT NOT NULL REFERENCES users(id),
     url          TEXT NOT NULL,
-    requested_at INTEGER NOT NULL,
+    requested_at BIGINT NOT NULL,
     PRIMARY KEY (user_id, url)
 );

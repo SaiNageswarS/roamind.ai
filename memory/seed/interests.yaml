@@ -1,0 +1,87 @@
+# The curated news interests (owner ''), seen by every user: name, whether
+# every user follows it (default), its rubric (prose in rubrics/*.md) and its
+# RSS/Atom feeds. Loaded by `task init` (`worker -seed`); safe to repeat.
+# Interests are added or updated, and curated ones no longer listed here are
+# deleted with their follows.
+- interest: Positive living
+  default: true
+  rubric: rubrics/positive-living.md
+  sources:
+    - https://greatergood.berkeley.edu/site/rss/articles
+    - https://www.positive.news/feed/
+    - https://www.goodnewsnetwork.org/feed/
+- interest: Stoic principles
+  default: true
+  rubric: rubrics/stoic-principles.md
+  sources:
+    - https://dailystoic.com/feed/
+    - https://modernstoicism.com/feed/
+    - https://donaldrobertson.substack.com/feed
+- interest: Healthy eating
+  default: true
+  rubric: rubrics/healthy-eating.md
+  sources:
+    - https://www.hsph.harvard.edu/nutritionsource/feed/
+    - https://www.sciencedaily.com/rss/health_medicine/nutrition.xml
+    - https://nutritionfacts.org/feed/
+- interest: Science
+  default: true
+  rubric: rubrics/science.md
+  sources:
+    - https://www.sciencedaily.com/rss/top/science.xml
+    - https://www.quantamagazine.org/feed/
+    - https://phys.org/rss-feed/
+    - https://www.nature.com/nature.rss
+- interest: Positive scientific developments across the world
+  default: true
+  rubric: rubrics/positive-scientific-developments.md
+  sources:
+    - https://fixthenews.com/feed
+    - https://www.goodnewsnetwork.org/category/news/science/feed/
+    - https://ourworldindata.org/atom.xml
+- interest: Neuroscience for better living
+  default: true
+  rubric: rubrics/neuroscience-for-better-living.md
+  sources:
+    - https://www.sciencedaily.com/rss/mind_brain.xml
+    - https://www.psypost.org/feed/
+    - https://www.thetransmitter.org/feed/
+    - https://greatergood.berkeley.edu/site/rss/articles
+- interest: Statistics
+  default: false
+  rubric: rubrics/statistics.md
+  sources:
+    - https://statmodeling.stat.columbia.edu/feed/
+    - https://rss.arxiv.org/rss/stat.ME
+    - https://rss.arxiv.org/rss/stat.ML
+- interest: Machine learning research
+  default: false
+  rubric: rubrics/machine-learning-research.md
+  sources:
+    - https://research.google/blog/rss/
+    - https://bair.berkeley.edu/blog/feed.xml
+    - https://rss.arxiv.org/rss/cs.LG
+- interest: Neural networks and computational neuroscience
+  default: false
+  rubric: rubrics/neural-networks-computational-neuroscience.md
+  sources:
+    - https://rss.arxiv.org/rss/cs.NE
+    - https://rss.arxiv.org/rss/q-bio.NC
+- interest: AI & Agentic Development
+  default: false
+  rubric: rubrics/ai-agentic-development.md
+  sources:
+    - https://openai.com/news/rss.xml
+    - https://deepmind.google/blog/rss.xml
+    - https://mistral.ai/rss.xml
+    - https://huggingface.co/blog/feed.xml
+    - https://blogs.nvidia.com/feed/
+    - https://www.apple.com/newsroom/rss-feed.rss
+    - https://www.latent.space/feed
+    - https://sifted.eu/feed
+    - https://nlp.elvissaravia.com/feed
+    - https://arxiviq.substack.com/feed
+    - https://aiweekly.co/issues.rss
+    - https://news.ycombinator.com/rss
+    - https://simonwillison.net/atom/everything/
+    - https://rss.arxiv.org/rss/cs.MA

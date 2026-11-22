@@ -3,7 +3,7 @@ package finance
 import "context"
 
 // Dirty is where users whose trade events changed are marked, and the mark
-// cleared once they are reconciled: the SQLite store (memory/store).
+// cleared once they are reconciled: the Postgres store (memory/store).
 type Dirty interface {
 	// FinanceDirty is the user's mark, 0 when they are clean.
 	FinanceDirty(ctx context.Context, userID string) (int64, error)

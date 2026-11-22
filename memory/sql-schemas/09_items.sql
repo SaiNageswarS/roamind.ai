@@ -3,7 +3,7 @@
 -- the Basic Memory note each row comes from; the note has no status.
 CREATE TABLE IF NOT EXISTS items (
     user_id    TEXT NOT NULL REFERENCES users(id),
-    key        TEXT NOT NULL COLLATE NOCASE, -- a stable title, or the confirmation, order or invoice number
+    key        CITEXT NOT NULL, -- a stable title, or the confirmation, order or invoice number
     kind       TEXT NOT NULL, -- the note type: task, event
     event_kind TEXT NOT NULL DEFAULT '', -- the Event's kind (delivery, travel, …), which sets its lead time; '' for tasks
     note       TEXT NOT NULL, -- the permalink of its Basic Memory note
@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS items (
     until      TEXT, -- ISO date it last shows; NULL until it is closed
     state      TEXT NOT NULL, -- open, done, cancelled
     source     TEXT NOT NULL, -- 'chat', or 'mail:<address>/<message id>'
-    updated_at INTEGER NOT NULL,
-    closed_at  INTEGER,
+    updated_on BIGINT NOT NULL,
+    closed_at  BIGINT,
     PRIMARY KEY (user_id, key)
 );
 CREATE INDEX IF NOT EXISTS items_due ON items (user_id, state, show_from);
