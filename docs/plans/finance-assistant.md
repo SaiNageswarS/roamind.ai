@@ -1,5 +1,7 @@
 # Finance assistant (plan)
 
+> Superseded: the finance assistant was simplified to a Postgres ledger that the agent only imports reports into, with sells matched to buys FIFO, and no QuestDB, market data or profit tools. What runs is in [the architecture](../architecture.md#finance-assistant); this plan is kept for its history.
+
 Status: drafted 2026-11-04; revised 2026-11-05 around QuestDB (PR #19 added `task questdb`), several users, and a programmatic de-dupe of mail and uploaded reports.
 
 ## Context

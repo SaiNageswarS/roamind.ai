@@ -3,7 +3,7 @@
 // to the turn's user and serving the tool sets the turn's task gets (see
 // agent.Config.ToolsServer):
 //
-//	mcp --data DIR [--postgres URI] --user ID --tools interests,jobs,items,finance [--questdb 127.0.0.1:9000]
+//	mcp --data DIR [--postgres URI] --user ID --tools interests,jobs,items,finance
 package main
 
 import (
@@ -20,9 +20,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"roamind.ai/connectors/feeds"
-	"roamind.ai/connectors/market"
 	"roamind.ai/mcp/tools"
-	"roamind.ai/memory/finance"
 	"roamind.ai/memory/store"
 )
 
@@ -39,7 +37,6 @@ func run(args []string) error {
 	postgres := fs.String("postgres", "", "PostgreSQL URI of the store (default: POSTGRES_URI, else "+store.DefaultURI+")")
 	user := fs.String("user", "", "the user the tools serve")
 	sets := fs.String("tools", "", "the tool sets to serve, comma-separated: interests, jobs, items, finance")
-	questdb := fs.String("questdb", "", "QuestDB's HTTP address, for the finance tools")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -61,14 +58,6 @@ func run(args []string) error {
 	}
 	defer st.Close()
 	deps := tools.Deps{Store: st, Feeds: feeds.New(15 * time.Second), UserID: *user, DataDir: *dataDir}
-	if *questdb != "" {
-		if deps.Finance, err = finance.Open(ctx, *questdb); err != nil {
-			return err
-		}
-		defer deps.Finance.Close()
-		// claude passes the worker's environment on.
-		deps.Market = market.New(30*time.Second, os.Getenv("EODHD_API_KEY"))
-	}
 	s := mcp.NewServer(&mcp.Implementation{Name: "roamind", Version: "v1"}, nil)
 	if err := tools.Register(s, deps, strings.FieldsFunc(*sets, func(r rune) bool { return r == ',' })); err != nil {
 		return err

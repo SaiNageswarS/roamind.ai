@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"roamind.ai/agent"
-	"roamind.ai/memory/finance"
-	"roamind.ai/memory/finance/financetest"
 	"roamind.ai/memory/store"
 )
 
@@ -39,28 +37,10 @@ func TestSignedBy(t *testing.T) {
 }
 
 func TestBrokerMail(t *testing.T) {
-	addr, stop, err := financetest.Start()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(stop)
-	if addr == "" {
-		t.Skip("no QuestDB in bin/ (task questdb-install)")
-	}
 	ctx := context.Background()
-	db, err := finance.Open(ctx, addr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(db.Close)
-	schemas, _ := financetest.Schemas()
-	if err := db.Init(ctx, schemas); err != nil {
-		t.Fatal(err)
-	}
-
 	d, fs, _ := setup(t)
 	bin, argsLog := fakeClaudeWith(t, "testdata/extract_trades.jsonl")
-	d.Agent.ClaudeBinary, d.Finance = bin, db
+	d.Agent.ClaudeBinary = bin
 	now := time.Date(2026, 11, 3, 18, 0, 0, 0, time.UTC)
 	d.Now = func() time.Time { return now }
 	var mailed []string
@@ -71,10 +51,6 @@ func TestBrokerMail(t *testing.T) {
 	}
 	secret, err := d.Store.ConnectMail(ctx, "sam@gmail.com", "f1")
 	if err != nil {
-		t.Fatal(err)
-	}
-	// TCS is known by its listing.
-	if err := db.PutListings(ctx, []finance.Listing{{ISIN: "INE467B01029", MIC: "NSE", Symbol: "TCS", Currency: "INR"}}); err != nil {
 		t.Fatal(err)
 	}
 	signed := "mx.google.com; dkim=pass header.i=@broker.example header.s=s1; spf=pass"
@@ -130,15 +106,23 @@ func TestBrokerMail(t *testing.T) {
 	if len(mailed) != 1 {
 		t.Errorf("after mail = %v", mailed)
 	}
-	if err := db.WaitApplied(ctx, "trade_events"); err != nil {
+	// A row without an ISIN is keyed by its symbol. NOSUCH, dated before
+	// the mail's window, was dropped.
+	var got []string
+	rows, err := d.Store.DB().Pool().Query(ctx, `SELECT account || ' ' || instrument || ' ' || source || ' ' || doc
+		FROM fin_transactions WHERE user_id = 'f1' ORDER BY line`)
+	if err != nil {
 		t.Fatal(err)
 	}
-	evs, err := db.TradeEvents(ctx, "f1", now.AddDate(0, 0, -1), now.AddDate(0, 0, 1))
-	if err != nil || len(evs) != 2 {
-		t.Fatalf("events = %+v %v", evs, err)
+	for rows.Next() {
+		var r string
+		_ = rows.Scan(&r)
+		got = append(got, r)
 	}
-	if e := evs[1]; e.ISIN != "INE467B01029" || e.Account != "a1" || e.Source != "mail:sam@gmail.com/cn1" || e.Doc != finance.DocContractNote {
-		t.Errorf("TCS = %+v", e)
+	rows.Close()
+	want := []string{"a1 INE009A01021 mail:sam@gmail.com/cn1 contract_note", "a1 TCS mail:sam@gmail.com/cn1 contract_note"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("ledger = %q", got)
 	}
 	if st, _ := d.Store.MessageStatus(ctx, "sam@gmail.com", "cn1"); st != store.MailDone {
 		t.Errorf("status = %q", st)

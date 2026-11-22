@@ -19,8 +19,6 @@ vars:
   XCADDY_VERSION: v0.4.7
   CLASP_VERSION: 2.4.2
   VLLM_VERSION: 0.30.0
-  QUESTDB_VERSION: 10.1.0
-  QUESTDB: bin/questdb-{{.QUESTDB_VERSION}}
   # The Python that parsers of broker reports run on, in the agent's
   # sandbox. It is outside the home directory, which the sandbox can't read.
   REPORT_PYTHON: /opt/roamind/py
@@ -71,13 +69,11 @@ tasks:
   # projects are created by the user-setup workflow; this brings existing
   # ones up to date.
   init:
-    desc: From memory/, create the store's and QuestDB's tables, load the curated interests, and bring every Basic Memory project up to date
+    desc: From memory/, create the store's tables, load the curated interests, and bring every Basic Memory project up to date
     cmds:
       - mkdir -p "${ROAMIND_DATA_DIR:-./data}/memory/fastembed_cache"
       - cat memory/sql-schemas/*.sql | PGOPTIONS='-c client_min_messages=warning' {{.PSQL}} -f -
       - ./bin/worker -seed
-      # QuestDB's tables, from memory/questdb-schemas.
-      - ./bin/worker -questdb-init
       - |
         # A project whose config.json jq can't merge into is skipped, with a
         # warning, so one bad file doesn't keep the worker down.
@@ -202,37 +198,6 @@ tasks:
       - for: {var: SEARCH_MODELS}
         cmd: '"$(uv tool dir)/vllm/bin/hf" download {{.ITEM}} >/dev/null'
 
-  # QuestDB holds the finance assistant's time series. The "rt" build
-  # bundles its Java runtime.
-  questdb-install:
-    desc: Download QuestDB into bin/questdb-<version>, unless it is there
-    status: ['test -x {{.QUESTDB}}/bin/questdb.sh']
-    cmds:
-      - |
-        tmp="$(mktemp -d)"
-        trap 'rm -rf "$tmp"' EXIT
-        curl -fL --retry 3 -o "$tmp/questdb.tar.gz" \
-          "https://github.com/questdb/questdb/releases/download/{{.QUESTDB_VERSION}}/questdb-{{.QUESTDB_VERSION}}-rt-linux-x86-64.tar.gz"
-        tar -xzf "$tmp/questdb.tar.gz" -C "$tmp"
-        mkdir -p bin
-        mv "$tmp/questdb-{{.QUESTDB_VERSION}}-rt-linux-x86-64" {{.QUESTDB}}
-
-  # Configured by deploy/bin/run-questdb.sh: loopback only; QWP (what
-  # Roamind uses), the web console and REST API on 9000, health on 9003;
-  # Postgres wire and line protocol over TCP off. process-compose runs it as
-  # `questdb`, in the foreground (task questdb -- -n); this starts it in the
-  # background without the rest.
-  questdb:
-    desc: Start QuestDB in the background, downloading it first if needed (web console http://127.0.0.1:9000)
-    deps: [questdb-install]
-    cmds:
-      - deploy/bin/run-questdb.sh {{.QUESTDB}} {{.CLI_ARGS}}
-
-  questdb-stop:
-    desc: Stop QuestDB
-    cmds:
-      - '{{.QUESTDB}}/bin/questdb.sh stop'
-
   # The agent writes a Python parser for each broker report format and runs
   # it in its sandbox (import_report in mcp/tools/finance.go). This is the
   # interpreter and libraries it runs on, from deploy/report-python-env/uv.lock:
@@ -263,7 +228,7 @@ tasks:
         mkdir -p "$(dirname "$unit")"
         cat >"$unit" <<UNIT
         [Unit]
-        Description=Roamind (process-compose: caddy, embed, rerank, notebook, questdb, init, worker)
+        Description=Roamind (process-compose: caddy, embed, rerank, notebook, pgadmin, init, worker)
         After=network-online.target
 
         [Service]

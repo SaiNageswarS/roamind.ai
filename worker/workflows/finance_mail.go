@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/mail"
@@ -147,8 +146,9 @@ func (d Deps) extractTrades(ctx context.Context, in MailInput, chk mailCheck) (m
 
 // saveTrades checks the mail's rows and writes those that pass to the
 // ledger, as the source mail:<address>/<message id>, whole: a mail read
-// again replaces what it gave before. Rows that fail are named in the
-// user's finance channel, for them to upload the report or tell the trade.
+// again replaces what it gave before. A report of the same days counts
+// over them (store.SaveFinanceMail). Rows that fail are named in the
+// user's finance channel, for them to upload the report.
 func (d Deps) saveTrades(ctx context.Context, in MailInput, chk mailCheck, ext *agent.ExtractedTrades) (mailSave, error) {
 	var out mailSave
 	u, err := d.Store.UserByID(ctx, chk.UserID)
@@ -174,70 +174,53 @@ func (d Deps) saveTrades(ctx context.Context, in MailInput, chk mailCheck, ext *
 		return out, err
 	}
 	source := "mail:" + in.Address + "/" + in.MessageID
-	res := &finance.Resolver{DB: d.Finance, Names: d.Store, UserID: u.ID}
-	if d.Market != nil {
-		res.Lookup = d.Market
-	}
 	var rows []finance.Row
-	var events []finance.TradeEvent
 	var problems []string
-	for i, x := range ext.Rows {
+	for _, x := range ext.Rows {
 		r := finance.Row{Date: x.Date, ISIN: strings.TrimSpace(x.ISIN), Name: x.Name, Symbol: x.Symbol, Exchange: x.Exchange,
 			Side: x.Side, Quantity: x.Quantity, Price: x.Price, Amount: x.Amount, Fees: x.Fees, TaxWithheld: x.TaxWithheld,
 			Currency: x.Currency, Ref: x.Ref}
 		if !finance.ValidISIN(r.ISIN) {
-			r.ISIN = "" // a model's guess is no ISIN: look it up
-		}
-		what := cmp.Or(x.Symbol, x.Name, x.ISIN)
-		var unknown *finance.Unresolved
-		switch err := res.Resolve(ctx, &r); {
-		case errors.As(err, &unknown):
-			problems = append(problems, fmt.Sprintf("%s %s %s: %s", x.Side, x.Quantity, what, unknown.Error()))
-			continue
-		case err != nil:
-			return out, err
+			r.ISIN = "" // a model's guess is no ISIN: the row keeps its symbol or name
 		}
 		if ps := finance.CheckRow(r, from, to); len(ps) > 0 {
-			problems = append(problems, fmt.Sprintf("%s %s %s: %s", x.Side, x.Quantity, what, strings.Join(ps, "; ")))
+			problems = append(problems, fmt.Sprintf("%s %s %s: %s", x.Side, x.Quantity, cmp.Or(x.Symbol, x.Name, x.ISIN), strings.Join(ps, "; ")))
 			continue
 		}
 		rows = append(rows, r)
-		events = append(events, r.Event(acct.ID, source, i+1, doc, sent))
 	}
-	if len(events) > 0 {
-		if err := d.Finance.SaveInstruments(ctx, rows); err != nil {
+	if len(rows) > 0 {
+		unmatched, err := d.Store.SaveFinanceMail(ctx, u.ID, acct.ID, source, doc, rows)
+		if err != nil {
 			return out, err
 		}
-		if _, err := d.Store.MarkFinanceDirty(ctx, u.ID); err != nil {
-			return out, err
-		}
-		if err := d.Finance.AddTradeEvents(ctx, u.ID, events); err != nil {
-			return out, err
+		if len(unmatched) > 0 {
+			slog.Info("broker mail: sells beyond what was bought", "user", u.ID, "message", in.MessageID, "unmatched", len(unmatched))
 		}
 	}
-	out.Trades = len(events)
+	out.Trades = len(rows)
 	out.Dropped = problems
 	if len(problems) > 0 {
 		slog.Warn("mail trades dropped", "user", u.ID, "message", in.MessageID, "problems", problems)
 		if err := d.tellFinance(ctx, u.ID, fmt.Sprintf("I couldn't read %d of the trades in <%s|%s>, so they aren't in your ledger:\n• %s\n"+
-			"Upload the contract note or statement, or tell me the trade or which stock it is.", len(problems), in.Link, in.Subject,
+			"Upload the contract note or statement, and I'll import it.", len(problems), in.Link, in.Subject,
 			strings.Join(problems, "\n• "))); err != nil {
 			return out, err
 		}
 	}
 	status := store.MailDone
-	if len(events) == 0 {
+	if len(rows) == 0 {
 		status = store.MailSkipped
 	}
 	if err := d.Store.FinishMessage(ctx, in.Address, in.MessageID, status); err != nil {
 		return out, err
 	}
-	if len(events) > 0 && d.FinanceMailed != nil {
+	if len(rows) > 0 && d.FinanceMailed != nil {
 		if err := d.FinanceMailed(ctx, u); err != nil {
 			slog.Error("after broker mail", "user", u.ID, "err", err)
 		}
 	}
-	slog.Info("broker mail saved", "user", u.ID, "message", in.MessageID, "trades", len(events), "dropped", len(problems))
+	slog.Info("broker mail saved", "user", u.ID, "message", in.MessageID, "trades", len(rows), "dropped", len(problems))
 	return out, nil
 }
 

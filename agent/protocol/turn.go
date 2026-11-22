@@ -87,14 +87,10 @@ const (
 	ServerJobs = "jobs"
 	// ServerItems is tracking the state of the user's tasks and events.
 	ServerItems = "items"
-	// ServerFinance is the user's brokerage accounts: importing reports,
-	// and their holdings and profit.
+	// ServerFinance is the user's finance ledger: importing their broker
+	// reports into it.
 	ServerFinance = "finance"
 )
-
-// QuestDBTools are the finance tools that read or write the ledger in
-// QuestDB (mcp/tools/finance.go); chat shows them as questDb_<tool>.
-var QuestDBTools = []string{"import_report", "record_trade", "list_holdings", "stock_history", "profit", "name_stock"}
 
 // NewsRef is the context of a turn in the user's news-shorts channel.
 type NewsRef struct {

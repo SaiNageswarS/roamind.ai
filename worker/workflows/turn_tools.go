@@ -26,13 +26,11 @@ func (d Deps) serverTools(task string) []string {
 
 // serves reports whether the worker can serve a tool set: jobs needs the
 // job assistant, which needs memory, where resumes are; items track notes
-// in memory; finance needs QuestDB.
+// in memory.
 func (d Deps) serves(set string) bool {
 	switch set {
 	case protocol.ServerJobs, protocol.ServerItems:
 		return d.Memory != nil
-	case protocol.ServerFinance:
-		return d.Finance != nil
 	}
 	return true
 }

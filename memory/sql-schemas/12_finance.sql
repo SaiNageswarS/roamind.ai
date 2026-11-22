@@ -1,11 +1,13 @@
--- The finance assistant's state, per user. Its ledger (trade events, trades,
--- prices) is in QuestDB: memory/questdb-schemas.
+-- The finance ledger, per user: accounts, the reports imported, every
+-- transaction a report or broker mail gave, and how sells are matched to
+-- buys (first in, first out). The agent only parses reports; holdings,
+-- cost and gains are SQL on these tables and the views at the end.
 
 -- Brokerage accounts, each made on its first report or trade. A report is
 -- matched to its account by the broker and the account number it shows.
 CREATE TABLE IF NOT EXISTS fin_accounts (
     user_id    TEXT NOT NULL REFERENCES users(id),
-    id         TEXT NOT NULL, -- a1, a2, …: the account's key in QuestDB and to the agent
+    id         TEXT NOT NULL, -- a1, a2, …: the account's key in fin_transactions and to the agent
     broker     TEXT NOT NULL, -- lowercase, as the user or the report names it
     number     TEXT NOT NULL, -- the account number as the broker shows it, often masked; '' when none
     currency   TEXT NOT NULL DEFAULT '', -- the account's own currency, when known
@@ -35,25 +37,6 @@ CREATE TABLE IF NOT EXISTS finance_uploads (
     UNIQUE (user_id, sha256)
 );
 
--- Users whose trade events changed since their last reconcile.
-CREATE TABLE IF NOT EXISTS finance_dirty (
-    id         TEXT PRIMARY KEY, -- user_id
-    user_id    TEXT NOT NULL UNIQUE REFERENCES users(id),
-    since      BIGINT NOT NULL, -- unix nanoseconds of the latest change
-    created_on BIGINT NOT NULL DEFAULT 0, -- unix seconds, set by go-api-boot's Save
-    updated_on BIGINT NOT NULL DEFAULT 0
-);
-
--- Per-user settings. Profit in the base currency is converted at each
--- day's ECB rate.
-CREATE TABLE IF NOT EXISTS finance_settings (
-    id            TEXT PRIMARY KEY, -- user_id
-    user_id       TEXT NOT NULL UNIQUE REFERENCES users(id),
-    base_currency TEXT NOT NULL DEFAULT 'EUR',
-    created_on    BIGINT NOT NULL DEFAULT 0, -- unix seconds, set by go-api-boot's Save
-    updated_on    BIGINT NOT NULL DEFAULT 0
-);
-
 -- The domains a user's broker mail comes from. Mail from a trusted domain,
 -- signed by it (DKIM, as Gmail checked it), is read into the ledger; finance
 -- mail from any other domain is only listed here, untrusted, for the user to
@@ -68,16 +51,84 @@ CREATE TABLE IF NOT EXISTS finance_senders (
     PRIMARY KEY (user_id, domain)
 );
 
--- What instruments the user's reports and mails name by ticker or name, by
--- their ISINs: found by a search, or told by the user when a name fits
--- more than one (memory/finance Resolver). key is symbol:<TICKER>@<exchange>, symbol:<TICKER>$<currency>,
--- symbol:<TICKER> or name:<the name's words, lowercase>.
-CREATE TABLE IF NOT EXISTS finance_stock_names (
-    id         TEXT PRIMARY KEY, -- user_id|lowercase key
-    user_id    TEXT NOT NULL REFERENCES users(id),
-    key        CITEXT NOT NULL,
-    isin       TEXT NOT NULL,
-    created_on BIGINT NOT NULL DEFAULT 0, -- unix seconds, set by go-api-boot's Save
-    updated_on BIGINT NOT NULL DEFAULT 0,
-    UNIQUE (user_id, key)
+-- Every trade and dividend as a source gave it: a report (upload:<sha256>)
+-- or a broker's mail (mail:<address>/<message id>). A source is written
+-- whole: written again, its rows replace the ones it had. Amounts are in
+-- currency; quantity and amount are positive whatever the side.
+CREATE TABLE IF NOT EXISTS fin_transactions (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id      TEXT NOT NULL REFERENCES users(id),
+    account      TEXT NOT NULL, -- fin_accounts.id
+    source       TEXT NOT NULL,
+    line         INT NOT NULL,  -- its row in the source, from 1
+    doc          TEXT NOT NULL, -- tradebook, statement, contract_note, confirmation
+    trade_date   DATE NOT NULL,
+    -- What buys and sells are matched by, within an account: the ISIN when
+    -- the source prints one, else the symbol, else the name, as printed.
+    instrument   TEXT NOT NULL,
+    isin         TEXT NOT NULL DEFAULT '',
+    symbol       TEXT NOT NULL DEFAULT '',
+    exchange     TEXT NOT NULL DEFAULT '',
+    name         TEXT NOT NULL DEFAULT '',
+    side         TEXT NOT NULL, -- buy, sell, vest, espp, dividend, transfer_in, transfer_out
+    quantity     NUMERIC,       -- NULL for a dividend
+    price        NUMERIC,       -- of one unit; for a transfer in, its original cost
+    amount       NUMERIC,       -- quantity × price before fees; a dividend's gross amount
+    fees         NUMERIC NOT NULL DEFAULT 0, -- brokerage, taxes on the trade, other charges
+    tax_withheld NUMERIC NOT NULL DEFAULT 0, -- on a dividend or a sale
+    currency     TEXT NOT NULL,
+    ref          TEXT NOT NULL DEFAULT '', -- order and trade numbers, space-separated
+    -- False for a mail's row that a report has too: the report of its
+    -- account covers its date and has rows of its side. Only counted rows
+    -- are matched.
+    counted      BOOLEAN NOT NULL DEFAULT TRUE,
+    created_on   BIGINT NOT NULL,
+    UNIQUE (user_id, source, line),
+    FOREIGN KEY (user_id, account) REFERENCES fin_accounts (user_id, id)
 );
+CREATE INDEX IF NOT EXISTS fin_transactions_holding ON fin_transactions (user_id, account, instrument, trade_date);
+
+-- Sells matched to buys, first in, first out, per account and instrument,
+-- written again whenever a user's transactions change. A sell (or transfer
+-- out) beyond what was bought has a row without buy_id: its buys are in no
+-- report imported. Buys are vest, espp and transfer_in too.
+CREATE TABLE IF NOT EXISTS fin_lot_matches (
+    id       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id  TEXT NOT NULL REFERENCES users(id),
+    sell_id  BIGINT NOT NULL REFERENCES fin_transactions(id) ON DELETE CASCADE,
+    buy_id   BIGINT REFERENCES fin_transactions(id) ON DELETE CASCADE,
+    quantity NUMERIC NOT NULL
+);
+CREATE INDEX IF NOT EXISTS fin_lot_matches_user ON fin_lot_matches (user_id);
+CREATE INDEX IF NOT EXISTS fin_lot_matches_buy ON fin_lot_matches (buy_id);
+
+-- What each buy still holds: its shares not matched to a sell, and their
+-- cost, fees included, in currency.
+CREATE OR REPLACE VIEW fin_open_lots AS
+SELECT b.user_id, b.account, b.instrument, b.isin, b.symbol, b.name, b.id AS buy_id, b.trade_date, b.side,
+       b.quantity - COALESCE(m.sold, 0) AS quantity,
+       b.price, b.currency,
+       (COALESCE(b.amount, b.quantity * b.price) + b.fees) * (b.quantity - COALESCE(m.sold, 0)) / b.quantity AS cost
+FROM fin_transactions b
+LEFT JOIN (SELECT buy_id, SUM(quantity) AS sold FROM fin_lot_matches GROUP BY buy_id) m ON m.buy_id = b.id
+WHERE b.counted AND b.side IN ('buy', 'vest', 'espp', 'transfer_in') AND b.quantity > COALESCE(m.sold, 0);
+
+-- Each sell's shares by the buy they came from, with their part of the
+-- sell's proceeds after fees and tax, and of the buy's cost with fees, in
+-- the sell's currency and the buy's. gain is NULL when either is unknown,
+-- or the currencies differ.
+CREATE OR REPLACE VIEW fin_realized AS
+SELECT m.user_id, s.account, s.instrument, s.isin, s.symbol, s.name,
+       s.id AS sell_id, s.trade_date AS sell_date, s.side,
+       b.id AS buy_id, b.trade_date AS buy_date, m.quantity,
+       (COALESCE(s.amount, s.quantity * s.price) - s.fees - s.tax_withheld) * m.quantity / s.quantity AS proceeds,
+       s.currency,
+       (COALESCE(b.amount, b.quantity * b.price) + b.fees) * m.quantity / b.quantity AS cost,
+       b.currency AS cost_currency,
+       CASE WHEN s.currency = b.currency THEN
+           (COALESCE(s.amount, s.quantity * s.price) - s.fees - s.tax_withheld) * m.quantity / s.quantity
+           - (COALESCE(b.amount, b.quantity * b.price) + b.fees) * m.quantity / b.quantity
+       END AS gain
+FROM fin_lot_matches m
+JOIN fin_transactions s ON s.id = m.sell_id
+LEFT JOIN fin_transactions b ON b.id = m.buy_id;
