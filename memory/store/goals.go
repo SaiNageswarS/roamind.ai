@@ -22,12 +22,8 @@ type Exercise struct {
 
 // SaveExercise records a posted exercise.
 func (s *Store) SaveExercise(ctx context.Context, e Exercise) error {
-	now := time.Now().Unix()
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO exercises (id, user_id, goal_permalink, channel_id, thread_ts, note_permalink, posted_at, created_on, updated_on)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
-		rowID(e.ChannelID, e.ThreadTS), e.UserID, e.GoalPermalink, e.ChannelID, e.ThreadTS, e.NotePermalink, e.PostedAt.Unix(), now)
-	return err
+	return insert(ctx, s, exerciseRow{UserID: e.UserID, GoalPermalink: e.GoalPermalink, ChannelID: e.ChannelID,
+		ThreadTS: e.ThreadTS, NotePermalink: e.NotePermalink, PostedAt: e.PostedAt.Unix()})
 }
 
 // LastExercise returns the goal's most recent exercise, or nil.

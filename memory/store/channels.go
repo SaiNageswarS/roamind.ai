@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 )
 
 // Kinds of channel: what a channel is for.
@@ -80,11 +79,6 @@ func (s *Store) Channels(ctx context.Context, kind string) ([]Channel, error) {
 
 // SaveChannel records a channel made for a user.
 func (s *Store) SaveChannel(ctx context.Context, c Channel) error {
-	// An insert, not the ORM's Save: a channel saved twice is a bug to see.
-	now := time.Now().Unix()
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO channels (id, user_id, kind, ref, title, channel_id, created_on, updated_on)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
-		rowID(c.UserID, c.Kind, c.Ref), c.UserID, c.Kind, c.Ref, c.Title, c.ChannelID, now)
-	return err
+	// insert, not save: a channel saved twice is a bug to see.
+	return insert(ctx, s, channelRow{UserID: c.UserID, Kind: c.Kind, Ref: c.Ref, Title: c.Title, ChannelID: c.ChannelID})
 }

@@ -145,13 +145,9 @@ func (s *Store) FinanceUploadOf(ctx context.Context, userID, sha string) (*Finan
 
 // SaveFinanceUpload records an imported report.
 func (s *Store) SaveFinanceUpload(ctx context.Context, u FinanceUpload) error {
-	// An insert, not the ORM's Save: a file imported twice is refused.
-	now := time.Now().Unix()
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO finance_uploads (id, user_id, sha256, file, account, doc, period_from, period_to, rows, imported_at, created_on, updated_on)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $10)`,
-		rowID(u.UserID, u.SHA256), u.UserID, u.SHA256, u.File, u.Account, u.Doc, u.PeriodFrom, u.PeriodTo, u.Rows, now)
-	return err
+	// insert, not save: a file imported twice is refused.
+	return insert(ctx, s, financeUploadRow{UserID: u.UserID, SHA256: u.SHA256, File: u.File, Account: u.Account,
+		Doc: u.Doc, PeriodFrom: u.PeriodFrom, PeriodTo: u.PeriodTo, Rows: int64(u.Rows), ImportedAt: time.Now().Unix()})
 }
 
 // FinanceUploads returns the user's imported reports, oldest first.

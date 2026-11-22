@@ -39,6 +39,21 @@ func save[T odm.Model](ctx context.Context, s *Store, row T) error {
 	return err
 }
 
+// ErrExists means a row with the same key is already stored.
+var ErrExists = errors.New("store: row already exists")
+
+// insert saves the row only when its id is free: Save would replace it.
+func insert[T odm.Model](ctx context.Context, s *Store, row T) error {
+	have, err := find[T](ctx, s, row.Id())
+	if err != nil {
+		return err
+	}
+	if have != nil {
+		return ErrExists
+	}
+	return save(ctx, s, row)
+}
+
 type threadRow struct {
 	ID              string `db:"id"`
 	ChannelID       string `db:"channel_id"`
