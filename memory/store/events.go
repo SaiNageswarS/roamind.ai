@@ -17,3 +17,11 @@ func (s *Store) MarkEvent(ctx context.Context, eventID string) (bool, error) {
 	n, err := res.RowsAffected()
 	return n == 1, err
 }
+
+// EventSeen reports whether MarkEvent recorded eventID.
+func (s *Store) EventSeen(ctx context.Context, eventID string) (bool, error) {
+	var seen bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM inbound_events WHERE event_id = $1)`, eventID).Scan(&seen)
+	return seen, err
+}

@@ -56,6 +56,11 @@ type Event struct {
 	// message it was added to.
 	Reaction string   `json:"reaction,omitempty"`
 	Item     *ItemRef `json:"item,omitempty"`
+	// FileID, UserID and ChannelID are a file_shared event's: the file,
+	// who shared it and where.
+	FileID    string `json:"file_id,omitempty"`
+	UserID    string `json:"user_id,omitempty"`
+	ChannelID string `json:"channel_id,omitempty"`
 }
 
 // ItemRef is the message a reaction is on.
@@ -77,12 +82,14 @@ func (e Event) RootTS() string {
 // EventKeyExpression is the CEL expression configured on the Hatchet Slack
 // webhook. Chat messages (mentions, DMs to the bot and messages in private
 // channels the bot is in, with or without shared files) get the key
-// "slack:chat", and reactions "slack:reaction". Everything else,
+// "slack:chat", reactions "slack:reaction", and file_shared events
+// "slack:file-shared" (for the slack-file-shared fallback). Everything else,
 // including the bot's own messages and edits, is routed to
 // "slack:ignored:<type>" so it never starts a run. Private-channel messages
 // are for goal and news channels; chat-turn skips them elsewhere, where only
 // mentions address the agent.
 const EventKeyExpression = `has(input.event) && input.event.type == 'reaction_added' ? 'slack:reaction' : ` +
+	`has(input.event) && input.event.type == 'file_shared' ? 'slack:file-shared' : ` +
 	`(has(input.event) && !has(input.event.bot_id) && ` +
 	`(!has(input.event.subtype) || input.event.subtype == 'file_share') && ` +
 	`(input.event.type == 'app_mention' || (input.event.type == 'message' && has(input.event.channel_type) && (input.event.channel_type == 'im' || input.event.channel_type == 'group'))) ` +
@@ -90,6 +97,9 @@ const EventKeyExpression = `has(input.event) && input.event.type == 'reaction_ad
 
 // ChatEventKey is the event key chat-turn listens on.
 const ChatEventKey = "slack:chat"
+
+// FileSharedEventKey is the event key of file_shared events.
+const FileSharedEventKey = "slack:file-shared"
 
 // ReactionEventKey is the event key of reaction_added events.
 const ReactionEventKey = "slack:reaction"

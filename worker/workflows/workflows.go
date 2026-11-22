@@ -2,6 +2,8 @@
 // tasks and how they are wired, triggered and limited.
 //
 //   - chat-turn: one agent turn per Slack message.
+//   - slack-file-shared: a chat-turn run for a message with files whose
+//     message event Slack never sent, from its file_shared event.
 //   - goal-channels: a private Slack channel for each new active goal.
 //   - learning-exercises: each morning, a learning-exercise run per
 //     learning goal.
@@ -59,6 +61,7 @@ type SlackAPI interface {
 	slack.FileAPI
 	GetUserInfoContext(ctx context.Context, user string, options ...slackapi.GetUserInfoOption) (*slackapi.User, error)
 	CreateConversationContext(ctx context.Context, params slackapi.CreateConversationParams) (*slackapi.Channel, error)
+	GetConversationRepliesContext(ctx context.Context, params *slackapi.GetConversationRepliesParameters) ([]slackapi.Message, bool, string, error)
 	InviteUsersToConversationContext(ctx context.Context, channelID string, users ...string) (*slackapi.Channel, error)
 }
 
@@ -146,8 +149,10 @@ func (d Deps) now() time.Time {
 // runs until ctx is done; the worker runs it alongside.
 func Register(c *hatchet.Client, d Deps) (wfs []hatchet.WorkflowBase, listen func(ctx context.Context) error) {
 	goals := GoalChannels(c, d)
+	chat := ChatTurn(c, d)
+	wfs = append(wfs, chat, FileShared(c, d, chat))
 	if d.Memory == nil {
-		return append(wfs, ChatTurn(c, d), goals), nil
+		return append(wfs, goals), nil
 	}
 	application := JobApplication(c, d)
 	links := JobLinks(c, d, application)
@@ -188,7 +193,7 @@ func Register(c *hatchet.Client, d Deps) (wfs []hatchet.WorkflowBase, listen fun
 	digest := NewsDigest(c, d)
 	inbox := InboxDigest(c, d)
 	return append(wfs,
-		ChatTurn(c, d), setup, goals, exercise, LearningExercises(c, d, exercise),
+		setup, goals, exercise, LearningExercises(c, d, exercise),
 		digest, NewsShorts(c, d, digest, setup), NewsReaction(c, d),
 		inbox, InboxDigests(c, d, inbox, setup), MailMessage(c, d),
 	), listen
