@@ -88,35 +88,3 @@ type financeUploadRow struct {
 
 func (r financeUploadRow) Id() string           { return rowID(r.UserID, r.SHA256) }
 func (financeUploadRow) CollectionName() string { return "finance_uploads" }
-
-type financeDirtyRow struct {
-	ID     string `db:"id"`
-	UserID string `db:"user_id"`
-	Since  int64  `db:"since"`
-	odm.Timestamps
-}
-
-func (r financeDirtyRow) Id() string           { return r.UserID }
-func (financeDirtyRow) CollectionName() string { return "finance_dirty" }
-
-type financeSettingsRow struct {
-	ID           string `db:"id"`
-	UserID       string `db:"user_id"`
-	BaseCurrency string `db:"base_currency"`
-	odm.Timestamps
-}
-
-func (r financeSettingsRow) Id() string           { return r.UserID }
-func (financeSettingsRow) CollectionName() string { return "finance_settings" }
-
-type stockNameRow struct {
-	ID     string `db:"id"`
-	UserID string `db:"user_id"`
-	Key    string `db:"key"`
-	ISIN   string `db:"isin"`
-	odm.Timestamps
-}
-
-// Id lowercases the key, which matches without case.
-func (r stockNameRow) Id() string           { return rowID(r.UserID, strings.ToLower(r.Key)) }
-func (stockNameRow) CollectionName() string { return "finance_stock_names" }

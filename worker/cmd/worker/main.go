@@ -1,6 +1,5 @@
 // Command worker runs the Roamind Hatchet worker. `task init` prepares its
-// store and memory projects first, and runs `worker -questdb-init` to create
-// QuestDB's tables.
+// store and memory projects first.
 package main
 
 import (
@@ -24,8 +23,6 @@ import (
 	"roamind.ai/channels/web"
 	"roamind.ai/connectors/feeds"
 	"roamind.ai/connectors/jobs"
-	"roamind.ai/connectors/market"
-	"roamind.ai/memory/finance"
 	"roamind.ai/memory/store"
 	"roamind.ai/memory/store/notes"
 	"roamind.ai/worker/client"
@@ -40,14 +37,10 @@ func main() {
 }
 
 func run() error {
-	questdbInit := flag.Bool("questdb-init", false, "create QuestDB's tables from <ROAMIND_MEMORY_DIR>/questdb-schemas, then exit")
 	seed := flag.Bool("seed", false, "load the curated interests from <ROAMIND_MEMORY_DIR>/seed/interests.yaml, then exit")
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if *questdbInit {
-		return initQuestDB(ctx)
-	}
 
 	postgresURI := envOr("POSTGRES_URI", store.DefaultURI)
 	if *seed {
@@ -92,27 +85,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// The finance assistant needs QuestDB (process-compose's questdb).
-	questdbAddr := envOr("ROAMIND_QUESTDB_ADDR", finance.DefaultAddr)
-	openCtx, cancelOpen := context.WithTimeout(ctx, 10*time.Second)
-	fin, err := finance.Open(openCtx, questdbAddr)
-	cancelOpen()
-	if err != nil {
-		slog.Warn("no finance assistant", "err", err)
-		fin = nil
-	} else {
-		defer fin.Close()
-	}
-	if os.Getenv("EODHD_API_KEY") == "" && fin != nil {
-		slog.Warn("EODHD_API_KEY is not set; no prices of stocks and ETFs")
-	}
 	var toolsServer []string
 	if mcpBin != "" {
 		// claude runs it in the user's workspace, so the paths are absolute.
 		toolsServer = []string{mcpBin, "--data", dataDir, "--postgres", postgresURI}
-		if fin != nil {
-			toolsServer = append(toolsServer, "--questdb", questdbAddr)
-		}
 	} else {
 		slog.Warn("bin/mcp not found (task mcp); chat turns run without Roamind's tools")
 	}
@@ -172,8 +148,6 @@ func run() error {
 		Web:        webApp,
 		Jobs:       jobsClient,
 		JobsPerRun: jobsPerRun,
-		Finance:    fin,
-		Market:     market.New(30*time.Second, os.Getenv("EODHD_API_KEY")),
 		Location:   loc,
 	})
 	if mem != nil {
@@ -183,10 +157,6 @@ func run() error {
 			"crons_utc", workflows.LocalCrons(loc, time.Now(), workflows.NewsHours...))
 		slog.Info("job searches", "tz", loc.String(),
 			"crons_utc", workflows.LocalCrons(loc, time.Now(), workflows.JobSearchHours...))
-		if fin != nil {
-			slog.Info("finance market data", "tz", loc.String(),
-				"crons_utc", workflows.LocalCrons(loc, time.Now(), workflows.FinanceMarketHour))
-		}
 	}
 
 	if listen != nil {
@@ -207,17 +177,6 @@ func run() error {
 	}
 	slog.Info("worker starting", "data_dir", dataDir, "slots", slots)
 	return w.StartBlocking(ctx)
-}
-
-// initQuestDB applies the schemas in the repo's memory folder to QuestDB
-// (deploy/bin/run-questdb.sh).
-func initQuestDB(ctx context.Context) error {
-	db, err := finance.Open(ctx, envOr("ROAMIND_QUESTDB_ADDR", finance.DefaultAddr))
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	return db.Init(ctx, filepath.Join(envOr("ROAMIND_MEMORY_DIR", "./memory"), "questdb-schemas"))
 }
 
 // mcpBinary is the absolute path of the mcp command (task build):

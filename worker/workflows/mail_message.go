@@ -205,7 +205,7 @@ func (d Deps) checkMail(ctx context.Context, in MailInput) (mailCheck, error) {
 	if err != nil {
 		return out, err
 	}
-	if u != nil && d.Finance != nil {
+	if u != nil {
 		if out.Trusted, out.Skip, err = d.financeMail(ctx, u.ID, in); err != nil || out.Skip != "" {
 			return out, err
 		}

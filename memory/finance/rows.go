@@ -1,7 +1,6 @@
 package finance
 
 import (
-	"context"
 	"fmt"
 	"math/big"
 	"regexp"
@@ -10,13 +9,13 @@ import (
 	"time"
 )
 
-// Row is a trade or dividend as a report, a mail or the user gives it,
-// before it is a TradeEvent: decimals as text, the date ISO.
+// Row is a trade or dividend as a report or a mail gives it: decimals as
+// text, the date ISO.
 type Row struct {
 	Date        string
-	ISIN        string
+	ISIN        string // only when printed
 	Name        string
-	Symbol      string // the ticker, when the row gives one instead of the ISIN
+	Symbol      string // the ticker, when the row gives one
 	Exchange    string // the symbol's exchange, when given
 	Side        string
 	Quantity    string
@@ -46,8 +45,11 @@ func CheckRow(r Row, from, to time.Time) []string {
 	case day.After(time.Now().AddDate(0, 0, 1)):
 		ps = append(ps, fmt.Sprintf("%s is in the future", r.Date))
 	}
-	if !ValidISIN(strings.TrimSpace(r.ISIN)) {
+	switch isin := strings.TrimSpace(r.ISIN); {
+	case isin != "" && !ValidISIN(isin):
 		ps = append(ps, fmt.Sprintf("%q is not a valid ISIN", r.ISIN))
+	case r.Instrument() == "":
+		ps = append(ps, "the row needs its ISIN, symbol or name")
 	}
 	if !slices.Contains(Sides, r.Side) {
 		ps = append(ps, "side must be one of "+strings.Join(Sides, ", "))
@@ -119,40 +121,14 @@ func CheckTotal(field, total string, rows []Row, side string) []string {
 	return nil
 }
 
-// Event is the row as a trade event of account, at line of source.
-func (r Row) Event(account, source string, line int, doc string, received time.Time) TradeEvent {
-	day, _ := time.Parse(time.DateOnly, r.Date)
-	return TradeEvent{Date: day, Source: source, Line: line, Account: account, ISIN: strings.TrimSpace(r.ISIN), Side: r.Side,
-		Quantity: strings.TrimSpace(r.Quantity), Price: strings.TrimSpace(r.Price), Amount: strings.TrimSpace(r.Amount),
-		Fees: strings.TrimSpace(r.Fees), TaxWithheld: strings.TrimSpace(r.TaxWithheld), Currency: strings.ToUpper(strings.TrimSpace(r.Currency)),
-		Ref: strings.TrimSpace(r.Ref), Doc: doc, ReceivedAt: received}
-}
-
-// SaveInstruments records the instruments the rows name that aren't known
-// yet, or are known without a name.
-func (d *DB) SaveInstruments(ctx context.Context, rows []Row) error {
-	known, err := d.Instruments(ctx)
-	if err != nil {
-		return err
+// Instrument is what the row's buys and sells are matched by: its ISIN,
+// else its symbol, else its name, as printed.
+func (r Row) Instrument() string {
+	if isin := strings.ToUpper(strings.TrimSpace(r.ISIN)); isin != "" {
+		return isin
 	}
-	add := map[string]Instrument{}
-	note := func(isin, name, cur string) {
-		isin = strings.TrimSpace(isin)
-		if k, ok := known[isin]; ok && k.Name != "" || add[isin].Name != "" {
-			return
-		}
-		in := Instrument{ISIN: isin, Name: strings.TrimSpace(name), Market: MarketOf(isin), Currency: strings.ToUpper(cur)}
-		if strings.HasPrefix(isin, "INF") {
-			in.Kind = "fund"
-		}
-		add[isin] = in
+	if sym := strings.ToUpper(strings.TrimSpace(r.Symbol)); sym != "" {
+		return sym
 	}
-	for _, r := range rows {
-		note(r.ISIN, r.Name, r.Currency)
-	}
-	var ins []Instrument
-	for _, in := range add {
-		ins = append(ins, in)
-	}
-	return d.PutInstruments(ctx, ins)
+	return strings.Join(strings.Fields(r.Name), " ")
 }

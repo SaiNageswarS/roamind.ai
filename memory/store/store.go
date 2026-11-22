@@ -13,7 +13,7 @@
 //	09_items.sql      items.go
 //	10_inbox.sql      inbox.go
 //	11_mail.sql       mail.go
-//	12_finance.sql    finance.go
+//	12_finance.sql    finance.go, ledger.go
 //
 // Conversation content itself lives only in claude's session files.
 package store
@@ -39,14 +39,11 @@ type Store struct {
 	db *sql.DB
 	pg *postgres.DB
 
-	threads         postgres.Table[threadRow]
-	channels        postgres.Table[channelRow]
-	exercises       postgres.Table[exerciseRow]
-	mailAccounts    postgres.Table[mailAccountRow]
-	financeUploads  postgres.Table[financeUploadRow]
-	financeDirty    postgres.Table[financeDirtyRow]
-	financeSettings postgres.Table[financeSettingsRow]
-	stockNames      postgres.Table[stockNameRow]
+	threads        postgres.Table[threadRow]
+	channels       postgres.Table[channelRow]
+	exercises      postgres.Table[exerciseRow]
+	mailAccounts   postgres.Table[mailAccountRow]
+	financeUploads postgres.Table[financeUploadRow]
 }
 
 // NewStore is the constructor go-api-boot's container resolves from a
@@ -55,16 +52,13 @@ func NewStore(pg *postgres.DB) *Store {
 	schema := "public"
 	_ = pg.Pool().QueryRow(context.Background(), `SELECT current_schema()`).Scan(&schema)
 	return &Store{
-		db:              stdlib.OpenDBFromPool(pg.Pool()),
-		pg:              pg,
-		threads:         postgres.TableOf[threadRow](pg, schema),
-		channels:        postgres.TableOf[channelRow](pg, schema),
-		exercises:       postgres.TableOf[exerciseRow](pg, schema),
-		mailAccounts:    postgres.TableOf[mailAccountRow](pg, schema),
-		financeUploads:  postgres.TableOf[financeUploadRow](pg, schema),
-		financeDirty:    postgres.TableOf[financeDirtyRow](pg, schema),
-		financeSettings: postgres.TableOf[financeSettingsRow](pg, schema),
-		stockNames:      postgres.TableOf[stockNameRow](pg, schema),
+		db:             stdlib.OpenDBFromPool(pg.Pool()),
+		pg:             pg,
+		threads:        postgres.TableOf[threadRow](pg, schema),
+		channels:       postgres.TableOf[channelRow](pg, schema),
+		exercises:      postgres.TableOf[exerciseRow](pg, schema),
+		mailAccounts:   postgres.TableOf[mailAccountRow](pg, schema),
+		financeUploads: postgres.TableOf[financeUploadRow](pg, schema),
 	}
 }
 

@@ -10,11 +10,11 @@ import (
 
 func TestServerTools(t *testing.T) {
 	var d Deps
-	if got := d.serverTools(ChatTurnName); !reflect.DeepEqual(got, []string{protocol.ServerInterests}) {
+	if got := d.serverTools(ChatTurnName); !reflect.DeepEqual(got, []string{protocol.ServerInterests, protocol.ServerFinance}) {
 		t.Fatalf("chat turns without the job assistant get %v", got)
 	}
 	d.Memory = &notes.Notes{} // no web app: links from Slack only
-	if got := d.serverTools(ChatTurnName); !reflect.DeepEqual(got, []string{protocol.ServerInterests, protocol.ServerJobs, protocol.ServerItems}) {
+	if got := d.serverTools(ChatTurnName); !reflect.DeepEqual(got, []string{protocol.ServerInterests, protocol.ServerJobs, protocol.ServerItems, protocol.ServerFinance}) {
 		t.Fatalf("chat turns get %v", got)
 	}
 	for _, task := range []string{LearningExerciseName, ResumeImportName, JobLinksName} {

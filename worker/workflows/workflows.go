@@ -49,8 +49,6 @@ import (
 	"roamind.ai/channels/web"
 	"roamind.ai/connectors/feeds"
 	"roamind.ai/connectors/jobs"
-	"roamind.ai/connectors/market"
-	"roamind.ai/memory/finance"
 	"roamind.ai/memory/store"
 	"roamind.ai/memory/store/notes"
 )
@@ -105,13 +103,8 @@ type Deps struct {
 	Jobs *jobs.Client
 	// JobsPerRun caps the postings a job hunt picks; 0 means JobsPerRun.
 	JobsPerRun int
-	// Finance is the finance ledger in QuestDB; without it there is no
-	// finance assistant.
-	Finance *finance.DB
-	// Market reads rates and prices for it.
-	Market *market.Client
 	// Location is the timezone of the daily exercises, news shorts, inbox
-	// digests, job searches and market data.
+	// digests and job searches.
 	Location *time.Location
 	// Now defaults to time.Now.
 	Now func() time.Time
@@ -124,8 +117,7 @@ type Deps struct {
 	// job links the user asked for. Its errors are logged.
 	AfterTurn func(ctx context.Context, u *store.User, t FinishedTurn) error
 	// FinanceMailed, when set, runs after a broker's mail added trades to
-	// the user's ledger. Register sets it to reconcile them and open the
-	// finance channel.
+	// the user's ledger. Register sets it to open the finance channel.
 	FinanceMailed func(ctx context.Context, u *store.User) error
 }
 
@@ -175,13 +167,11 @@ func Register(c *hatchet.Client, d Deps) (wfs []hatchet.WorkflowBase, listen fun
 			return err
 		}),
 	}
-	if d.Finance != nil {
-		reconcile, channel := FinanceReconcile(c, d), FinanceChannel(c, d)
-		trigger := financeTrigger(reconcile, channel, d)
-		hooks = append(hooks, trigger)
-		d.FinanceMailed = func(ctx context.Context, u *store.User) error { return trigger(ctx, u, FinishedTurn{}) }
-		wfs = append(wfs, reconcile, channel, FinanceMarket(c, d, reconcile))
-	}
+	channel := FinanceChannel(c, d)
+	trigger := financeTrigger(channel, d)
+	hooks = append(hooks, trigger)
+	d.FinanceMailed = func(ctx context.Context, u *store.User) error { return trigger(ctx, u, FinishedTurn{}) }
+	wfs = append(wfs, channel)
 	d.AfterTurn = func(ctx context.Context, u *store.User, t FinishedTurn) error {
 		var errs []error
 		for _, h := range hooks {

@@ -36,7 +36,7 @@ func TestSchema(t *testing.T) {
 		}
 		pgtest.Apply(t, uri)
 		var n int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema()`).Scan(&n); err != nil || n != 24 {
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema()`).Scan(&n); err != nil || n != 25 {
 			t.Fatalf("open %d: %d tables, %v", i, n, err)
 		}
 		s.Close()
