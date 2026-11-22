@@ -33,6 +33,10 @@ type fakeSlack struct {
 	// failInvites makes that many InviteUsersToConversationContext calls
 	// fail.
 	failInvites int
+	// shares are where files.info says a file is shared, and replies what
+	// conversations.replies returns.
+	shares  slackapi.Share
+	replies []slackapi.Message
 }
 
 func newFakeSlack() *fakeSlack {
@@ -69,7 +73,11 @@ var files = map[string]string{"https://files.slack.com/paper.pdf": "%PDF-1.4 fak
 
 func (f *fakeSlack) GetFileInfoContext(_ context.Context, id string, _, _ int) (*slackapi.File, []slackapi.Comment, *slackapi.Paging, error) {
 	return &slackapi.File{ID: id, Name: "../../notes.txt", Mimetype: "text/plain", Size: 5,
-		URLPrivateDownload: "https://files.slack.com/notes"}, nil, nil, nil
+		URLPrivateDownload: "https://files.slack.com/notes", Shares: f.shares}, nil, nil, nil
+}
+
+func (f *fakeSlack) GetConversationRepliesContext(_ context.Context, _ *slackapi.GetConversationRepliesParameters) ([]slackapi.Message, bool, string, error) {
+	return f.replies, false, "", nil
 }
 
 func (f *fakeSlack) GetFileContext(_ context.Context, url string, w io.Writer) error {

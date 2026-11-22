@@ -86,6 +86,17 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 		out.Skipped = skip
 		return out, nil
 	}
+	// A message can arrive twice under different event ids: as its message
+	// event and through slack-file-shared, the fallback for a message event
+	// Slack never sent. Only the first starts a turn.
+	fresh, err := d.Store.MarkEvent(ctx, messageKey(ev.Channel, ev.TS))
+	if err != nil {
+		return out, err
+	}
+	if !fresh {
+		out.Skipped = "duplicate message " + ev.Channel + ":" + ev.TS
+		return out, nil
+	}
 
 	user, refusal, err := d.resolveUser(ctx, env)
 	if err != nil {
@@ -221,6 +232,9 @@ func (d Deps) Process(ctx context.Context, runID string, env slack.Envelope) (Ch
 	}
 	return out, nil
 }
+
+// messageKey is the inbound_events key of the Slack message ts in channel.
+func messageKey(channel, ts string) string { return "msg:" + channel + ":" + ts }
 
 // route decides whether a chat event starts a turn, and what it is about.
 // In a goal channel, every message from a user with a goal there is a turn
