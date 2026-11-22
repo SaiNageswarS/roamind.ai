@@ -3,10 +3,14 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
 	"time"
+
+	"github.com/SaiNageswarS/go-api-boot/odm"
+	"github.com/SaiNageswarS/go-collection-boot/async"
 
 	"roamind.ai/memory/finance"
 )
@@ -21,20 +25,28 @@ import (
 // refused. It returns the sells of the account sold beyond what its
 // transactions bought (Unmatched).
 func (s *Store) ImportFinanceReport(ctx context.Context, u FinanceUpload, rows []finance.Row) ([]Unmatched, error) {
-	return s.ledgerTx(ctx, u.UserID, u.Account, func(tx *sql.Tx) error {
-		now := time.Now().Unix()
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO finance_uploads (id, user_id, sha256, file, account, doc, period_from, period_to, rows, imported_at, created_on, updated_on)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $10) ON CONFLICT DO NOTHING`,
-			rowID(u.UserID, u.SHA256), u.UserID, u.SHA256, u.File, u.Account, u.Doc, u.PeriodFrom, u.PeriodTo, len(rows), now)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return fmt.Errorf("%s is already imported", u.File)
-		}
+	// The upload is saved first, with the ORM, which can't join the
+	// ledger's transaction: settling reads its period. A ledger write that
+	// fails deletes it again, so the file can be imported once fixed.
+	id := rowID(u.UserID, u.SHA256)
+	if _, err := async.Await(s.financeUploads.FindByID(ctx, id)); err == nil {
+		return nil, fmt.Errorf("%s is already imported", u.File)
+	} else if !errors.Is(err, odm.ErrNotFound) {
+		return nil, err
+	}
+	if _, err := async.Await(s.financeUploads.Save(ctx, financeUploadRow{UserID: u.UserID, SHA256: u.SHA256, File: u.File,
+		Account: u.Account, Doc: u.Doc, PeriodFrom: u.PeriodFrom, PeriodTo: u.PeriodTo, Rows: int64(len(rows)),
+		ImportedAt: time.Now().Unix()})); err != nil {
+		return nil, err
+	}
+	un, err := s.ledgerTx(ctx, u.UserID, u.Account, func(tx *sql.Tx) error {
 		return writeSource(ctx, tx, u.UserID, u.Account, "upload:"+u.SHA256, u.Doc, rows)
 	})
+	if err != nil {
+		_, _ = async.Await(s.financeUploads.DeleteByID(context.WithoutCancel(ctx), id))
+		return nil, err
+	}
+	return un, nil
 }
 
 // SaveFinanceMail writes a broker mail's rows as source, replacing the

@@ -78,6 +78,15 @@ func TestLedger(t *testing.T) {
 	if _, err := s.ImportFinanceReport(ctx, up, report); err == nil {
 		t.Error("the same file was imported twice")
 	}
+	// A report whose rows Postgres refuses leaves no upload, so it can be
+	// imported once fixed.
+	bad := FinanceUpload{UserID: "a", SHA256: "h2", File: "bad.csv", Account: acct.ID, Doc: "tradebook", PeriodFrom: "2026-01-01", PeriodTo: "2026-03-31"}
+	if _, err := s.ImportFinanceReport(ctx, bad, []finance.Row{{Date: "2026-13-40", ISIN: isin, Side: "buy", Quantity: "1", Price: "1", Currency: "USD"}}); err == nil {
+		t.Error("a bad date was written")
+	}
+	if u, _ := s.FinanceUploadOf(ctx, "a", "h2"); u != nil {
+		t.Errorf("a failed import left its upload: %+v", u)
+	}
 	if u, _ := s.FinanceUploadOf(ctx, "a", "h1"); u == nil || u.PeriodTo != "2026-03-31" || u.Rows != 5 {
 		t.Errorf("upload = %+v", u)
 	}
