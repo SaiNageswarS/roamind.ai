@@ -42,6 +42,21 @@ type Stock struct {
 	CloseDate                                    time.Time
 	// Points are the stock's entries and exits, by date.
 	Points []Point
+	// Lots are the buys still held, by date: sells take each account's
+	// oldest lots first (FIFO), so sold shares are not among them.
+	Lots []OpenLot
+}
+
+// OpenLot is shares of one buy still held in one account.
+type OpenLot struct {
+	Account  string
+	Date     time.Time
+	Quantity *big.Rat
+	Currency string
+	Price    *big.Rat // cost per share, fees included, in Currency; nil when unknown
+	Close    *big.Rat // the latest close in Currency, at today's rate; nil when unknown
+	// In the base currency; nil when unknown.
+	Cost, Value, Unrealized *big.Rat
 }
 
 // AccountHolding is what one account holds of a stock.
@@ -87,6 +102,10 @@ func BuildPortfolio(trades []Trade, actions []CorporateAction, rates *Rates, bas
 		if q.Sign() > 0 {
 			s.Quantity.Add(s.Quantity, q)
 			s.Accounts = append(s.Accounts, AccountHolding{Account: p.Account, Quantity: q, AvgCost: div(p.Cost(), q), Currency: p.Currency})
+			for _, l := range p.Lots {
+				s.Lots = append(s.Lots, OpenLot{Account: p.Account, Date: l.Date, Quantity: l.Quantity, Currency: p.Currency,
+					Price: div(l.Cost, l.Quantity), Cost: l.CostBase})
+			}
 		}
 		// Why a figure in the base currency is missing: its own figure is,
 		// or else the rate.
@@ -122,6 +141,15 @@ func BuildPortfolio(trades []Trade, actions []CorporateAction, rates *Rates, bas
 		slices.SortFunc(s.Points, func(a, b Point) int { return cmp.Or(a.Date.Compare(b.Date), cmp.Compare(a.Account, b.Account)) })
 		if c, ok := closes[s.ISIN]; ok {
 			s.Close, s.CloseCurrency, s.CloseDate = dec(c.Close), c.Currency, c.Date
+		}
+		slices.SortStableFunc(s.Lots, func(a, b OpenLot) int { return cmp.Or(a.Date.Compare(b.Date), cmp.Compare(a.Account, b.Account)) })
+		for i := range s.Lots {
+			l := &s.Lots[i]
+			if s.Close != nil {
+				l.Close = rates.Convert(s.Close, s.CloseCurrency, l.Currency, now)
+				l.Value = rates.Convert(mul(l.Quantity, s.Close), s.CloseCurrency, base, now)
+				l.Unrealized = diff(l.Value, l.Cost)
+			}
 		}
 		if s.Quantity.Sign() > 0 {
 			if s.Close == nil {

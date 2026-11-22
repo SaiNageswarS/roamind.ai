@@ -188,6 +188,9 @@ func TestFinance(t *testing.T) {
 	if err := json.Unmarshal([]byte(msg), &sh); err != nil || len(sh.Points) != 2 || sh.Points[0].Side != "buy" {
 		t.Errorf("stock_history = %s %v", msg, err)
 	}
+	if len(sh.OpenLots) == 0 || sh.OpenLots[0].Account != "Kite" || sh.OpenLots[0].Price == "" {
+		t.Errorf("open lots = %+v", sh.OpenLots)
+	}
 	if msg, isErr := call("profit", map[string]any{"by": "week"}); !isErr || !strings.Contains(msg, "stock, market, account, year or sale") {
 		t.Errorf("profit by week: %s", msg)
 	}

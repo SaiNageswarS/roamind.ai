@@ -177,6 +177,11 @@ holdings, profit and dividends, in one ledger across accounts and markets.
   points) comes from list_holdings, stock_history or profit. Quote them;
   never compute or estimate your own, and when a figure is missing, say
   why (the tools say what's missing).
+- Which buys they still hold, and whether each is above or below the
+  current price, come from stock_history's open_lots: sells take each
+  account's oldest lots first (FIFO), so sold shares are already left out.
+  Show them as a table, oldest first: date, account, quantity, price,
+  latest close, unrealized gain.
 - "Profit" means net profit: after fees and the tax withheld (profit's
   net_profit), unless they ask for it before tax. For one account, one
   sale or one trade, call profit with that account, or by sale; answer

@@ -299,3 +299,35 @@ func TestLedgerTransferKeepsLots(t *testing.T) {
 		nil, rates, "EUR", d("2026-12-31"))
 	is(t, "lone transfer in", lone[0].Cost(), "540")
 }
+
+// Open lots: the buys still held after sells took each account's oldest
+// first, with each one's close in its currency and its gain.
+func TestOpenLots(t *testing.T) {
+	trades := []Trade{
+		tr("2026-01-05", "a1", SideBuy, "10", "100", "", "USD"),
+		tr("2026-03-01", "a1", SideBuy, "10", "140", "", "USD"),
+		tr("2026-02-01", "a2", SideBuy, "5", "90", "", "EUR"),
+		tr("2026-04-01", "a1", SideSell, "12", "150", "", "USD"),
+	}
+	rates := NewRates([]FX{{Date: d("2026-01-02"), Pair: "EURUSD", Rate: "1.25"}, {Date: d("2026-02-27"), Pair: "EURUSD", Rate: "1.25"},
+		{Date: d("2026-06-19"), Pair: "EURUSD", Rate: "1.25"}})
+	closes := map[string]Price{"US0378331005": {Close: "125", Currency: "USD"}}
+	pf := BuildPortfolio(trades, nil, rates, "EUR", nil, closes, d("2026-06-20"))
+	if len(pf.Stocks) != 1 || len(pf.Stocks[0].Lots) != 2 {
+		t.Fatalf("stocks = %+v", pf.Stocks)
+	}
+	eur, usd := pf.Stocks[0].Lots[0], pf.Stocks[0].Lots[1]
+	if eur.Account != "a2" || usd.Account != "a1" || !usd.Date.Equal(d("2026-03-01")) {
+		t.Fatalf("lots = %+v", pf.Stocks[0].Lots)
+	}
+	is(t, "a2 quantity", eur.Quantity, "5")
+	is(t, "a2 price", eur.Price, "90")
+	is(t, "a2 close in EUR", eur.Close, "100")
+	is(t, "a2 gain", eur.Unrealized, "50")
+	// The first a1 buy was sold whole, and 2 of the second.
+	is(t, "a1 quantity", usd.Quantity, "8")
+	is(t, "a1 price", usd.Price, "140")
+	is(t, "a1 close", usd.Close, "125")
+	// 8 × 125 / 1.25 − 8 × 140 / 1.25
+	is(t, "a1 gain", usd.Unrealized, "-96")
+}

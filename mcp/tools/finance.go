@@ -154,8 +154,22 @@ type StockHistoryInput struct {
 
 // StockHistoryOutput is stock_history's result.
 type StockHistoryOutput struct {
-	Stock  HoldingLine  `json:"stock"`
-	Points []PointEntry `json:"points"`
+	Stock    HoldingLine    `json:"stock"`
+	Points   []PointEntry   `json:"points"`
+	OpenLots []OpenLotEntry `json:"open_lots" jsonschema:"the buys still held, oldest first; sells took each account's oldest lots first (FIFO), so sold shares are left out"`
+}
+
+// OpenLotEntry is shares of one buy still held.
+type OpenLotEntry struct {
+	Date       string `json:"date"`
+	Account    string `json:"account"`
+	Quantity   string `json:"quantity" jsonschema:"still held, after splits"`
+	Price      string `json:"price,omitempty" jsonschema:"cost per share, fees included, in currency"`
+	Currency   string `json:"currency"`
+	Close      string `json:"close,omitempty" jsonschema:"the latest close, in currency at today's rate: compare it with price"`
+	Cost       string `json:"cost,omitempty" jsonschema:"in the base currency"`
+	Value      string `json:"value,omitempty" jsonschema:"in the base currency"`
+	Unrealized string `json:"unrealized_gain,omitempty" jsonschema:"value less cost, in the base currency"`
 }
 
 // ProfitInput is profit's input.
@@ -420,8 +434,11 @@ func financeTools(s *mcp.Server, d Deps) {
 		return nil, out, nil
 	})
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "stock_history",
-		Description: "Every entry and exit point of one stock across the user's accounts, with its current holding.",
+		Name: "stock_history",
+		Description: "Every entry and exit point of one stock across the user's accounts, its current holding, and its open lots: " +
+			"each buy still held (sells take each account's oldest lots first, FIFO), with its price and the latest close in " +
+			"its currency, and its cost, value and unrealized gain in the base currency. Use it for which buys are above " +
+			"or below the current price.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in StockHistoryInput) (*mcp.CallToolResult, StockHistoryOutput, error) {
 		pf, labels, err := portfolio(ctx)
 		if err != nil {
@@ -450,9 +467,14 @@ func financeTools(s *mcp.Server, d Deps) {
 			return nil, StockHistoryOutput{}, fmt.Errorf("%q matches %s; ask with the ISIN", in.Stock, strings.Join(names, ", "))
 		}
 		line := holdingLine(found[0], labels)
-		out := StockHistoryOutput{Points: line.Points}
+		out := StockHistoryOutput{Points: line.Points, OpenLots: []OpenLotEntry{}}
 		line.Points = nil
 		out.Stock = line
+		for _, l := range found[0].Lots {
+			out.OpenLots = append(out.OpenLots, OpenLotEntry{Date: l.Date.Format(time.DateOnly), Account: cmp.Or(labels[l.Account], l.Account),
+				Quantity: finance.DecText(l.Quantity, 8), Price: finance.DecText(l.Price, 4), Currency: l.Currency,
+				Close: finance.DecText(l.Close, 4), Cost: money(l.Cost), Value: money(l.Value), Unrealized: money(l.Unrealized)})
+		}
 		return nil, out, nil
 	})
 	mcp.AddTool(s, &mcp.Tool{
