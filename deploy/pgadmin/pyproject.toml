@@ -3,4 +3,5 @@ name = "roamind-pgadmin"
 version = "0"
 description = "pgAdmin 4, the Postgres web client behind Caddy (deploy/bin/run-pgadmin.sh)"
 requires-python = ">=3.12,<3.14"
-dependencies = ["pgadmin4"]
+# 9.19's wheel lacks the built JavaScript (static/js/generated), so the page never loads.
+dependencies = ["pgadmin4==9.18"]
