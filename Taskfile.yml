@@ -188,6 +188,12 @@ tasks:
     cmds:
       - uv sync --project notebook --frozen --managed-python
 
+  pgadmin:
+    desc: Install pgAdmin 4, the tailnet Postgres web client, from deploy/pgadmin/uv.lock
+    sources: [deploy/pgadmin/pyproject.toml, deploy/pgadmin/uv.lock]
+    cmds:
+      - uv sync --project deploy/pgadmin --frozen --managed-python
+
   vllm:
     desc: Install vLLM and download the GPU search models
     cmds:
