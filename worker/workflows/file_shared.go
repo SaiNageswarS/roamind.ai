@@ -14,10 +14,9 @@ import (
 // FileSharedName is the slack-file-shared workflow: the fallback for a
 // message with files whose message event never arrives. Slack sends a
 // file_shared event for each file and, usually, the message event that
-// starts a chat turn; sometimes it sends only file_shared (four PDFs posted
-// within a minute got two message events). The fallback finds the file's
-// message and starts its chat-turn run, which chat-turn skips when the
-// message event already started one.
+// starts a chat turn, but sometimes only file_shared. The fallback finds the
+// file's message and starts its chat-turn run, which chat-turn skips when
+// the message event already started one.
 const FileSharedName = "slack-file-shared"
 
 // FileSharedDelay gives the message event time to arrive and start its turn
